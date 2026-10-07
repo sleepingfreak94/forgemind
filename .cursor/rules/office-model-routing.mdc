@@ -1,0 +1,17 @@
+---
+description: Office Cursor model routing and delegation boundaries.
+alwaysApply: true
+---
+
+Follow AGENTS.md and docs/model-routing.md. This rule applies to the office Cursor profile.
+
+- The parent/lead session target is `grok-4.7[effort=high,fast=false]`. The user selects it in the model picker or supplies it through the CLI; a subagent file does not set the parent model.
+- Delegate bounded work through the named `office-*` profiles in `.cursor/agents/`. Keep their explicit models; do not override them with `inherit`, Auto, fast variants, or third-party models.
+- Routine coding and research use Grok 4.6 high effort at standard speed. Architecture, debugging, QA, performance, and independent review use Grok 4.7 high effort at standard speed.
+- Reserve the Other Models allowance: do not select that pool or enable paid overages without explicit task-level authorization. The Cursor Models pool is included usage, not a claim of unlimited usage.
+- Check effective model/effort/speed and account compatibility when the client exposes them. If unavailable or different from the target, report the mismatch to the lead before relying on the profile; do not claim verified model routing without evidence.
+- Keep office work within office-approved accounts and providers. Do not route it to personal Codex access as an automatic fallback.
+- Writing workers require isolated worktrees and claimed paths; shared manifests and final PR creation belong to the lead/integration owner. Child permissions may only narrow the parent grant.
+- Complete implementation tickets through tests, before/after evidence, independent review, fixes/re-review, and a draft PR. Requested before/after videos are required deliverables.
+
+These are routing instructions and explicit custom-agent settings, not an account-level billing cap. Built-in helpers, model fallback, and account/admin settings still require observation and conformance checks.

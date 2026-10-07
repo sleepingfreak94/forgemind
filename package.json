@@ -1,0 +1,37 @@
+{
+  "name": "forgemind",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ForgeMind project workspace.",
+  "scripts": {
+    "harness": "node scripts/run-harness.mjs",
+    "build": "tsc -p config/tsconfig.json",
+    "typecheck": "tsc -p config/tsconfig.json --noEmit",
+    "test": "npm run build && node scripts/run-tests.mjs all",
+    "test:host": "npm run build && node scripts/run-tests.mjs host",
+    "test:portable": "npm run build && node scripts/run-tests.mjs portable",
+    "verify:portable": "npm run doctor && npm run typecheck && npm run test:portable",
+    "doctor": "node scripts/doctor.mjs",
+    "project:init": "npm run build && node dist/src/local-runtime/project-cli.js init",
+    "project:plan": "npm run build && node dist/src/local-runtime/project-cli.js plan",
+    "project:prepare": "npm run build && node dist/src/local-runtime/project-cli.js prepare",
+    "memory": "npm run build && node dist/src/local-runtime/memory-cli.js",
+    "demo:policy": "npm run build && node dist/src/local-runtime/policy-demo.js",
+    "demo:context": "npm run build && node dist/src/local-runtime/context-demo.js",
+    "demo:codex": "npm run build && node dist/src/local-runtime/codex-demo.js",
+    "probe:codex": "npm run build && node dist/src/local-runtime/codex-probe.js",
+    "probe:host": "npm run build && node dist/src/local-runtime/host-probe.js",
+    "project:inspect": "npm run build && node dist/src/local-runtime/live-cli.js inspect",
+    "project:run": "npm run build && node dist/src/local-runtime/live-cli.js run",
+    "test:live": "npm run build && node --test dist/tests/live-workflow/*.test.js",
+    "probe:live-native": "npm run build && FORGEMIND_NATIVE_DIAGNOSTIC=1 node --test dist/tests/live-workflow/native.test.js"
+  },
+  "engines": {
+    "node": ">=26.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "typescript": "7.0.2"
+  }
+}

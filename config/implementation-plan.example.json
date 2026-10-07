@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "objective": "Describe the requested change after inspecting the project",
+  "changedPaths": ["src/example.ts"],
+  "steps": ["Reproduce the issue", "Implement the agreed change", "Validate and obtain independent review"],
+  "acceptanceCriteria": ["Replace this example with task-specific observable acceptance criteria"],
+  "checks": ["Run the relevant typecheck and focused regression tests"],
+  "risks": ["Review compatibility with existing project behavior"],
+  "rollback": "Restore the prior source state if validation fails"
+}
