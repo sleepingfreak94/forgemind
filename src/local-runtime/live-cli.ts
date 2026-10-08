@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectProject, LIVE_BLOCK_REASON } from '../live-workflow/readiness.js';
 import { task } from '../live-workflow/validation.js';
 import { connectChatGPT, chatGPTStatus } from '../live-workflow/chatgpt-auth.js';
-import { openChatGPTPlanSession } from '../live-workflow/chatgpt-plan.js';
+import { openChatGPTPlanSession, forgetChatGPTBillingReview } from '../live-workflow/chatgpt-plan.js';
 import { privateDirectory } from '../live-workflow/authority.js';
 import { runTask } from '../live-workflow/orchestrator.js';
 import { validateCommitAuthor } from '../live-workflow/repository.js';
@@ -15,6 +15,7 @@ import { pinFile } from '../host-enforcement/manifest.js';
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:connect --connection /private/forgemind-account
   project:auth-status --connection /private/forgemind-account
+  node dist/src/local-runtime/live-cli.js billing-reset --connection /private/forgemind-account
   project:inspect --workspace /absolute/project
   project:run --workspace /absolute/project --task /absolute/task.json
     --connection /private/forgemind-account --codex /absolute/codex
@@ -22,7 +23,7 @@ const usage = `Supervised project coding with your ChatGPT plan (macOS):
     [--gh /canonical/gh --author-name "Repository owner" --author-email "owner@users.noreply.github.com"]
 
 Connection prints a browser sign-in link; complete OpenAI authentication and consent yourself.
-Run requires a fresh owner TTY review of the connected-app credits-off setting.
+Run remembers the owner's credits-off acknowledgement for the same account; billing-reset forgets it.
 Draft PR tasks require all three explicit publication options before account review.
 No credentials are read and no worktree is created when run connection options are absent.
 No --yes, paid API fallback, endpoint override, or automatic task replay exists.
@@ -31,8 +32,9 @@ Checks remain single-process, read-only and offline. Docker/Compose checks are u
 export function parseLiveArguments(argv: readonly string[]) {
   const [mode, ...raw] = argv;
   if (mode === '--help' || raw.length === 1 && raw[0] === '--help') return { mode: 'help', values: {} as Record<string, string> };
-  if (!['inspect', 'run', 'connect', 'auth-status'].includes(mode ?? '')) throw new Error('Expected inspect, run, connect or auth-status');
-  const allowed = mode === 'connect' || mode === 'auth-status' ? ['--connection'] :
+  if (!['inspect', 'run', 'connect', 'auth-status', 'billing-reset'].includes(mode ?? '')) throw new Error('Expected inspect, run, connect, auth-status or billing-reset');
+  const accountMode = ['connect', 'auth-status', 'billing-reset'].includes(mode!);
+  const allowed = accountMode ? ['--connection'] :
     ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email'] : [])];
   const values: Record<string, string> = Object.create(null);
   for (let i = 0; i < raw.length; i += 2) {
@@ -42,7 +44,7 @@ export function parseLiveArguments(argv: readonly string[]) {
       !authorField && (!isAbsolute(value) || resolve(value) !== value)) throw new Error('Exact absolute paths and recognized options required');
     values[key] = value;
   }
-  for (const key of mode === 'connect' || mode === 'auth-status' ? ['--connection'] : ['--workspace', ...(mode === 'run' ? ['--task'] : [])]) {
+  for (const key of accountMode ? ['--connection'] : ['--workspace', ...(mode === 'run' ? ['--task'] : [])]) {
     if (!values[key]) throw new Error(`Required ${key}`);
   }
   const live = ['--connection', '--codex', '--state-root', '--worktree-root'];
@@ -60,6 +62,10 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   const { mode, values: args } = parseLiveArguments(argv);
   if (mode === 'help') { process.stdout.write(usage); return; }
   if (mode === 'auth-status') { output(chatGPTStatus(args['--connection']!)); return; }
+  if (mode === 'billing-reset') {
+    forgetChatGPTBillingReview(args['--connection']!);
+    output({ billingReview: 'cleared', providerRequests: 0 }); return;
+  }
   if (mode === 'connect') {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Browser sign-in requires an owner terminal');
     const controller = new AbortController();

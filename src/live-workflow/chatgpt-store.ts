@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync,
   readSync, realpathSync, renameSync, unlinkSync, writeFileSync,
@@ -25,6 +25,18 @@ const DIRECT_SCOPE = 'chatgpt.tokens.use.direct';
 const CONNECTION = 'chatgpt-connection.json';
 const HOST = 'chatgpt-host.json';
 const LOCK = 'chatgpt.lock';
+const BILLING_REVIEW = 'chatgpt-billing-review.json';
+export interface ChatGPTBillingReview {
+  schemaVersion: 1;
+  accountSha256: string;
+  identitySha256: string;
+  confirmedAt: number;
+  reviewId: string;
+}
+export const chatGPTAccountFingerprint = (c: ChatGPTConnection): string =>
+  createHash('sha256').update(JSON.stringify([c.clientId, c.subject])).digest('hex');
+const billingIdentity = (c: ChatGPTConnection): string =>
+  createHash('sha256').update(JSON.stringify([c.hostId, c.clientId, c.subject, c.email])).digest('hex');
 export const requestedChatGPTScopes = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
 
 class ChatGPTAuthError extends Error {}
@@ -121,7 +133,7 @@ export class ChatGPTStore {
       || (s.mode & 0o7777) !== 0o700 || realpathSync(this.directory) !== this.directory)
       throw authError('state directory changed or is unsafe');
   }
-  private read(name: string): unknown | undefined {
+  private read(name: string, parseJSON = true): unknown | undefined {
     this.check();
     let fd: number;
     try { fd = openSync(join(this.directory, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -141,7 +153,7 @@ export class ChatGPTStore {
       if (count > MAX_BYTES || !sameFile(before, after) || before.size !== after.size
         || before.ctimeMs !== after.ctimeMs || !sameFile(after, current) || after.ctimeMs !== current.ctimeMs)
         throw authError('credential file changed or exceeds limit');
-      return JSON.parse(bytes.subarray(0, count).toString('utf8')) as unknown;
+      return parseJSON ? JSON.parse(bytes.subarray(0, count).toString('utf8')) as unknown : true;
     } catch { throw authError('unsafe or invalid credential file'); }
     finally { closeSync(fd); }
   }
@@ -214,7 +226,39 @@ export class ChatGPTStore {
     if (c.hostId !== this.getHostId()) throw authError('host identity mismatch');
     const previous = this.connection(true);
     if (previous && (previous.clientId !== c.clientId || previous.subject !== c.subject)) throw authError('account identity mismatch');
+    // Reconnecting an intact account retains its review; a disconnected record does not.
+    if (!previous) this.forgetBillingReview();
     this.write(CONNECTION, c);
+  }
+  billingReview(connection: ChatGPTConnection): ChatGPTBillingReview | undefined {
+    const value = this.read(BILLING_REVIEW);
+    if (value === undefined) return undefined;
+    const v = record(value);
+    if (Object.keys(v).sort().join(',') !== 'accountSha256,confirmedAt,identitySha256,reviewId,schemaVersion'
+      || v.schemaVersion !== 1 || typeof v.accountSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(v.accountSha256)
+      || typeof v.identitySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(v.identitySha256)
+      || typeof v.reviewId !== 'string' || !/^[a-f0-9]{32}$/.test(v.reviewId)
+      || !Number.isSafeInteger(v.confirmedAt) || (v.confirmedAt as number) <= 0)
+      throw authError('invalid billing acknowledgement; reset it before confirming again');
+    if (v.accountSha256 !== chatGPTAccountFingerprint(connection) || v.identitySha256 !== billingIdentity(connection))
+      return undefined;
+    return v as unknown as ChatGPTBillingReview;
+  }
+  /** Trusted owner assertion only. No server setting is inspected or changed. */
+  confirmBillingReview(connection: ChatGPTConnection): ChatGPTBillingReview {
+    this.checkLock();
+    if (JSON.stringify(this.connection(true)) !== JSON.stringify(connection)) throw authError('connection changed during account review');
+    const review: ChatGPTBillingReview = { schemaVersion: 1, accountSha256: chatGPTAccountFingerprint(connection),
+      identitySha256: billingIdentity(connection), confirmedAt: Date.now(), reviewId: randomBytes(16).toString('hex') };
+    this.write(BILLING_REVIEW, review);
+    return review;
+  }
+  forgetBillingReview(): void {
+    this.checkLock();
+    if (this.read(BILLING_REVIEW, false) === undefined) return;
+    this.checkLock();
+    unlinkSync(join(this.directory, BILLING_REVIEW));
+    fsyncSync(this.fd);
   }
   close(): void {
     try {

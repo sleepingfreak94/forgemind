@@ -1,7 +1,7 @@
 import { readProject, documentStatus } from "../project-workflow/project.js";
 import { discoverRepository } from "./repository.js";
 export const LIVE_BLOCK_REASON =
-  "Connect a ChatGPT plan account and review its credits-off setting in an owner terminal before supervised coding";
+  "Connect a ChatGPT plan account and confirm its credits-off setting once in an owner terminal before supervised coding";
 /** Read-only discovery: does not inspect credentials, run a model, or mutate Git state. */
 export function inspectProject(workspace: string) {
   const repository = discoverRepository(workspace);

@@ -6,6 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { liveMain, parseLiveArguments } from '../../src/local-runtime/live-cli.js';
+import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
 import { ChatGPTPlanSession, assertChatGPTPlanSession, openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
 import { NativeCodexModel, startBroker } from '../../src/live-workflow/provider.js';
 import type { LiveTask } from '../../src/live-workflow/contracts.js';
@@ -27,6 +28,25 @@ test('connection CLI refuses noninteractive authentication before any network or
   assert.throws(() => execFileSync(process.execPath, [executable, 'connect', '--connection', '/nonexistent/forgemind-test'],
     { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe'] }),
   error => String((error as { stderr: Buffer }).stderr).includes('requires an owner terminal'));
+});
+test('billing-reset clears only the local acknowledgement and revokes the next session dispatch', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-billing-reset-cli-'))), directory = join(root, 'account');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const store = new ChatGPTStore(directory, process.cwd(), true);
+  try {
+    store.lock(); store.save({ schemaVersion: 1, hostId: store.getHostId(), clientId: 'oaiapp_fixture', subject: 'fixture-owner',
+      email: 'owner@example.invalid', accessToken: 'synthetic-access', idToken: 'synthetic.signed.identity',
+      scope: 'chatgpt.tokens.use.direct', expiresAt: Date.now() + 3600000 });
+  } finally { store.close(); }
+  const session = await openChatGPTPlanSession(directory, { isTTY: true, confirm: async text => text.match(/Enter exactly "([^"]+)"/)![1]! });
+  assert.equal(parseLiveArguments(['billing-reset', '--connection', directory]).mode, 'billing-reset');
+  assert.throws(() => parseLiveArguments(['billing-reset', '--connection', directory, '--yes', '/bypass']));
+  const executable = fileURLToPath(new URL('../../src/local-runtime/live-cli.js', import.meta.url));
+  const result = JSON.parse(execFileSync(process.execPath, [executable, 'billing-reset', '--connection', directory], { encoding: 'utf8' }));
+  assert.equal(result.billingReview, 'cleared'); assert.equal(result.providerRequests, 0);
+  assert.equal(existsSync(join(directory, 'chatgpt-billing-review.json')), false);
+  assert.equal(existsSync(join(directory, 'chatgpt-connection.json')), true);
+  assert.throws(() => session.assertActive(), /reset or changed/);
 });
 const run = ['run', '--workspace', '/repo', '--task', '/task.json'];
 const publication = ['--gh', '/opt/gh', '--author-name', 'Repository Owner', '--author-email', '123+owner@users.noreply.github.com'];
@@ -81,8 +101,8 @@ test('draft PR requires publication configuration before account review, worktre
 test('plain or constructed plan session cannot authorize requests or native launch', async () => {
   const session = new ChatGPTPlanSession();
   assert.throws(() => assertChatGPTPlanSession(session), /Unrecognized/);
-  assert.throws(() => session.binding(), /Fresh subscription-only/);
-  await assert.rejects(session.request('{}', new AbortController().signal), /Fresh subscription-only/);
+  assert.throws(() => session.binding(), /Authenticated subscription-only/);
+  await assert.rejects(session.request('{}', new AbortController().signal), /Authenticated subscription-only/);
   await assert.rejects(openChatGPTPlanSession('/missing', { isTTY: false, confirm: async () => 'credits-disabled x' }), /interactive/);
   const task = { maxRuntimeMs: 1000 } as LiveTask;
   const options = { task, planSession: session, authority: null!, source: () => '', signal: new AbortController().signal };

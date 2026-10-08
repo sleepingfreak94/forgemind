@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, readFileSync, writeFileSync, unlinkSync, chmodSync, symlinkSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
-import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
+import { openChatGPTPlanSession, forgetChatGPTBillingReview } from '../../src/live-workflow/chatgpt-plan.js';
 import { startBroker } from '../../src/live-workflow/provider.js';
 import type { LiveTask } from '../../src/live-workflow/contracts.js';
 
@@ -56,6 +57,105 @@ test('denial, missing verified email and credential changes during owner review 
     } }), /changed during/);
   } finally { f.cleanup(); noEmail.cleanup(); }
 });
+
+test('one account acknowledgement survives runs, a new process and six minutes without another prompt', async t => {
+  const now = Date.now(); t.mock.timers.enable({ apis: ['Date'], now });
+  const f = connection();
+  try {
+    const first = await f.open();
+    const file = join(f.directory, 'chatgpt-billing-review.json');
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /synthetic-access-token|synthetic.signed.identity|owner@example.invalid/);
+    t.mock.timers.setTime(now + 6 * 60_000);
+    first.assertActive();
+    for (let i = 0; i < 4; i++) {
+      const next = await openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async () => { throw Error('Unexpected repeated prompt'); } });
+      assert.deepEqual(next.binding(), first.binding());
+    }
+    const module = new URL('../../src/live-workflow/chatgpt-plan.js', import.meta.url).href;
+    const result = execFileSync(process.execPath, ['--input-type=module', '-e',
+      `const {openChatGPTPlanSession}=await import(process.argv[1]); const session=await openChatGPTPlanSession(process.argv[2],{isTTY:true,confirm:async()=>{throw Error('Unexpected repeated prompt')}}); session.assertActive(); console.log('reused');`, module, f.directory], { encoding: 'utf8' });
+    assert.equal(result.trim(), 'reused');
+  } finally { f.cleanup(); }
+});
+
+test('same-account token renewal preserves acknowledgement, but never revives an old session', async () => {
+  const f = connection();
+  try {
+    const first = await f.open();
+    const review = readFileSync(join(f.directory, 'chatgpt-billing-review.json'), 'utf8');
+    const store = new ChatGPTStore(f.directory);
+    try { store.lock(); store.save({ ...store.connection()!, accessToken: 'renewed-synthetic-token', expiresAt: Date.now() + 7200000 }); }
+    finally { store.close(); }
+    assert.throws(() => first.assertActive(), /connection changed/);
+    const next = await openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async () => { throw Error('Unexpected repeated prompt'); } });
+    next.assertActive();
+    assert.equal(readFileSync(join(f.directory, 'chatgpt-billing-review.json'), 'utf8'), review);
+  } finally { f.cleanup(); }
+});
+
+test('recreating a disconnected connection discards its earlier acknowledgement', async () => {
+  const f = connection();
+  try {
+    await f.open();
+    const saved = JSON.parse(readFileSync(join(f.directory, 'chatgpt-connection.json'), 'utf8'));
+    unlinkSync(join(f.directory, 'chatgpt-connection.json'));
+    const store = new ChatGPTStore(f.directory);
+    try { store.lock(); store.save(saved); } finally { store.close(); }
+    let prompts = 0;
+    await assert.rejects(openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async () => { prompts++; return 'cancel'; } }), /not confirmed/);
+    assert.equal(prompts, 1);
+  } finally { f.cleanup(); }
+});
+
+test('explicit reset invalidates existing sessions and requires a new acknowledgement', async () => {
+  const f = connection();
+  try {
+    const first = await f.open();
+    forgetChatGPTBillingReview(f.directory);
+    assert.throws(() => first.assertActive(), /reset or changed/);
+    let prompts = 0;
+    const next = await openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async text => {
+      prompts++; return text.match(/Enter exactly "([^"]+)"/)![1]!;
+    } });
+    assert.equal(prompts, 1); next.assertActive();
+    assert.throws(() => first.assertActive(), /reset or changed/);
+  } finally { f.cleanup(); }
+});
+
+for (const field of ['hostId', 'clientId', 'subject', 'email'])
+  test('saved acknowledgement never transfers to changed identity: ' + field, async () => {
+    const f = connection();
+    try {
+      await f.open();
+      const host = 'urn:uuid:00000000-0000-4000-8000-000000000001';
+      change(f.directory, { [field]: field === 'hostId' ? host : field === 'clientId' ? 'oaiapp_other' : 'other' });
+      if (field === 'hostId') writeFileSync(join(f.directory, 'chatgpt-host.json'), JSON.stringify({ schemaVersion: 1, hostId: host }));
+      let prompts = 0;
+      await assert.rejects(openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async () => { prompts++; return 'cancel'; } }), /not confirmed/);
+      assert.equal(prompts, 1);
+    } finally { f.cleanup(); }
+  });
+
+for (const mode of ['malformed', 'extra-field', 'array-hash', 'symlink', 'world-readable'])
+  test('unsafe persisted acknowledgement cannot authorize execution: ' + mode, async () => {
+    const f = connection();
+    try {
+      const session = await f.open(), file = join(f.directory, 'chatgpt-billing-review.json');
+      if (mode === 'malformed') writeFileSync(file, '{');
+      if (mode === 'extra-field') writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), unexpected: true }));
+      if (mode === 'array-hash') {
+        const v = JSON.parse(readFileSync(file, 'utf8')); v.reviewId = [v.reviewId]; writeFileSync(file, JSON.stringify(v));
+      }
+      if (mode === 'symlink') { const target = join(f.root, 'linked-review'); writeFileSync(target, readFileSync(file)); unlinkSync(file); symlinkSync(target, file); }
+      if (mode === 'world-readable') chmodSync(file, 0o644);
+      assert.throws(() => session.assertActive());
+      await assert.rejects(openChatGPTPlanSession(f.directory, { isTTY: true, confirm: async () => { throw Error('Unsafe state must fail before prompting'); } }));
+      if (mode === 'malformed' || mode === 'extra-field' || mode === 'array-hash') {
+        forgetChatGPTBillingReview(f.directory); (await f.open()).assertActive();
+      }
+    } finally { f.cleanup(); }
+  });
 
 for (const field of ['accessToken', 'idToken', 'email', 'scope', 'expiresAt', 'disconnect'])
   test('reviewed session rejects stored connection drift: ' + field, async () => {
