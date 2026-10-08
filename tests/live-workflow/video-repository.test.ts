@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,7 +10,7 @@ import { repositoryProcess } from '../../src/live-workflow/repository-process.js
 import type { EvidenceManifest } from '../../src/live-workflow/evidence.js';
 import { sourceIdentity } from '../../src/live-workflow/repository.js';
 import { deliverReviewedVideo, prepareVideoDelivery } from '../../src/live-workflow/video-delivery.js';
-import { publishVideoRepository } from '../../src/live-workflow/video-repository.js';
+import { publishVideoRepository, validateVideoHelperHome } from '../../src/live-workflow/video-repository.js';
 import type { VideoActionOutcome, VideoDeliveryAction } from '../../src/live-workflow/video-repository.js';
 import type { VideoDeliveryInput, VideoDeliveryOptions } from '../../src/live-workflow/video-delivery.js';
 
@@ -177,11 +177,64 @@ test('pinned explicit gh helper is the only credential source; modified helper b
   const result = await deliverReviewedVideo(prepareVideoDelivery(f.input), options);
   assert.equal(result.status, 'delivered'); assert.ok(calls.every(c => c.args.includes(`credential.https://github.com.helper=${helper} auth git-credential`)));
   assert.ok(calls.every(c => c.env.GH_CONFIG_DIR === f.base));
+  assert.ok(calls.every(c => c.env.HOME === c.cwd && c.env.XDG_CONFIG_HOME === c.cwd));
   const authorize = options.authorize;
   assert.equal((await deliverReviewedVideo(prepareVideoDelivery(f.input), { ...options, authorize: async action => {
     const grant = await authorize(action); writeFileSync(helper, '#!/bin/sh\nexit 2\n'); return grant;
   } })).status, 'local-only-blocked');
   assert.equal(calls.filter(c => c.args.includes('push')).length, 1);
+});
+test('explicit owner home enables helper lookup while user and ambient Git config stay disabled', async t => {
+  const f = fixture(t), calls = network(t), helper = join(f.base, 'gh');
+  writeFileSync(helper, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  writeFileSync(join(f.base, '.gitconfig'), 'invalid Git configuration that must never be loaded');
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = join(f.base, '.gitconfig');
+  try {
+    const result = await deliverReviewedVideo(prepareVideoDelivery(f.input), { ...f.options,
+      credentialHelper: { ghPath: helper, sha256: hash(readFileSync(helper, 'utf8')), configDirectory: f.base, homeDirectory: f.base } });
+    assert.equal(result.status, 'delivered'); assert.equal(calls.length, 3);
+    for (const call of calls) {
+      assert.equal(call.env.HOME, f.base); assert.equal(call.env.GH_CONFIG_DIR, f.base);
+      assert.equal(call.env.GIT_CONFIG_GLOBAL, '/dev/null'); assert.equal(call.env.GIT_CONFIG_SYSTEM, '/dev/null');
+      assert.equal(call.env.GIT_CONFIG_NOSYSTEM, '1'); assert.equal(call.env.GIT_CONFIG_COUNT, undefined);
+      for (const key of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) assert.equal(call.env[key], call.cwd);
+    }
+    for (const action of f.actions.filter(a => a.executable === 'git')) assert.equal(action.environment!.HOME, f.base);
+  } finally { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; }
+});
+test('unsafe, noncanonical and source credential homes fail before any authorization or network dispatch', async t => {
+  const f = fixture(t), calls = network(t), helper = join(f.base, 'gh'), home = join(f.base, 'home');
+  writeFileSync(helper, '#!/bin/sh\nexit 1\n', { mode: 0o700 }); mkdirSync(home, { mode: 0o700 });
+  const alias = join(f.base, 'home-alias'), parentAlias = join(f.base, 'parent-alias');
+  symlinkSync(home, alias); symlinkSync(f.base, parentAlias); mkdirSync(join(f.root, 'nested'));
+  const options = { ...f.options, credentialHelper: { ghPath: helper, sha256: hash(readFileSync(helper, 'utf8')), configDirectory: f.base } };
+  for (const homeDirectory of ['relative', home + '/../home', alias, join(parentAlias, 'home'), f.root,
+    join(f.root, 'nested'), join(f.root, 'code.txt'), join(f.base, 'missing')]) {
+    assert.equal((await deliverReviewedVideo(prepareVideoDelivery(f.input), { ...options,
+      credentialHelper: { ...options.credentialHelper, homeDirectory } })).status, 'local-only-blocked');
+  }
+  for (const mode of [0o720, 0o702]) {
+    chmodSync(home, mode);
+    assert.equal((await deliverReviewedVideo(prepareVideoDelivery(f.input), { ...options,
+      credentialHelper: { ...options.credentialHelper, homeDirectory: home } })).status, 'local-only-blocked');
+  }
+  chmodSync(home, 0o700);
+  if (process.getuid) { t.mock.method(process as { getuid: () => number }, 'getuid', () => -1);
+    assert.throws(() => validateVideoHelperHome(home, f.root), /Owner/); t.mock.restoreAll(); }
+  assert.equal(f.actions.length, 0); assert.equal(calls.length, 0); assert.deepEqual(readdirSync(f.options.evidenceParent), []);
+});
+test('credential home replacement after authorization suppresses the protected action', async t => {
+  const f = fixture(t), calls = network(t), helper = join(f.base, 'gh'), home = join(f.base, 'home'), authorize = f.options.authorize;
+  writeFileSync(helper, '#!/bin/sh\nexit 1\n', { mode: 0o700 }); mkdirSync(home, { mode: 0o700 });
+  const result = await deliverReviewedVideo(prepareVideoDelivery(f.input), { ...f.options,
+    credentialHelper: { ghPath: helper, sha256: hash(readFileSync(helper, 'utf8')), configDirectory: f.base, homeDirectory: home },
+    authorize: async action => { const grant = await authorize(action);
+      renameSync(home, home + '-old'); mkdirSync(home, { mode: 0o700 }); return grant;
+    } });
+  assert.equal(result.status, 'local-only-blocked'); assert.equal(calls.length, 0);
+  assert.equal(f.actions.length, 1); assert.equal(f.outcomes[0]!.status, 'failed');
+  assert.deepEqual(readdirSync(f.options.evidenceParent), []);
 });
 test('post-push finish failure or revoked confirmation produces unknown completion', async t => {
   for (const mode of ['finish', 'confirmation'] as const) {

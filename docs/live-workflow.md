@@ -64,8 +64,9 @@ ForgeMind's own repository destination is separate: a target project's remote is
 | Plan generation | Selected files and validated memory through the reviewed plan session; synthetic transport tested, real inference pending |
 | Coding | Host validates complete UTF-8 edits against exact paths and preimage hashes; synthetic model tested |
 | Checks | Actual macOS Seatbelt execution; single-process commands, scratch writes only, no network/fork |
-| Review | Separate model invocation receives source-bound diff/checks; revise/blocked stops completion; live independence unverified |
-| Recording | Explicit capture command, pinned recorder/probe, process limits, actual file digest and ffprobe validation; fixture tests |
+| Browser QA handoff | Optional trusted host callback runs automatically after baseline/candidate checks; strict reports and receipts gate review/publication; REBOS supervised Chrome replay verified, unattended capture unavailable |
+| Review | Separate model invocation receives source-bound diff/checks and configured browser QA reports; revise/blocked stops completion; live independence unverified |
+| Recording | Explicit pinned capture/probe with limits and digests; actual REBOS Before/After clips playback/privacy reviewed and delivered to an immutable GitHub evidence commit |
 | Draft PR | Exact origin/base/head checks, task-only commit, non-force push and draft creation; subprocess/network fixtures only |
 | Live Codex | Supervised ChatGPT-plan route implemented; real account/inference verification pending; native local-transport conformance is separate evidence |
 
@@ -118,6 +119,49 @@ The host verifies the whole-file digest and strict UTF-8, then resolves every no
 
 This format reduces output amplification for large files. Synthetic native fixtures establish protocol compatibility, not live provider reliability, latency or completion. A separately confirmed REBOS attempt reached real planning and passing baseline checks, then its coding stream terminated before edits; its sole cause remains unproven and its failed run is preserved. Session, request, byte and runtime limits are unchanged.
 
+## Automatic browser QA handoff
+
+Trusted API hosts can supply `RunOptions.browserQa: { scenarioId, adapter }`. The typed `BrowserQaAdapter` receives `phase` (`baseline` or `candidate`), canonical `workspace`, immutable `task`, `scenarioId`, `baselineSource`, `currentSource`, unique `requestId`, Unix-millisecond `requestedAt`, and `signal: AbortSignal`. After each phase's checks, the workflow automatically awaits this callback before proceeding. Candidate checks must pass before its handoff. Non-UI tasks retain compatibility when no adapter is configured; configuring one requires valid reports for **both** phases. Task manifests, project preferences and model output cannot select an adapter, executable or bypass.
+
+The callback returns a JSON object with exactly these fields (the host validates every result):
+
+```ts
+{
+  version: 1,
+  phase: "baseline" | "candidate",
+  workspace: string,
+  taskId: string,
+  scenarioId: string,
+  baselineSource: string, // exact 64-character source SHA-256
+  currentSource: string,  // exact phase source SHA-256
+  requestId: string,      // echo this invocation's requestId
+  startedAt: number,      // Unix milliseconds, at/after requestedAt
+  completedAt: number,    // at/after startedAt, never in the future
+  checks: [{ id: string, viewportWidth: number, passed: boolean, detail: string }]
+}
+```
+
+Reports are limited to 64 KiB of JSON, 1–128 checks, 128-byte check IDs and 2048-byte details. Widths must be integers from 1–16384, never strings. Check ID/width pairs must be unique and identical across phases. Baseline failures can document the reproducer; **every candidate check must pass**. Missing/empty/malformed reports, wrong task/scenario/request/workspace/source, source changes during the hook, or reports older than 15 minutes deny review and completion/publication. This freshness window includes the time since the baseline handoff started; a long run requires a new run and fresh evidence.
+
+Validated reports are saved as `baseline-browser-qa.json` and `candidate-browser-qa.json` in the private run artifacts directory. Durable command and artifact policy receipts bind each phase's request, source and exact report hash. CLI command receipts also bind the config/executable paths and SHA-256 hashes, fixed arguments, timeout and output limit. The fresh reviewer automatically receives `browserQa: { baseline, candidate }`, each containing the validated report, artifact path and `reportSha256`. The host rechecks current source, report schema/freshness, artifact safety and file hashes before review, after review and before every authorized Git publication action. A passing review cannot excuse missing or changed evidence. Draft PR text includes the scenario, paired check count and both report hashes; the private artifacts are not automatically uploaded.
+
+The supervised CLI accepts `--browser-qa-config /private/browser-qa.json` **only with the complete connection/Codex/state/worktree tuple**. This option cannot be silently ignored in a blocked credential-free run. The config must be a canonical owner-only regular JSON file outside project source, at most 64 KiB. It has exactly this shape:
+
+```json
+{
+  "version": 1,
+  "scenarioId": "selected-ui-scenario",
+  "executable": "/canonical/path/to/installed-host-harness",
+  "args": ["host-selected-literal-argument"],
+  "timeoutMs": 60000,
+  "maxOutputBytes": 65536
+}
+```
+
+The host validates and pins the config and executable before authentication, and checks the pins before/during/after execution. The executable must be a canonical trusted regular executable outside project source, with no group/world write permission. Arguments are fixed literal values (up to 64, 8192 bytes each, 16 KiB combined); no shell or PATH lookup occurs. Config environment/endpoint/credential/bypass fields are rejected. The adapter appends these explicit arguments: `--workspace`, `--source` (current source), `--baseline-source`, `--phase`, `--task-id`, `--scenario-id`, `--request-id`, `--requested-at`. The installed command must accept them and write only its report JSON to stdout, exit zero even for a valid failing baseline reproducer, and honor the supplied root and source. Nonzero exit, invalid UTF-8/JSON, cancellation, timeout or excessive combined stdout/stderr fails closed. Runtime is bounded to 120 seconds; stdout/stderr to 64 KiB or the smaller configured limit. Stderr is not included in error messages.
+
+Commands receive a fresh private scratch HOME/TMPDIR/XDG directory and fixed locale/OpenSSL settings, with no inherited environment, credentials, runtime injection or stdin. The adapter terminates its POSIX process group on completion/failure. This cooperative host command mechanism is **automatic handoff**, not an OS sandbox, installed browser harness, proof of browser observations or unattended browser capture capability. The trusted host is responsible for its executable, dependencies, argument content and authorized browser access. Synthetic command tests emit fixtures and establish protocol/gate behavior only. Actual browser interaction for the current acceptance work uses CUA under the lead's supervision; this implementation does not launch a browser runner.
+
 ## Recording and delivery
 
 `recordEvidence` accepts an explicit scenario, capture target, baseline/candidate identities, exact capture command, bounded duration/output/runtime, and pinned probe. The host must authorize recording and probe commands. Before and After are manifest labels; the adapter does not add visible overlays. It validates container metadata and file integrity, not visual coverage or readability. A human or browser reviewer must inspect playback and verify the scenario before delivery.
@@ -142,9 +186,21 @@ The review JSON must contain `verdict: "pass"` and `source` matching the candida
 
 Authentication is opt-in: provide both `--gh /absolute/path/to/gh` and `--gh-config-dir /private/gh-config` to use a pinned GitHub CLI helper. Ambient Git helpers, hooks, proxies and tokens are not inherited. The helper may access its explicitly selected authentication store; ForgeMind does not extract credentials. Confirm the selected store authenticates to the intended repository before delivery.
 
+If the native helper's existing Keychain authentication needs the owner's HOME, explicitly add `--gh-home /canonical/owner/home` with both helper flags. The trusted host API uses `credentialHelper.homeDirectory`. This optional directory must be canonical, owned by the current user, outside project source, free of symlink ancestors and not group/world writable; its identity is pinned and revalidated. Without it, HOME stays in the isolated evidence checkout. Git global/system configuration remains disabled and XDG directories stay isolated in either mode. Project/model input cannot select this home. The CLI requires its GH config directory to be private (0700).
+
 The orchestration API accepts trusted host recording and delivery options. Requested video delivery gates **both local completion and draft PR completion**. Without the required options/reviews it returns `needs-video-sharing`; ambiguous publication returns `needs-video-reconciliation`. A successful delivery adds immutable links to the PR description. The supervised coding CLI requires its own authenticated, owner-reviewed account connection; video delivery approval does not authorize inference.
 
-Native and Git delivery tests use local fixtures. Actual GitHub video upload and reviewer playback remain unverified; no application before/after recording was made for this implementation ticket.
+## REBOS acceptance
+
+The supervised acceptance replay verified the automatic browser-QA callback using fresh actual Chrome observations of REBOS frontend assets. It reproduced eight baseline centering failures and passed the same 32 candidate checks across zero-builder and populated-data/search-no-match scenarios at 1440, 720, 375 and 320 CSS pixels. Both reports and their hashes reached the review seam with source-bound command/artifact receipts. The replay used three scripted model responses and zero provider requests; its review seam is not evidence of independent live-model review. A separate reviewer assessed the implementation and acceptance artifacts.
+
+The frontend served explicitly synthetic data through a loopback GET-only fixture; this verifies rendered layout and handoff, not backend operations or production data. Actual macOS screen recordings show the same zero-builder scenario at 720 CSS pixels, with readable Before/After/source labels. Both approximately ten-second, silent clips passed Chrome playback, full decode and independent visual/privacy review. They show steady layout, not interactions or every tested width.
+
+The native GitHub helper delivered only the reviewed clips and sanitized index to a separate orphan evidence branch in the REBOS repository. Immutable evidence: [Before](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/before.mp4), [After](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/after.mp4), [source-bound index](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/evidence.json). The first attempt stopped at authentication before any push; a reconciled new attempt with the explicit owner HOME succeeded. Failed receipts remain preserved.
+
+Memory acceptance separately verified one explicitly validated, cited Laravel/PostgreSQL stack decision, exclusion before validation, stale-source rejection and supplied-plan preparation against the current workspace. Retrieval remains local keyword/exact search; other imported candidates remain unvalidated. See [project memory](project-memory.md).
+
+Validation included 77 focused browser-QA checks, 112 portable regressions and 10 focused credential-home checks, all passing. The earlier full run passed 493/494 tests; one existing publication fixture exceeded its task deadline, then passed unchanged in isolation. No timeout or runtime guard was weakened. The full run covers the browser-QA build; the later credential-home changes have focused coverage, and final status edits are documentation only. This is not a claim of an all-pass full-suite rerun on the final source.
 
 ## Remaining gates
 
@@ -152,7 +208,7 @@ Native and Git delivery tests use local fixtures. Actual GitHub video upload and
 - Verify real OAuth sign-in, credit-disabled inference and quota-exhaustion behavior; local-transport conformance is not live-provider evidence.
 - Add reviewed multiprocess/build/Docker check profiles; current checks cannot run npm, PHP workers or Compose stacks requiring subprocesses/network/writes.
 - Integrate per-task preference confirmation. Execution fixtures currently require complete project-level preferences; onboarding still supports both preference modes.
-- Verify actual GitHub publication, live independent review and requested recording delivery.
+- Verify a complete live-provider coding task, live independent model review and unattended browser/recording automation; supervised REBOS evidence delivery is verified above.
 - Windows and Linux enforcement remain unsupported; no unsandboxed fallback exists.
 
 Run `npm run test:live` for fixture and macOS check evidence, and `npm test` for integration regressions. Native tests skip only when the required host/executable is unavailable. A green fixture suite does not authorize a real account request; explicit sign-in and account-control review remain required.
