@@ -20,12 +20,14 @@ import {
   prepareDraftPullRequest,
   publishDraftPullRequest,
 } from './repository.js';
-import type { RepositoryAction } from './repository.js';
+import type { RepositoryAction, CommitAuthor, PublishOptions } from './repository.js';
 import { withRepositoryBudget } from './repository-process.js';
 import { prepareVideoDelivery, deliverReviewedVideo } from './video-delivery.js';
 import type { VideoDeliveryOptions, VideoDeliveryResult } from './video-delivery.js';
 import { recordEvidence, validateEvidencePair } from './evidence.js';
 import type { RecordingRequest, ProbeConfiguration, EvidenceManifest } from './evidence.js';
+import { assertChatGPTPlanSession } from './chatgpt-plan.js';
+import type { ChatGPTPlanSession } from './chatgpt-plan.js';
 
 export interface RecordingSetup {
   before: Omit<RecordingRequest, 'phase' | 'sourceIdentity' | 'baselineIdentity'>;
@@ -42,9 +44,13 @@ export interface RunOptions {
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
   videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
+  /** Trusted host publication inputs; never read from task/project/model data. */
+  publication?: PublishOptions & { author: CommitAuthor };
   signal?: AbortSignal;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
+  /** Authenticated owner-reviewed subscription route; never supplied by a task manifest. */
+  planSession?: ChatGPTPlanSession;
 }
 async function executeFixtureTask(options: RunOptions, deadline: number): Promise<{
   status: string;
@@ -53,7 +59,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   prUrl?: string;
 }> {
   const task = validateTask(options.task);
-  if (!options.modelFactory)
+  if (!options.modelFactory && !options.planSession)
     throw new Error(
       'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
     );
@@ -148,6 +154,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         task,
         authority,
         source: currentSource,
+        ...(options.planSession ? { planSession: options.planSession } : {}),
       });
     const sources = readSources(
       activeRoot,
@@ -181,12 +188,12 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     save('plan.json', { plan: generated, planDigest, source: current });
     currentSource();
     memory?.assertCurrent(context!);
+    if (profile.preferences.planReview !== 'auto') progress(JSON.stringify(generated, null, 2));
     if (profile.preferences.planReview === 'approve' && !(await options.confirmPlan(generated, planDigest))) {
       authority.phase('plan-pending', current, { planDigest });
       authority.finish('blocked');
       return { status: 'needs-plan-approval', artifacts, worktree: activeRoot };
     }
-    if (profile.preferences.planReview !== 'auto') progress(JSON.stringify(generated, null, 2));
     authority.phase('plan-accepted', current, {
       planDigest,
       mode: profile.preferences.planReview ?? 'show',
@@ -243,7 +250,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const beforeVideo = await capture('before');
     progress('Generating bounded code edits');
     const raw = await model.complete(
-      'Implement the approved plan. Return complete UTF-8 content for each changed authorized file, with the exact supplied beforeSha256 (null for new files). To delete a file use null content. Do not change unrelated paths or weaken tests. Do not execute tools.',
+      'Implement the approved plan. For small changes to existing files prefer {path,beforeSha256,format:"text-replacements-v1",replacements:[{before,after}]}. Use the exact supplied whole-file beforeSha256. Each nonempty before must match exactly once in the original file; operations must not overlap, use regex, or depend on another operation. Keep anchors short but unique. The host preserves untouched bytes. Alternatively return {path,beforeSha256,content} with complete UTF-8 content (null digest for new files; null content deletes a file). Never mix formats within an edit. Do not change unrelated paths or weaken tests. Do not execute tools.',
       { task, plan: generated, sources, memory: context ?? null, beforeChecks },
       codingSchema,
       signal,
@@ -349,6 +356,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       changes.edits.map((e) => e.path),
       title,
       authorizeGit,
+      options.publication?.author,
     );
     finishGit('completed');
     const head = committed.head;
@@ -364,7 +372,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       title,
       body: finalBody,
     });
-    const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit);
+    const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit, options.publication);
     finishGit('completed');
     authority.phase('published', current, {
       base: checkout.baseHead,
@@ -398,10 +406,14 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
 
 export async function runTask(options: RunOptions) {
   const task = validateTask(options.task);
-  if (!options.modelFactory)
+  if (!options.modelFactory && !options.planSession)
     throw new Error(
       'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
     );
+  if (options.planSession) {
+    assertChatGPTPlanSession(options.planSession);
+    if (options.modelFactory) throw new Error('Production and fixture dependencies cannot be combined');
+  }
   const signal = options.signal
     ? AbortSignal.any([options.signal, AbortSignal.timeout(task.maxRuntimeMs)])
     : AbortSignal.timeout(task.maxRuntimeMs);

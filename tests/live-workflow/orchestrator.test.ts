@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import childProcess from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
@@ -9,9 +10,11 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  chmodSync,
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from 'node:sqlite';
 import { runTask } from "../../src/live-workflow/orchestrator.js";
 import { sha256 } from "../../src/live-workflow/validation.js";
 import {
@@ -20,6 +23,8 @@ import {
 } from "../../src/live-workflow/provider.js";
 import { fixtureResponse } from './native-fixture.js';
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
+import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
+import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-pipeline-"))),
@@ -137,6 +142,51 @@ test("all native inference entry points block without a fixture transport", asyn
     f.cleanup();
   }
 });
+test('draft publication forwards trusted author and pinned helper without network access', {
+  skip: process.platform !== 'darwin', timeout: 90000,
+}, async t => {
+  const f = fixture(), ghPath = join(f.root, 'gh-helper');
+  writeFileSync(ghPath, 'fixture helper; never executed'); chmodSync(ghPath, 0o755);
+  const helper = { ghPath, sha256: sha256(readFileSync(ghPath)) };
+  const configFile = join(f.repo, '.git/config'), config = readFileSync(configFile);
+  f.task.draftPr = true;
+  const network: { executable: string; args: string[] }[] = [];
+  const commits: string[][] = [];
+  t.mock.method(childProcess, 'execFileSync', (executable: string, args: string[], options: unknown) => {
+    const command = args[0]?.endsWith('/repository-supervisor.js')
+      ? JSON.parse(Buffer.from(args[1]!, 'base64url').toString()) as { executable: string; args: string[] }
+      : { executable, args };
+    if (command.executable === 'git' && command.args.includes('commit')) commits.push(command.args);
+    if (command.executable === 'gh' || command.executable === 'git' && command.args.includes('push')) {
+      network.push(command);
+      return Buffer.from(command.executable === 'git' ? '' : command.args[1] === 'list' ? '[]' : 'https://github.com/fixture/project/pull/23\n');
+    }
+    return execFileSync(executable, args, options as Parameters<typeof execFileSync>[2]);
+  });
+  let calls = 0;
+  const outputs = [
+    { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value is after'] },
+  ];
+  try {
+    const result = await runTask({ ...f.options, publication: { author: { name: 'Publication Owner',
+      email: '123+owner@users.noreply.github.com' }, gitCredentialHelper: helper },
+      modelFactory: () => ({ complete: async () => outputs[calls++] }) });
+    assert.equal(result.status, 'completed'); assert.equal(calls, 3);
+    assert.equal(result.prUrl, 'https://github.com/fixture/project/pull/23');
+    assert.equal(commits.length, 1);
+    assert.ok(commits[0]!.includes('user.name=Publication Owner'));
+    assert.ok(commits[0]!.includes('user.email=123+owner@users.noreply.github.com'));
+    assert.equal(network.length, 3);
+    assert.ok(network[1]!.args.includes(`credential.https://github.com.helper=${ghPath} auth git-credential`));
+    assert.ok(network[1]!.args.includes('credential.helper='));
+    assert.equal(execFileSync('git', ['log', '-1', '--format=%an <%ae>'], { cwd: result.worktree!, encoding: 'utf8' }).trim(),
+      'Publication Owner <123+owner@users.noreply.github.com>');
+    assert.deepEqual(readFileSync(configFile), config);
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+  } finally { f.cleanup(); }
+});
 for (const verdict of ["pass", "revise"] as const)
   test(
     "fixture pipeline isolates edits, repeats checks and honors reviewer " +
@@ -217,11 +267,79 @@ for (const verdict of ["pass", "revise"] as const)
 test('real native fixture drives plan, edit and independent review end to end without provider access',{
  skip:process.platform!=='darwin'||!existsSync(join(homedir(),'.local/bin/codex')),timeout:90000},async()=>{
  const f=fixture();f.task.model='gpt-6.1-sol';f.task.maxPromptBytes=262144;let calls=0;
- const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),content:'after'}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
+ const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),format:'text-replacements-v1',replacements:[{before:'before',after:'after'}]}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
  try{const result=await runTask({...f.options,modelFactory:(authority,source)=>new NativeCodexModel({executable:realpathSync(join(homedir(),'.local/bin/codex')),task:f.task,authority,source,credentials:()=>({accessToken:'fixture',accountId:'fixture'}),transport:async(_url,init)=>{const body=JSON.parse(String(init?.body));assert.deepEqual(body.tools,[]);assert.ok(body.input.every((item:{type?:string})=>item.type==='message'||item.type===undefined));return fixtureResponse(f.task.model,outputs[calls++]);}})});
  assert.equal(result.status,'completed-local');assert.equal(calls,3);assert.equal(readFileSync(join(result.worktree!,'value.txt'),'utf8'),'after');assert.equal(readFileSync(join(f.repo,'value.txt'),'utf8'),'before');
  const receipt=JSON.parse(readFileSync(join(result.artifacts,'receipt.json'),'utf8'));assert.equal(receipt.run.requests,3);assert.equal(receipt.run.status,'completed');
  }finally{f.cleanup();}
+});
+
+test('plan contents precede owner approval and rejection prevents code and checks', { skip: process.platform !== 'darwin' }, async () => {
+  const f = fixture();
+  const profilePath = join(f.repo, 'config/forgemind-project.json');
+  const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
+  profile.preferences.planReview = 'approve';
+  writeFileSync(profilePath, JSON.stringify(profile)); f.git('add', '.'); f.git('commit', '-m', 'require plan approval');
+  const progress: string[] = []; let calls = 0;
+  try {
+    const result = await runTask({ ...f.options, onProgress: message => { progress.push(message); },
+      confirmPlan: async (_plan, digest) => {
+        assert.match(progress.join('\n'), /Value is after/); assert.match(digest, /^[a-f0-9]{64}$/); return false;
+      }, modelFactory: () => ({ complete: async () => {
+        calls++; return { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] };
+      } }) });
+    assert.equal(result.status, 'needs-plan-approval'); assert.equal(calls, 1);
+    assert.equal(existsSync(join(result.artifacts, 'before-checks.json')), false);
+    assert.equal(readFileSync(join(result.worktree!, 'value.txt'), 'utf8'), 'before');
+  } finally { f.cleanup(); }
+});
+
+test('authenticated public-route pipeline uses real sandboxed Codex with synthetic OAuth responses', {
+  skip: process.platform !== 'darwin' || !existsSync(join(homedir(), '.local/bin/codex')), timeout: 90000,
+}, async () => {
+  const f = fixture(), nativeFetch = globalThis.fetch, directory = join(f.root, 'account');
+  const store = new ChatGPTStore(directory, f.repo, true);
+  try {
+    store.lock(); store.save({ schemaVersion: 1, hostId: store.getHostId(), clientId: 'oaiapp_fixture', subject: 'fixture-subject',
+      email: 'owner@example.invalid', accessToken: 'synthetic-access-token', idToken: 'synthetic.signed.identity',
+      scope: 'chatgpt.tokens.use.direct', expiresAt: Date.now() + 3600000 });
+  } finally { store.close(); }
+  f.task.model = 'gpt-6.1-sol'; f.task.maxPromptBytes = 262144; let calls = 0;
+  const outputs = [
+    { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), format: 'text-replacements-v1',
+      replacements: [{ before: 'before', after: 'after' }] }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value is after'] },
+  ];
+  try {
+    const session = await openChatGPTPlanSession(directory, { isTTY: true, confirm: async prompt => prompt.match(/Enter exactly "([^"]+)"/)![1]! });
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://api.openai.com/v1/responses');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer synthetic-access-token');
+      assert.equal(JSON.parse(String(init?.body)).store, false);
+      return fixtureResponse(f.task.model, outputs[calls++]);
+    };
+    const result = await runTask({ ...f.options, codexExecutable: realpathSync(join(homedir(), '.local/bin/codex')), planSession: session });
+    assert.equal(result.status, 'completed-local'); assert.equal(calls, 3);
+    assert.equal(readFileSync(join(result.worktree!, 'value.txt'), 'utf8'), 'after');
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+    const text = readFileSync(join(result.artifacts, 'receipt.json'), 'utf8'), receipt = JSON.parse(text);
+    assert.equal(receipt.run.requests, 3); assert.equal(receipt.run.status, 'completed');
+    assert.doesNotMatch(text, /synthetic-access-token/);
+    const ledger = new DatabaseSync(join(f.options.stateDirectory, 'execution/policy/policy.sqlite'), { readOnly: true });
+    try {
+      const providers = ledger.prepare('SELECT body FROM external_attempts').all()
+        .map(row => JSON.parse(row.body as string)).filter(attempt => JSON.parse(attempt.envelopeJson).kind === 'provider');
+      assert.equal(providers.length, 3);
+      for (const attempt of providers) {
+        const envelope = JSON.parse(attempt.envelopeJson);
+        assert.equal(envelope.detail.connection.billingReview, 'owner-confirmed-server-credit-control-off');
+        assert.equal(envelope.detail.connection.accountSha256, session.binding().accountSha256);
+        assert.equal(attempt.intent.resource, 'host:' + sha256(attempt.envelopeJson));
+        assert.doesNotMatch(attempt.envelopeJson, /synthetic-access-token/);
+      }
+    } finally { ledger.close(); }
+  } finally { globalThis.fetch = nativeFetch; f.cleanup(); }
 });
 
 // Synthetic color clips exercise delivery gating; they are not application evidence.

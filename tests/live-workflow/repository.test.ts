@@ -246,6 +246,49 @@ test('ticket commit rejects stale content, default branch, foreign files and den
   }), /commit denied/);
   assert.equal(git(checkout.root, 'rev-parse', 'HEAD'), f.info.head);
 });
+test('explicit commit author overrides role config and ambient identity without persisting config', t => {
+  const f = fixture(t), checkout = createTaskWorktree(f.info, 'author', f.base, f.authorize);
+  git(checkout.root, 'config', '--unset', 'user.name'); git(checkout.root, 'config', '--unset', 'user.email');
+  for (const role of ['author', 'committer']) {
+    git(checkout.root, 'config', `${role}.name`, 'Configured Override');
+    git(checkout.root, 'config', `${role}.email`, 'configured@example.invalid');
+  }
+  const configFile = join(f.root, '.git/config'), config = readFileSync(configFile);
+  const author = { name: 'Repository Owner', email: '123+owner@users.noreply.github.com' };
+  const decisions: RepositoryAction[] = [];
+  for (const [key, value] of Object.entries({ GIT_AUTHOR_NAME: 'Ambient Impostor', GIT_COMMITTER_NAME: 'Ambient Impostor',
+    GIT_AUTHOR_EMAIL: 'impostor@example.invalid', GIT_COMMITTER_EMAIL: 'impostor@example.invalid' })) {
+    const previous = process.env[key]; process.env[key] = value;
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  }
+  writeFileSync(join(checkout.root, 'source.txt'), 'explicit author\n');
+  const identity = sourceIdentity(checkout.root);
+  const result = commitTicketChanges(checkout.root, identity, ['source.txt'], 'feat(fixture): explicit author', action => {
+    decisions.push(action);
+    // An authorization callback cannot swap the already validated identity.
+    author.name = 'Changed'; author.email = 'changed@example.invalid';
+  }, author);
+  assert.equal(result.identity, identity);
+  assert.equal(git(checkout.root, 'log', '-1', '--format=%an <%ae>|%cn <%ce>'),
+    'Repository Owner <123+owner@users.noreply.github.com>|Repository Owner <123+owner@users.noreply.github.com>');
+  assert.deepEqual(readFileSync(configFile), config);
+  assert.ok(decisions[1]!.args.includes('user.name=Repository Owner'));
+  assert.ok(decisions[1]!.args.includes('user.email=123+owner@users.noreply.github.com'));
+  for (const role of ['author', 'committer']) {
+    assert.ok(decisions[1]!.args.includes(`${role}.name=Repository Owner`));
+    assert.ok(decisions[1]!.args.includes(`${role}.email=123+owner@users.noreply.github.com`));
+  }
+  assert.ok(!decisions[0]!.args.some(arg => /^(user|author|committer)\./.test(arg)));
+});
+test('invalid explicit authors fail before repository access, staging or authorization', () => {
+  for (const author of [null, {}, { name: '', email: 'owner@example.com' },
+    { name: 'Owner\nOther', email: 'owner@example.com' }, { name: 'Owner <Other>', email: 'owner@example.com' },
+    { name: 'A'.repeat(121), email: 'owner@example.com' }, { name: 'Owner', email: 'bad' },
+    { name: 'Owner', email: 'owner@example.com\n' },
+    { name: 'Owner', email: 'owner@example.com\nuser.name=Other' }])
+    assert.throws(() => commitTicketChanges('/missing', '', [], 'message', () => { throw Error('must not authorize'); },
+      author as { name: string; email: string }), /valid bounded commit author/);
+});
 
 test('publishing permits only explicitly hash-pinned fixed gh credential helper arguments', t => {
   const f = candidate(t), calls = interceptNetwork(t), ghPath = join(f.base, 'gh-helper');
@@ -254,9 +297,16 @@ test('publishing permits only explicitly hash-pinned fixed gh credential helper 
   assert.throws(() => publishDraftPullRequest(f.prepared, f.bodyFile, f.authorize,
     { gitCredentialHelper: { ghPath, sha256: '0'.repeat(64) } }), /Unverified/);
   assert.equal(calls.length, 0);
+  assert.throws(() => publishDraftPullRequest(f.prepared, f.bodyFile, f.authorize,
+    { gitCredentialHelper: { ghPath: ghPath + ' auth git-credential;evil', sha256 } }), /Unverified/);
+  assert.equal(calls.length, 0);
   publishDraftPullRequest(f.prepared, f.bodyFile, f.authorize, { gitCredentialHelper: { ghPath, sha256 } });
   assert.ok(calls[1]!.args.includes(`credential.https://github.com.helper=${ghPath} auth git-credential`));
   assert.ok(calls[1]!.args.includes('credential.helper='));
+  assert.throws(() => publishDraftPullRequest(f.prepared, f.bodyFile, () => {
+    writeFileSync(ghPath, 'changed after authorization');
+  }, { gitCredentialHelper: { ghPath, sha256 } }), /Unverified/);
+  assert.equal(calls.length, 3, 'changed helper must stop dispatch before discovery or push');
 });
 
 test('hidden index flags, checkout filters and authorizer body-file substitution fail closed', t => {

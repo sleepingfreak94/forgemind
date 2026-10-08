@@ -2,6 +2,7 @@ import { repositoryProcess } from './repository-process.js';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { readPublicNpmConfig } from './npm-config.js';
 
 export interface RepositoryInfo {
   root: string; head: string; defaultBranch: string; remoteName: 'origin';
@@ -70,6 +71,15 @@ function safeSourcePath(path: string): string {
   }
   return path;
 }
+/** Only snapshotting may inspect an exact .npmrc leaf, after checking its parents.
+ * Diff/write ownership still uses safeSourcePath and rejects npm config edits. */
+function snapshotSourcePath(path: string): string {
+  pathName(path);
+  const parts = path.split('/');
+  if (parts.at(-1) !== '.npmrc') return safeSourcePath(path);
+  if (parts.length > 1) safeSourcePath(parts.slice(0, -1).join('/'));
+  return path;
+}
 function names(buffer: Buffer): string[] {
   const decoded = buffer.toString('utf8');
   if (!Buffer.from(decoded, 'utf8').equals(buffer)) throw new Error('Unsafe non-UTF8 Git path');
@@ -79,7 +89,7 @@ function sorted(paths: Iterable<string>): string[] {
   return [...new Set(paths)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
 }
 function regularFile(root: string, path: string): string | undefined {
-  safeSourcePath(path);
+  snapshotSourcePath(path);
   let current = root;
   for (const [index, part] of path.split('/').entries()) {
     current = join(current, part);
@@ -132,13 +142,14 @@ export function sourceIdentity(workspace: string): string {
   }
   const paths = sorted([...names(git(root, 'ls-files', '--cached', '-z')),
     ...names(git(root, 'ls-files', '--others', '--exclude-standard', '-z'))]);
-  paths.forEach(safeSourcePath);
+  paths.forEach(snapshotSourcePath);
   const hash = createHash('sha256');
   const frame = (bytes: Buffer) => { hash.update(`${bytes.length}:`); hash.update(bytes); };
   for (const path of paths) {
     const file = regularFile(root, path);
     if (!file) continue;
-    frame(Buffer.from(path)); frame(Buffer.from(lstatSync(file).mode & 0o111 ? '100755' : '100644')); frame(readFileSync(file));
+    const bytes = path.split('/').at(-1) === '.npmrc' ? readPublicNpmConfig(file) : readFileSync(file);
+    frame(Buffer.from(path)); frame(Buffer.from(lstatSync(file).mode & 0o111 ? '100755' : '100644')); frame(bytes);
   }
   return hash.digest('hex');
 }
@@ -202,9 +213,23 @@ export function captureTicketDiff(workspace: string, baseHead: string, allowedPa
   unchanged(source);
   return { ...source, baseHead, paths, diff };
 }
+export interface CommitAuthor { name: string; email: string }
+/** Host-selected identity, copied before any authorization callback or Git mutation. */
+export function validateCommitAuthor(author: CommitAuthor): Readonly<CommitAuthor> {
+  if (!author || typeof author.name !== 'string' || typeof author.email !== 'string' ||
+      Buffer.byteLength(author.name, 'utf8') > 120 || author.name.trim() !== author.name ||
+      !/^[\p{L}\p{N}][\p{L}\p{M}\p{N} .,'’_-]*$/u.test(author.name) ||
+      author.email.length > 254 || author.email.trim() !== author.email || author.email.split('@')[0]!.length > 64 ||
+      !/^[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(author.email))
+    throw new Error('Explicit valid bounded commit author name and email required');
+  return Object.freeze({ name: author.name, email: author.email });
+}
 /** Stages only ticket-owned exact files and commits the reviewed content; never pushes. */
 export function commitTicketChanges(root: string, expectedSourceIdentity: string, paths: readonly string[], message: string,
-  authorize: BeforeRepositoryAction): SourceBinding {
+  authorize: BeforeRepositoryAction, author?: CommitAuthor): SourceBinding {
+  const identity = author === undefined ? undefined : validateCommitAuthor(author);
+  const authorArgs = identity ? ['user', 'author', 'committer'].flatMap(role =>
+    ['-c', `${role}.name=${identity.name}`, '-c', `${role}.email=${identity.email}`]) : [];
   if (!message.trim() || message.includes('\0')) throw new Error('Invalid commit message');
   const info = discoverRepository(root), source = binding(info.root);
   if (source.identity !== expectedSourceIdentity) throw new Error('Expected source identity mismatch');
@@ -220,7 +245,7 @@ export function commitTicketChanges(root: string, expectedSourceIdentity: string
   const changed = captureTicketDiff(info.root, info.head, paths).paths;
   if (!changed.length) throw new Error('No ticket changes to commit');
   act('git', ['add', '--', ...changed.map(path => `:(literal)${path}`)], source, authorize, check);
-  act('git', ['-c', 'commit.gpgSign=false', 'commit', '-m', message], source, authorize, check);
+  act('git', [...authorArgs, '-c', 'commit.gpgSign=false', 'commit', '-m', message], source, authorize, check);
   const committed = binding(info.root);
   if (committed.identity !== expectedSourceIdentity || dirtyPaths(info.root).length) throw new Error('Committed source does not match reviewed content');
   return committed;

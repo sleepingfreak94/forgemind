@@ -35,6 +35,16 @@ export interface CodingResult {
   summary: string;
   edits: ProposedEdit[];
 }
+export interface TextReplacementEdit {
+  path: string;
+  beforeSha256: string;
+  format: "text-replacements-v1";
+  replacements: { before: string; after: string }[];
+}
+export interface CodingProposal {
+  summary: string;
+  edits: (ProposedEdit | TextReplacementEdit)[];
+}
 export interface ReviewResult {
   verdict: "pass" | "revise" | "blocked";
   findings: string[];
@@ -89,14 +99,29 @@ export const codingSchema = {
     edits: {
       type: "array",
       items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["path", "beforeSha256", "content"],
-        properties: {
-          path: { type: "string" },
-          beforeSha256: { type: ["string", "null"] },
-          content: { type: ["string", "null"] },
-        },
+        anyOf: [{
+          type: "object",
+          additionalProperties: false,
+          required: ["path", "beforeSha256", "content"],
+          properties: {
+            path: { type: "string" },
+            beforeSha256: { type: ["string", "null"] },
+            content: { type: ["string", "null"] },
+          },
+        }, {
+          type: "object",
+          additionalProperties: false,
+          required: ["path", "beforeSha256", "format", "replacements"],
+          properties: {
+            path: { type: "string" },
+            beforeSha256: { type: "string" },
+            format: { type: "string", enum: ["text-replacements-v1"] },
+            replacements: { type: "array", items: {
+              type: "object", additionalProperties: false, required: ["before", "after"],
+              properties: { before: { type: "string" }, after: { type: "string" } },
+            } },
+          },
+        }],
       },
     },
   },
