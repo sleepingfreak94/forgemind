@@ -129,7 +129,7 @@ const task: LiveTask = { schemaVersion: 1, taskId: 'public-route', objective: 'f
 for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
   test('authenticated broker handles public route ' + scenario + ' without fallback or replay', async () => {
     const f = connection(), nativeFetch = globalThis.fetch, actions: string[] = [], receipts: unknown[] = [];
-    let calls = 0;
+    let calls = 0, observedReasoning: unknown;
     const source = 'a'.repeat(64);
     const authority = {
       reserveRequest: () => 1,
@@ -142,6 +142,7 @@ for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
         if (String(url).startsWith('http://127.0.0.1:')) return nativeFetch(url, init);
         assert.equal(url, 'https://api.openai.com/v1/responses'); calls++;
         const payload = JSON.parse(String(init?.body));
+        observedReasoning = payload.reasoning;
         assert.equal(payload.store, false); assert.deepEqual(payload.tools, []);
         if (scenario === 'quota') return new Response('synthetic-secret-provider-body', { status: 429 });
         const event = scenario === 'failed-stream' ? { type: 'response.failed', response: { error: { message: 'synthetic-secret-provider-body' } } } :
@@ -158,6 +159,7 @@ for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
       let responseText = '';
       try { const response = await dispatch(); responseText = await response.text(); } catch {}
       assert.equal(calls, 1);
+      assert.deepEqual(observedReasoning, { effort: task.effort });
       assert.doesNotMatch(responseText, /synthetic-secret-provider-body/);
       if (scenario === 'completed-crlf') { broker.assertSuccess(); assert.equal(actions.at(-1), 'completed'); }
       else { assert.throws(() => broker!.assertSuccess()); assert.equal(actions.at(-1), 'indeterminate'); }

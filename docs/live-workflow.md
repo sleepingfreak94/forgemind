@@ -20,6 +20,8 @@ Before the run confirmation, review **ChatGPT → Settings → Usage → Allow o
 
 The owner broker alone holds OAuth credentials and sends inference to the documented `https://api.openai.com/v1/responses` plan route. The Codex worker can access only that local broker and private scratch, not account tokens or project files. Each phase receives selected source as evidence, returns structured JSON, and uses existing host edit/check/review adapters. Redirects, provider errors, quota failures and incomplete streams stop the task without automatic retry, account/model switching or paid fallback. Native Codex 0.161.0 remains pinned.
 
+The broker sends the selected `reasoning.effort` and omits `reasoning.summary`: summaries are opt-in in the [public Responses API](https://developers.openai.com/api/docs/guides/reasoning#reasoning-summaries). Codex's internal summary setting `none` is not forwarded as a wire value. This request-format guard is covered by synthetic public-route completion, quota and failed-stream tests; fixture success does not establish live provider acceptance. A failed live run remains preserved and is never automatically replayed.
+
 A run without connection options still validates its manifest and publication requirements, then returns blocked with exit 2 and zero provider requests, and creates no worktree. There is no `--yes`, imported API-token argument, environment enable flag or project-profile billing permission. Production session capabilities and test transports cannot be combined. Non-macOS hosts fail closed.
 
 For a task with `draftPr: true`, also supply the complete publication tuple on `project:run`:

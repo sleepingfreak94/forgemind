@@ -91,7 +91,8 @@ export async function startBroker(options: BrokerOptions): Promise<{
         tools: [],
         tool_choice: 'none',
         parallel_tool_calls: false,
-        reasoning: { effort: options.task.effort, summary: 'none' },
+        // Native CLI uses "none" internally; the public API disables summaries by omission.
+        reasoning: { effort: options.task.effort },
         text: body.text,
         include: [],
         service_tier: 'default',
