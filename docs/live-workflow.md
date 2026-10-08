@@ -1,8 +1,26 @@
 # Project-path execution adapters
 
-ForgeMind has a reusable implementation pipeline for registered GitHub repositories. **Live execution is disabled.** The owner requires subscription-only use, and the current ChatGPT login route provides no enforceable guarantee against consuming paid credits. Request, byte and time limits do not establish that guarantee.
+ForgeMind has a reusable implementation pipeline for registered GitHub repositories. Supervised Codex execution on macOS uses a dedicated ChatGPT-plan OAuth connection and a fresh interactive owner review of its server-side credit control. Unattended execution and requests without a reviewed connection remain disabled. Request, byte and time limits are not a hard billing cap.
 
-`project:run` always returns a blocked result before worktree creation or provider access. There is no configuration switch to remove this block. Tests inject synthetic model responses; these are not live coding results.
+The trusted owner must verify that connected apps cannot use credits after included usage is exhausted. ForgeMind cannot inspect that toggle programmatically. Its interactive confirmation is an owner assertion, not a machine billing attestation. If the setting is unavailable or cannot be verified, do not confirm or run. The server control must remain off throughout execution. There is no API-key fallback.
+
+## Connect and run
+
+Use an owner terminal and canonical absolute paths outside project source:
+
+```sh
+npm run project:connect -- --connection /absolute/private/account
+npm run project:auth-status -- --connection /absolute/private/account
+npm run project:run -- --workspace /absolute/project --task /absolute/task.json --connection /absolute/private/account --codex /absolute/codex --state-root /absolute/private/runs --worktree-root /absolute/private/worktrees
+```
+
+Connection prints the supported OpenAI browser sign-in URL. Complete account selection and consent yourself. ForgeMind stores only its own tokens in protected local state outside Git checkouts; existing Codex login files and ambient API keys are not read. Signed identity, granted plan-usage scope and selected registration must validate before tokens are accepted. Expired access requires reconnecting; automatic token renewal is not integrated.
+
+Before the run confirmation, review **ChatGPT → Settings → Usage → Allow other apps to use credits after reaching your usage limit** and ensure it is off for the selected account. Match the displayed signed account email to your browser account, then enter the displayed `credits-disabled <account-fingerprint>` phrase only after that review. The terminal also shows the canonical connection directory, app/client ID and subject; connections without a signed email remain blocked. The owner review is bound to the exact client/account/credential record and lasts at most five minutes. Changed/disconnected credentials, expiry or missing confirmation deny dispatch. Session expiry actively aborts outstanding fetches, including stalled headers or response bodies; local cancellation cannot undo server work already accepted. See [official sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [account usage controls](https://learn.chatgpt.com/docs/sign-in-with-chatgpt) and [plan inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+
+The owner broker alone holds OAuth credentials and sends inference to the documented `https://api.openai.com/v1/responses` plan route. The Codex worker can access only that local broker and private scratch, not account tokens or project files. Each phase receives selected source as evidence, returns structured JSON, and uses existing host edit/check/review adapters. Redirects, provider errors, quota failures and incomplete streams stop the task without automatic retry, account/model switching or paid fallback. Native Codex 0.161.0 remains pinned.
+
+A run without connection options still validates its manifest, returns blocked with exit 2 and zero provider requests, and creates no worktree. There is no `--yes`, imported API-token argument, environment enable flag or project-profile billing permission. Production session capabilities and test transports cannot be combined. Non-macOS hosts fail closed.
 
 ## Inspect a project
 
@@ -21,17 +39,17 @@ ForgeMind's own repository destination is separate: a target project's remote is
 | Capability | Current evidence / limit |
 | --- | --- |
 | Isolated task checkout | Git fixture tests; clean source required; original checkout preserved |
-| Plan generation | Synthetic model response plus selected files and validated memory; production blocked |
+| Plan generation | Selected files and validated memory through the reviewed plan session; synthetic transport tested, real inference pending |
 | Coding | Host validates complete UTF-8 edits against exact paths and preimage hashes; synthetic model tested |
 | Checks | Actual macOS Seatbelt execution; single-process commands, scratch writes only, no network/fork |
 | Review | Separate model invocation receives source-bound diff/checks; revise/blocked stops completion; live independence unverified |
 | Recording | Explicit capture command, pinned recorder/probe, process limits, actual file digest and ffprobe validation; fixture tests |
 | Draft PR | Exact origin/base/head checks, task-only commit, non-force push and draft creation; subprocess/network fixtures only |
-| Live Codex | Live disabled; native 0.161.0 on macOS passes structured responses and plan/edit/check/review through a local fixture transport |
+| Live Codex | Supervised ChatGPT-plan route implemented; real account/inference verification pending; native local-transport conformance is separate evidence |
 
-The orchestration entry point is `src/live-workflow/orchestrator.ts`. Its model dependency injection is for trusted conformance code, never loaded from project configuration or CLI input. The fixture broker also rejects calls without an explicitly injected transport. No paid/API-key fallback is implemented.
+The orchestration entry point is `src/live-workflow/orchestrator.ts`. Its model dependency injection is for trusted conformance code, never loaded from project configuration or CLI input. Production instead requires a branded, authenticated owner-reviewed plan session. Arbitrary objects or fixture dependencies cannot authorize production requests. No paid/API-key fallback is implemented.
 
-The implementation retains failed worktrees and records receipts. Existing run state is never automatically replayed. A trusted host owns action grants; repository leases and preference files do not confer execution authority. The source digest binds file paths, contents and executable bits; HEAD is bound separately. Symlinks, hidden index state, submodules, secret-bearing source paths, mismatched push remotes and checkout filters are rejected.
+The implementation retains failed worktrees and records receipts. Existing run state is never automatically replayed. A trusted host owns action grants; repository leases and preference files do not confer execution authority. The source digest binds file paths, contents and executable bits; HEAD is bound separately. Symlinks, hidden index state, submodules, secret-bearing source paths, mismatched push remotes and checkout filters are rejected. Each provider action's durable policy envelope records the selected connection fingerprint and owner-review expiry without tokens. Exported receipts bind that envelope by digest; `receipt.json` does not export the envelope contents.
 
 ## Task manifest
 
@@ -64,7 +82,7 @@ The following illustrates the accepted format; executable paths must match the l
 npm run project:run -- --workspace /path/to/project --task /path/to/task.json
 ```
 
-This validates the manifest and exits with status 2 and `providerRequests: 0`. It does not claim successful execution. Run `npm run probe:live-native` to repeat native conformance with a fake local transport. The default suite also runs this test on macOS when the Codex executable exists. It verifies executable/protocol/sandbox compatibility, not account billing or real model quality. The sandbox permits the `com.openai.codex` managed-preferences domain, read-only cfprefsd caches and three exact system policy paths; forks, unrelated file data and direct provider egress remain denied. Managed policy is not stubbed or bypassed.
+Without the explicit connection options above, this validates the manifest and exits with status 2 and `providerRequests: 0`. Run `npm run probe:live-native` to repeat native conformance with a fake local transport. The default suite also runs this test on macOS when the Codex executable exists. It verifies executable/protocol/sandbox compatibility, not account billing or real model quality. The sandbox permits the `com.openai.codex` managed-preferences domain, read-only cfprefsd caches and three exact system policy paths; forks, unrelated file data and direct provider egress remain denied. Managed policy is not stubbed or bypassed.
 
 ## Recording and delivery
 
@@ -90,17 +108,17 @@ The review JSON must contain `verdict: "pass"` and `source` matching the candida
 
 Authentication is opt-in: provide both `--gh /absolute/path/to/gh` and `--gh-config-dir /private/gh-config` to use a pinned GitHub CLI helper. Ambient Git helpers, hooks, proxies and tokens are not inherited. The helper may access its explicitly selected authentication store; ForgeMind does not extract credentials. Confirm the selected store authenticates to the intended repository before delivery.
 
-The orchestration API accepts trusted host recording and delivery options. Requested video delivery gates **both local completion and draft PR completion**. Without the required options/reviews it returns `needs-video-sharing`; ambiguous publication returns `needs-video-reconciliation`. A successful delivery adds immutable links to the PR description. The production coding CLI remains blocked.
+The orchestration API accepts trusted host recording and delivery options. Requested video delivery gates **both local completion and draft PR completion**. Without the required options/reviews it returns `needs-video-sharing`; ambiguous publication returns `needs-video-reconciliation`. A successful delivery adds immutable links to the PR description. The supervised coding CLI requires its own authenticated, owner-reviewed account connection; video delivery approval does not authorize inference.
 
 Native and Git delivery tests use local fixtures. Actual GitHub video upload and reviewer playback remain unverified; no application before/after recording was made for this implementation ticket.
 
 ## Remaining gates
 
-- Enforce subscription-only billing before permitting any live request.
-- Certify the real provider contract after subscription-only billing can be enforced; native local-transport startup and orchestration now pass.
+- Verify the selected account's server-side connected-app credit control before any live request; owner confirmation alone is not an automatic billing attestation.
+- Verify real OAuth sign-in, credit-disabled inference and quota-exhaustion behavior; local-transport conformance is not live-provider evidence.
 - Add reviewed multiprocess/build/Docker check profiles; current checks cannot run npm, PHP workers or Compose stacks requiring subprocesses/network/writes.
 - Integrate per-task preference confirmation. Execution fixtures currently require complete project-level preferences; onboarding still supports both preference modes.
 - Verify actual GitHub publication, live independent review and requested recording delivery.
 - Windows and Linux enforcement remain unsupported; no unsandboxed fallback exists.
 
-Run `npm run test:live` for fixture and macOS check evidence, and `npm test` for integration regressions. Native tests skip only when the required host/executable is unavailable. A green fixture suite does not enable production.
+Run `npm run test:live` for fixture and macOS check evidence, and `npm test` for integration regressions. Native tests skip only when the required host/executable is unavailable. A green fixture suite does not authorize a real account request; explicit sign-in and account-control review remain required.

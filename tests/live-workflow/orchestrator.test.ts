@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from 'node:sqlite';
 import { runTask } from "../../src/live-workflow/orchestrator.js";
 import { sha256 } from "../../src/live-workflow/validation.js";
 import {
@@ -20,6 +21,8 @@ import {
 } from "../../src/live-workflow/provider.js";
 import { fixtureResponse } from './native-fixture.js';
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
+import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
+import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-pipeline-"))),
@@ -222,6 +225,73 @@ test('real native fixture drives plan, edit and independent review end to end wi
  assert.equal(result.status,'completed-local');assert.equal(calls,3);assert.equal(readFileSync(join(result.worktree!,'value.txt'),'utf8'),'after');assert.equal(readFileSync(join(f.repo,'value.txt'),'utf8'),'before');
  const receipt=JSON.parse(readFileSync(join(result.artifacts,'receipt.json'),'utf8'));assert.equal(receipt.run.requests,3);assert.equal(receipt.run.status,'completed');
  }finally{f.cleanup();}
+});
+
+test('plan contents precede owner approval and rejection prevents code and checks', { skip: process.platform !== 'darwin' }, async () => {
+  const f = fixture();
+  const profilePath = join(f.repo, 'config/forgemind-project.json');
+  const profile = JSON.parse(readFileSync(profilePath, 'utf8'));
+  profile.preferences.planReview = 'approve';
+  writeFileSync(profilePath, JSON.stringify(profile)); f.git('add', '.'); f.git('commit', '-m', 'require plan approval');
+  const progress: string[] = []; let calls = 0;
+  try {
+    const result = await runTask({ ...f.options, onProgress: message => { progress.push(message); },
+      confirmPlan: async (_plan, digest) => {
+        assert.match(progress.join('\n'), /Value is after/); assert.match(digest, /^[a-f0-9]{64}$/); return false;
+      }, modelFactory: () => ({ complete: async () => {
+        calls++; return { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] };
+      } }) });
+    assert.equal(result.status, 'needs-plan-approval'); assert.equal(calls, 1);
+    assert.equal(existsSync(join(result.artifacts, 'before-checks.json')), false);
+    assert.equal(readFileSync(join(result.worktree!, 'value.txt'), 'utf8'), 'before');
+  } finally { f.cleanup(); }
+});
+
+test('authenticated public-route pipeline uses real sandboxed Codex with synthetic OAuth responses', {
+  skip: process.platform !== 'darwin' || !existsSync(join(homedir(), '.local/bin/codex')), timeout: 90000,
+}, async () => {
+  const f = fixture(), nativeFetch = globalThis.fetch, directory = join(f.root, 'account');
+  const store = new ChatGPTStore(directory, f.repo, true);
+  try {
+    store.lock(); store.save({ schemaVersion: 1, hostId: store.getHostId(), clientId: 'oaiapp_fixture', subject: 'fixture-subject',
+      email: 'owner@example.invalid', accessToken: 'synthetic-access-token', idToken: 'synthetic.signed.identity',
+      scope: 'chatgpt.tokens.use.direct', expiresAt: Date.now() + 3600000 });
+  } finally { store.close(); }
+  f.task.model = 'gpt-6.1-sol'; f.task.maxPromptBytes = 262144; let calls = 0;
+  const outputs = [
+    { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value is after'] },
+  ];
+  try {
+    const session = await openChatGPTPlanSession(directory, { isTTY: true, confirm: async prompt => prompt.match(/Enter exactly "([^"]+)"/)![1]! });
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://api.openai.com/v1/responses');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer synthetic-access-token');
+      assert.equal(JSON.parse(String(init?.body)).store, false);
+      return fixtureResponse(f.task.model, outputs[calls++]);
+    };
+    const result = await runTask({ ...f.options, codexExecutable: realpathSync(join(homedir(), '.local/bin/codex')), planSession: session });
+    assert.equal(result.status, 'completed-local'); assert.equal(calls, 3);
+    assert.equal(readFileSync(join(result.worktree!, 'value.txt'), 'utf8'), 'after');
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+    const text = readFileSync(join(result.artifacts, 'receipt.json'), 'utf8'), receipt = JSON.parse(text);
+    assert.equal(receipt.run.requests, 3); assert.equal(receipt.run.status, 'completed');
+    assert.doesNotMatch(text, /synthetic-access-token/);
+    const ledger = new DatabaseSync(join(f.options.stateDirectory, 'execution/policy/policy.sqlite'), { readOnly: true });
+    try {
+      const providers = ledger.prepare('SELECT body FROM external_attempts').all()
+        .map(row => JSON.parse(row.body as string)).filter(attempt => JSON.parse(attempt.envelopeJson).kind === 'provider');
+      assert.equal(providers.length, 3);
+      for (const attempt of providers) {
+        const envelope = JSON.parse(attempt.envelopeJson);
+        assert.equal(envelope.detail.connection.billingReview, 'owner-confirmed-server-credit-control-off');
+        assert.equal(envelope.detail.connection.accountSha256, session.binding().accountSha256);
+        assert.equal(attempt.intent.resource, 'host:' + sha256(attempt.envelopeJson));
+        assert.doesNotMatch(attempt.envelopeJson, /synthetic-access-token/);
+      }
+    } finally { ledger.close(); }
+  } finally { globalThis.fetch = nativeFetch; f.cleanup(); }
 });
 
 // Synthetic color clips exercise delivery gating; they are not application evidence.

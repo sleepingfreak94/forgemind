@@ -9,6 +9,8 @@ import { sha256 } from './validation.js';
 import { supervised, inferenceProfile, runtimeFiles } from './process.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import type { RunAuthority } from './authority.js';
+import { assertChatGPTPlanSession } from './chatgpt-plan.js';
+import type { ChatGPTPlanSession } from './chatgpt-plan.js';
 
 interface Credentials {
   accessToken: string;
@@ -18,10 +20,11 @@ export interface BrokerOptions {
   task: LiveTask;
   source: () => string;
   authority: Pick<RunAuthority, 'reserve' | 'reserveRequest'>;
-  credentials: () => Credentials;
+  credentials?: () => Credentials;
   signal: AbortSignal;
   /** Tests may supply a synthetic fetch. Production has one fixed TLS upstream, never user URLs. */
   transport?: typeof fetch;
+  planSession?: ChatGPTPlanSession;
 }
 export async function startBroker(options: BrokerOptions): Promise<{
   port: number;
@@ -29,7 +32,10 @@ export async function startBroker(options: BrokerOptions): Promise<{
   close: () => Promise<void>;
   assertSuccess: () => void;
 }> {
-  if (!options.transport)
+  if (options.planSession) {
+    assertChatGPTPlanSession(options.planSession);
+    if (options.transport || options.credentials) throw new Error('Production and fixture dependencies cannot be combined');
+  } else if (!options.transport || !options.credentials)
     throw new Error('Live requests blocked: subscription-only spending cannot be enforced');
   const token = randomBytes(32).toString('hex');
   let used = false,
@@ -98,7 +104,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
         kind: 'provider',
         source,
         detail: {
-          endpoint: 'https://chatgpt.com/backend-api/codex/responses',
+          endpoint: options.planSession ? 'https://api.openai.com/v1/responses' : 'https://chatgpt.com/backend-api/codex/responses',
           model: options.task.model,
           effort: options.task.effort,
           requestNumber,
@@ -106,17 +112,18 @@ export async function startBroker(options: BrokerOptions): Promise<{
           promptBytes: Buffer.byteLength(payload),
           maxResponseBytes: options.task.maxOutputBytes,
           paidApiFallback: false,
+          ...(options.planSession ? { connection: options.planSession.binding() } : {}),
         },
       });
       receipt.check();
       signal.throwIfAborted();
-      const credentials = options.credentials();
-      const upstream = await (options.transport ?? fetch)('https://chatgpt.com/backend-api/codex/responses', {
+      const credentials = options.planSession ? undefined : options.credentials!();
+      const upstream = options.planSession ? await options.planSession.request(payload, signal) : await options.transport!('https://chatgpt.com/backend-api/codex/responses', {
         method: 'POST',
         redirect: 'error',
         headers: {
-          Authorization: `Bearer ${credentials.accessToken}`,
-          'ChatGPT-Account-Id': credentials.accountId,
+          Authorization: `Bearer ${credentials!.accessToken}`,
+          'ChatGPT-Account-Id': credentials!.accountId,
           'Content-Type': 'application/json',
           Accept: 'text/event-stream',
           'OpenAI-Beta': 'responses=experimental',
@@ -137,18 +144,20 @@ export async function startBroker(options: BrokerOptions): Promise<{
       const decoder = new TextDecoder();
       for await (const raw of upstream.body) {
         receipt.check();
+        options.planSession?.assertActive();
         signal.throwIfAborted();
         if (options.source() !== source) throw new Error('Source changed during inference');
         total += raw.length;
         if (total > options.task.maxOutputBytes) throw new Error('Provider response byte limit');
         pending += decoder.decode(raw, { stream: true });
-        let at: number;
-        while ((at = pending.indexOf('\n\n')) >= 0) {
-          const frame = pending.slice(0, at);
-          pending = pending.slice(at + 2);
-          for (const line of frame.split('\n')) {
-            if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
-            const event = JSON.parse(line.slice(6));
+        let boundary: RegExpExecArray | null;
+        while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(pending))) {
+          const frame = pending.slice(0, boundary.index).split(/\r\n|\r|\n/).join('\n');
+          pending = pending.slice(boundary.index + boundary[0].length);
+          const data = frame.split('\n').filter(line => line.startsWith('data:'))
+            .map(line => line.slice(5).replace(/^ /, '')).join('\n');
+          if (data && data !== '[DONE]') {
+            const event = JSON.parse(data);
             if (event.type === 'response.failed' || event.type === 'error')
               throw new Error('Provider stream failed');
             const items = [...(event.item ? [event.item] : []), ...(event.response?.output ?? [])];
@@ -218,6 +227,7 @@ export class NativeCodexModel implements ModelPort {
       source: () => string;
         transport?: typeof fetch;
       credentials?: () => Credentials;
+      planSession?: ChatGPTPlanSession;
     },
   ) {}
   async complete(
@@ -227,7 +237,10 @@ export class NativeCodexModel implements ModelPort {
     signal: AbortSignal,
   ): Promise<unknown> {
     const { task, authority } = this.options;
-    if (!this.options.transport || !this.options.credentials)
+    if (this.options.planSession) {
+      assertChatGPTPlanSession(this.options.planSession);
+      if (this.options.transport || this.options.credentials) throw new Error('Production and fixture dependencies cannot be combined');
+    } else if (!this.options.transport || !this.options.credentials)
       throw new Error(
         'Live inference blocked: subscription-only spending cannot currently be enforced for ChatGPT login',
       );
@@ -248,7 +261,8 @@ export class NativeCodexModel implements ModelPort {
       task,
       source: this.options.source,
       authority,
-      credentials: this.options.credentials,
+      ...(this.options.credentials ? { credentials: this.options.credentials } : {}),
+      ...(this.options.planSession ? { planSession: this.options.planSession } : {}),
       signal,
       ...(this.options.transport ? { transport: this.options.transport } : {}),
     });

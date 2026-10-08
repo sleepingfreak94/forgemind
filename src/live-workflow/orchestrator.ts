@@ -26,6 +26,8 @@ import { prepareVideoDelivery, deliverReviewedVideo } from './video-delivery.js'
 import type { VideoDeliveryOptions, VideoDeliveryResult } from './video-delivery.js';
 import { recordEvidence, validateEvidencePair } from './evidence.js';
 import type { RecordingRequest, ProbeConfiguration, EvidenceManifest } from './evidence.js';
+import { assertChatGPTPlanSession } from './chatgpt-plan.js';
+import type { ChatGPTPlanSession } from './chatgpt-plan.js';
 
 export interface RecordingSetup {
   before: Omit<RecordingRequest, 'phase' | 'sourceIdentity' | 'baselineIdentity'>;
@@ -45,6 +47,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
+  /** Authenticated owner-reviewed subscription route; never supplied by a task manifest. */
+  planSession?: ChatGPTPlanSession;
 }
 async function executeFixtureTask(options: RunOptions, deadline: number): Promise<{
   status: string;
@@ -53,7 +57,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   prUrl?: string;
 }> {
   const task = validateTask(options.task);
-  if (!options.modelFactory)
+  if (!options.modelFactory && !options.planSession)
     throw new Error(
       'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
     );
@@ -148,6 +152,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         task,
         authority,
         source: currentSource,
+        ...(options.planSession ? { planSession: options.planSession } : {}),
       });
     const sources = readSources(
       activeRoot,
@@ -181,12 +186,12 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     save('plan.json', { plan: generated, planDigest, source: current });
     currentSource();
     memory?.assertCurrent(context!);
+    if (profile.preferences.planReview !== 'auto') progress(JSON.stringify(generated, null, 2));
     if (profile.preferences.planReview === 'approve' && !(await options.confirmPlan(generated, planDigest))) {
       authority.phase('plan-pending', current, { planDigest });
       authority.finish('blocked');
       return { status: 'needs-plan-approval', artifacts, worktree: activeRoot };
     }
-    if (profile.preferences.planReview !== 'auto') progress(JSON.stringify(generated, null, 2));
     authority.phase('plan-accepted', current, {
       planDigest,
       mode: profile.preferences.planReview ?? 'show',
@@ -398,10 +403,14 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
 
 export async function runTask(options: RunOptions) {
   const task = validateTask(options.task);
-  if (!options.modelFactory)
+  if (!options.modelFactory && !options.planSession)
     throw new Error(
       'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
     );
+  if (options.planSession) {
+    assertChatGPTPlanSession(options.planSession);
+    if (options.modelFactory) throw new Error('Production and fixture dependencies cannot be combined');
+  }
   const signal = options.signal
     ? AbortSignal.any([options.signal, AbortSignal.timeout(task.maxRuntimeMs)])
     : AbortSignal.timeout(task.maxRuntimeMs);

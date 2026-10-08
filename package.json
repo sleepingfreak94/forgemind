@@ -24,6 +24,8 @@
     "probe:host": "npm run build && node dist/src/local-runtime/host-probe.js",
     "project:inspect": "npm run build && node dist/src/local-runtime/live-cli.js inspect",
     "project:run": "npm run build && node dist/src/local-runtime/live-cli.js run",
+    "project:connect": "npm run build && node dist/src/local-runtime/live-cli.js connect",
+    "project:auth-status": "npm run build && node dist/src/local-runtime/live-cli.js auth-status",
     "test:live": "npm run build && node --test dist/tests/live-workflow/*.test.js",
     "probe:live-native": "npm run build && node --test dist/tests/live-workflow/native.test.js",
     "evidence:prepare": "npm run build && node dist/src/local-runtime/video-cli.js prepare",

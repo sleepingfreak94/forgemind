@@ -2,28 +2,32 @@
 
 ## Project onboarding and visible plans
 
-Use `npm run project:init -- --workspace /absolute/path/to/project --project-id project-a` to choose project-specific plan approval, draft PR and before/after evidence preferences. Add `--new` to scaffold missing draft PRD/SRS/ADR templates. `npm run project:plan` prepares a supplied plan; `npm run project:prepare` also onboards an unfamiliar project. See [workflow instructions](docs/project-workflow.md). Local document memory is available. Native execution and evidence delivery adapters have fixture coverage; live model requests remain blocked until subscription-only billing is enforceable. See [execution and evidence delivery](docs/live-workflow.md).
+Use `npm run project:init -- --workspace /absolute/path/to/project --project-id project-a` to choose project-specific plan approval, draft PR and before/after evidence preferences. Add `--new` to scaffold missing draft PRD/SRS/ADR templates. `npm run project:plan` prepares a supplied plan; `npm run project:prepare` also onboards an unfamiliar project. See [workflow instructions](docs/project-workflow.md). Local document memory is available. Native execution and evidence delivery adapters have fixture coverage; supervised Codex execution requires explicit ChatGPT-plan sign-in and account-control review. See [execution and evidence delivery](docs/live-workflow.md).
 
-## Billing setup and live execution status
+## Supervised coding with your ChatGPT plan
 
-**ForgeMind live coding is disabled in this version.** Disabling additional Codex usage is an account billing control; it does not enable ForgeMind. `project:run` validates a task and exits with status 2, `liveCodingEnabled: false`, `providerRequests: 0` and `worktreeCreated: false`. The orchestrator and native provider also reject production calls without the trusted fixture dependencies. There is no CLI, environment or project-profile switch to enable live requests.
+ForgeMind can connect its coding pipeline to Codex on macOS using a separate **Sign in with ChatGPT** connection. This route uses OAuth authorization for ChatGPT plan usage; it never falls back to a paid API key. Native Codex remains sandboxed with local broker access only. ForgeMind validates and applies edits in an isolated worktree, runs baseline/candidate checks, and obtains review in a fresh invocation.
 
-To keep usage within your subscription:
-
-1. Use **Sign in with ChatGPT** for the intended account and workspace. API-key access has separate usage-based billing and must not be used as an automatic fallback. See the [official OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth).
-2. If your Codex account offers an **additional usage** control, ensure it disables spending credits beyond the included allowance. Disabling automatic credit purchases alone does not establish that existing credits cannot be spent. The exact setting and its scope need verification in your account; ForgeMind does not read or certify this setting.
-3. For a future ForgeMind **Sign in with ChatGPT** connection, open **ChatGPT → Settings → Usage**, disable **Allow other apps to use credits after reaching your usage limit**, and optionally set an app's weekly limit under **App limits**. These controls apply to apps authorized to use your plan; do not assume a Codex-only setting covers a separate app connection. Availability depends on your account. See [connected-app usage controls](https://learn.chatgpt.com/docs/sign-in-with-chatgpt).
-
-Account setup is separate from implementation readiness. ForgeMind has not integrated its own supported ChatGPT plan authorization or verified credit-disabled live requests and usage-limit handling. The documented [ChatGPT plan integration for Codex app-server](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) is a supported integration path to evaluate; it is not wired into this version. Production must remain blocked until the selected route's billing controls are verified and exhausted usage stops further requests without a paid fallback. Request counts, byte limits and timeouts are resource bounds, not a billing guarantee.
-
-Repeat the available local verification from ForgeMind:
+Connect from an owner terminal, using a private absolute directory outside every Git checkout:
 
 ```sh
-npm run project:inspect -- --workspace /absolute/path/to/project
-npm run probe:live-native
+npm run project:connect -- --connection /absolute/private/forgemind-account
+npm run project:auth-status -- --connection /absolute/private/forgemind-account
 ```
 
-Inspection reads project readiness without reading credentials or making provider requests. The native probe runs the real Codex executable on supported macOS hosts with **synthetic responses from a local transport**; it skips if the host or executable is unavailable. It verifies protocol and sandbox compatibility, not live model access or subscription billing. `npm run test:live` also exercises the fixture pipeline and production denial paths. A passing fixture suite does not enable live coding. Docker/Compose check profiles are not integrated, and actual video delivery remains unverified; see the [remaining execution gates](docs/live-workflow.md#remaining-gates).
+Open the printed sign-in link in your browser and complete OpenAI's account selection and consent. This registers ForgeMind separately; it does not extract your existing Codex credentials. Tokens are kept in the protected account directory and are not sent to the worker. Expired credentials require reconnection in this first version. See the [official ChatGPT plan sign-in documentation](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+
+Before running, open **ChatGPT → Settings → Usage** for that connected account and disable **Allow other apps to use credits after reaching your usage limit**. A Codex-only setting may not cover ForgeMind's separate connection. Disabling automatic credit purchases alone does not establish that existing credits cannot be spent. The run command requires a fresh interactive owner confirmation naming the connection; the confirmation expires after five minutes or credential expiry, whichever comes first. ForgeMind trusts that owner review and the server's setting; it cannot inspect the toggle automatically or impose its own hard credit cap. Leave execution blocked if you cannot verify the setting. [Official usage controls](https://learn.chatgpt.com/docs/sign-in-with-chatgpt)
+
+Run with a task manifest from the [execution guide](docs/live-workflow.md#task-manifest), an absolute canonical Codex 0.161.0 executable, and private run/worktree directories outside project source:
+
+```sh
+npm run project:run -- --workspace /absolute/project --task /absolute/task.json --connection /absolute/private/forgemind-account --codex /absolute/codex --state-root /absolute/private/runs --worktree-root /absolute/private/worktrees
+```
+
+The CLI displays the canonical connection directory, signed account email, subject, app/client ID and account fingerprint. Match the email to your browser account, review its server control, then enter the displayed `credits-disabled <account-fingerprint>` phrase. Connections without a signed email remain blocked. It honors the project's plan-review preference. There is no noninteractive approval bypass, model/paid-account fallback, endpoint override or automatic replay. Missing authentication, denied confirmation, quota errors, token expiry and source drift stop execution. Requests without connection options still report blocked, exit 2, and create no execution worktree or provider request. API-key access has separate billing and is not used by this route. [Official authentication documentation](https://learn.chatgpt.com/docs/auth)
+
+Use `npm run project:inspect -- --workspace /absolute/project` for credential-free readiness inspection, and `npm run probe:live-native` for native conformance with synthetic local responses. Neither certifies your account's billing setting or live model quality. Real account sign-in, credit-disabled inference and quota-exhaustion behavior must be verified separately; passing fixture tests does not certify them. Current task checks are single-process, read-only and offline: Docker/Compose build/check profiles are not integrated. Actual video delivery remains unverified. See [execution and evidence limits](docs/live-workflow.md).
 
 ## Windows setup checks
 
@@ -51,7 +55,7 @@ Probe native Codex initialization through the durable policy and Seatbelt host:
 npm run probe:host -- /absolute/path/to/codex
 ```
 
-See [host enforcement](docs/host-enforcement.md) for assembly and limits. The offline protocol fixture and native Codex initialization pass under the real host. Live provider access and writable coding tasks are disabled, including the older `npm run harness -- "task"` launcher.
+See [host enforcement](docs/host-enforcement.md) for assembly and limits. The offline protocol fixture and native Codex initialization pass under the real host. This offline host does not grant live provider access. Supervised coding uses the separate connection path above; the older `npm run harness -- "task"` launcher remains disabled.
 
 ## Ruflo development diagnostic
 
