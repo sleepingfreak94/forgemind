@@ -20,7 +20,19 @@ Before the run confirmation, review **ChatGPT → Settings → Usage → Allow o
 
 The owner broker alone holds OAuth credentials and sends inference to the documented `https://api.openai.com/v1/responses` plan route. The Codex worker can access only that local broker and private scratch, not account tokens or project files. Each phase receives selected source as evidence, returns structured JSON, and uses existing host edit/check/review adapters. Redirects, provider errors, quota failures and incomplete streams stop the task without automatic retry, account/model switching or paid fallback. Native Codex 0.161.0 remains pinned.
 
-A run without connection options still validates its manifest, returns blocked with exit 2 and zero provider requests, and creates no worktree. There is no `--yes`, imported API-token argument, environment enable flag or project-profile billing permission. Production session capabilities and test transports cannot be combined. Non-macOS hosts fail closed.
+A run without connection options still validates its manifest and publication requirements, then returns blocked with exit 2 and zero provider requests, and creates no worktree. There is no `--yes`, imported API-token argument, environment enable flag or project-profile billing permission. Production session capabilities and test transports cannot be combined. Non-macOS hosts fail closed.
+
+For a task with `draftPr: true`, also supply the complete publication tuple on `project:run`:
+
+```sh
+--gh /canonical/path/to/gh --author-name "Repository Owner" --author-email "123+owner@users.noreply.github.com"
+```
+
+These three flags are optional together for local-only tasks. Partial tuples are rejected, and a draft PR task missing the tuple fails before authentication, owner review, worktree creation or model access, including when connection options are absent. All path flags retain the canonical absolute-path grammar; author fields are identity strings. Names must start with a letter or digit, use only letters, marks, digits, spaces and ordinary name punctuation (`. , ' ’ _ -`), have no surrounding whitespace, and fit in 120 UTF-8 bytes. Emails must be ASCII dot-separated atoms of letters, digits, `_`, `+` or `-`, with a DNS-style domain containing a dot; the local part is limited to 64 characters and the address to 254. Controls, identity delimiters and command syntax are rejected.
+
+The trusted host pins the explicitly selected existing `gh` executable's content hash before account review. Use its canonical resolved path, with executable permission, trusted ownership and no group/world write permission. Publication rechecks the pin and uses only the existing fixed `gh auth git-credential` Git helper against GitHub; helper arguments and tokens cannot be supplied. The helper can use the owner's existing GitHub CLI keyring connection. ForgeMind does not extract credentials or run `gh auth setup-git`. Commits receive the explicit identity through per-command `git -c user.name=... -c user.email=...`; no author environment override or local/global Git config write is needed.
+
+Trusted API hosts can supply `RunOptions.publication` with `author: { name, email }` and `gitCredentialHelper: { ghPath, sha256 }`. Orchestration forwards these to the ticket commit and draft PR publisher. Existing fixture/API calls without an author remain compatible; the production CLI enforces explicit publication inputs. This wiring does not authorize model requests or establish live GitHub publication evidence.
 
 ## Inspect a project
 
@@ -82,7 +94,7 @@ The following illustrates the accepted format; executable paths must match the l
 npm run project:run -- --workspace /path/to/project --task /path/to/task.json
 ```
 
-Without the explicit connection options above, this validates the manifest and exits with status 2 and `providerRequests: 0`. Run `npm run probe:live-native` to repeat native conformance with a fake local transport. The default suite also runs this test on macOS when the Codex executable exists. It verifies executable/protocol/sandbox compatibility, not account billing or real model quality. The sandbox permits the `com.openai.codex` managed-preferences domain, read-only cfprefsd caches and three exact system policy paths; forks, unrelated file data and direct provider egress remain denied. Managed policy is not stubbed or bypassed.
+For this draft PR manifest, also supply the publication tuple shown above. Without it, the CLI exits with a publication configuration error before account access. With the tuple but without connection options, the CLI validates the manifest and exits with status 2 and `providerRequests: 0`. Run `npm run probe:live-native` to repeat native conformance with a fake local transport. The default suite also runs this test on macOS when the Codex executable exists. It verifies executable/protocol/sandbox compatibility, not account billing or real model quality. The sandbox permits the `com.openai.codex` managed-preferences domain, read-only cfprefsd caches and three exact system policy paths; forks, unrelated file data and direct provider egress remain denied. Managed policy is not stubbed or bypassed.
 
 ## Recording and delivery
 

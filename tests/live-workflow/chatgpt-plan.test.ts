@@ -94,7 +94,11 @@ test('production session pins official OAuth endpoint, omits ambient credentials
 });
 
 for (const phase of ['headers', 'body'])
-  test('session expiry actively cancels stalled ' + phase, async () => {
+  test('session expiry actively cancels stalled ' + phase, async t => {
+    // Setup time must not consume the expiry window under parallel suite load.
+    // Keep native AbortSignal timers real: they still cancel the stalled fetch.
+    const now = Date.now();
+    t.mock.timers.enable({ apis: ['Date'], now });
     const f = connection('expiring', 200), previous = globalThis.fetch;
     const keepAlive = setTimeout(() => {}, 2000);
     let aborted = false;
@@ -114,6 +118,7 @@ for (const phase of ['headers', 'body'])
         await response.text();
       });
       assert.equal(aborted, true);
+      t.mock.timers.setTime(now + 201);
       assert.throws(() => session.assertActive());
     } finally { clearTimeout(keepAlive); globalThis.fetch = previous; f.cleanup(); }
   });

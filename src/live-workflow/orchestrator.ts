@@ -20,7 +20,7 @@ import {
   prepareDraftPullRequest,
   publishDraftPullRequest,
 } from './repository.js';
-import type { RepositoryAction } from './repository.js';
+import type { RepositoryAction, CommitAuthor, PublishOptions } from './repository.js';
 import { withRepositoryBudget } from './repository-process.js';
 import { prepareVideoDelivery, deliverReviewedVideo } from './video-delivery.js';
 import type { VideoDeliveryOptions, VideoDeliveryResult } from './video-delivery.js';
@@ -44,6 +44,8 @@ export interface RunOptions {
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
   videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
+  /** Trusted host publication inputs; never read from task/project/model data. */
+  publication?: PublishOptions & { author: CommitAuthor };
   signal?: AbortSignal;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
@@ -354,6 +356,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       changes.edits.map((e) => e.path),
       title,
       authorizeGit,
+      options.publication?.author,
     );
     finishGit('completed');
     const head = committed.head;
@@ -369,7 +372,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       title,
       body: finalBody,
     });
-    const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit);
+    const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit, options.publication);
     finishGit('completed');
     authority.phase('published', current, {
       base: checkout.baseHead,

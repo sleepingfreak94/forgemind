@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import childProcess from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
@@ -9,6 +10,7 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  chmodSync,
 } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -139,6 +141,51 @@ test("all native inference entry points block without a fixture transport", asyn
   } finally {
     f.cleanup();
   }
+});
+test('draft publication forwards trusted author and pinned helper without network access', {
+  skip: process.platform !== 'darwin', timeout: 90000,
+}, async t => {
+  const f = fixture(), ghPath = join(f.root, 'gh-helper');
+  writeFileSync(ghPath, 'fixture helper; never executed'); chmodSync(ghPath, 0o755);
+  const helper = { ghPath, sha256: sha256(readFileSync(ghPath)) };
+  const configFile = join(f.repo, '.git/config'), config = readFileSync(configFile);
+  f.task.draftPr = true;
+  const network: { executable: string; args: string[] }[] = [];
+  const commits: string[][] = [];
+  t.mock.method(childProcess, 'execFileSync', (executable: string, args: string[], options: unknown) => {
+    const command = args[0]?.endsWith('/repository-supervisor.js')
+      ? JSON.parse(Buffer.from(args[1]!, 'base64url').toString()) as { executable: string; args: string[] }
+      : { executable, args };
+    if (command.executable === 'git' && command.args.includes('commit')) commits.push(command.args);
+    if (command.executable === 'gh' || command.executable === 'git' && command.args.includes('push')) {
+      network.push(command);
+      return Buffer.from(command.executable === 'git' ? '' : command.args[1] === 'list' ? '[]' : 'https://github.com/fixture/project/pull/23\n');
+    }
+    return execFileSync(executable, args, options as Parameters<typeof execFileSync>[2]);
+  });
+  let calls = 0;
+  const outputs = [
+    { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value is after'] },
+  ];
+  try {
+    const result = await runTask({ ...f.options, publication: { author: { name: 'Publication Owner',
+      email: '123+owner@users.noreply.github.com' }, gitCredentialHelper: helper },
+      modelFactory: () => ({ complete: async () => outputs[calls++] }) });
+    assert.equal(result.status, 'completed'); assert.equal(calls, 3);
+    assert.equal(result.prUrl, 'https://github.com/fixture/project/pull/23');
+    assert.equal(commits.length, 1);
+    assert.ok(commits[0]!.includes('user.name=Publication Owner'));
+    assert.ok(commits[0]!.includes('user.email=123+owner@users.noreply.github.com'));
+    assert.equal(network.length, 3);
+    assert.ok(network[1]!.args.includes(`credential.https://github.com.helper=${ghPath} auth git-credential`));
+    assert.ok(network[1]!.args.includes('credential.helper='));
+    assert.equal(execFileSync('git', ['log', '-1', '--format=%an <%ae>'], { cwd: result.worktree!, encoding: 'utf8' }).trim(),
+      'Publication Owner <123+owner@users.noreply.github.com>');
+    assert.deepEqual(readFileSync(configFile), config);
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+  } finally { f.cleanup(); }
 });
 for (const verdict of ["pass", "revise"] as const)
   test(
