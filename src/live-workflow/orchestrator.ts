@@ -22,6 +22,8 @@ import {
 } from './repository.js';
 import type { RepositoryAction } from './repository.js';
 import { withRepositoryBudget } from './repository-process.js';
+import { prepareVideoDelivery, deliverReviewedVideo } from './video-delivery.js';
+import type { VideoDeliveryOptions, VideoDeliveryResult } from './video-delivery.js';
 import { recordEvidence, validateEvidencePair } from './evidence.js';
 import type { RecordingRequest, ProbeConfiguration, EvidenceManifest } from './evidence.js';
 
@@ -39,11 +41,12 @@ export interface RunOptions {
   confirmPlan: (plan: unknown, digest: string) => Promise<boolean>;
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
+  videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
   signal?: AbortSignal;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
 }
-async function executeFixtureTask(options: RunOptions): Promise<{
+async function executeFixtureTask(options: RunOptions, deadline: number): Promise<{
   status: string;
   artifacts: string;
   worktree?: string;
@@ -300,23 +303,46 @@ async function executeFixtureTask(options: RunOptions): Promise<{
     authority.phase('reviewed', current, { verdict: verdict.verdict });
     if (verdict.verdict !== 'pass')
       throw new Error('Independent review requires revision; candidate preserved');
+    let videoDelivery: VideoDeliveryResult | undefined;
+    if (beforeVideo && afterVideo) {
+      const preparedVideo = prepareVideoDelivery({
+        projectRoot: activeRoot, before: beforeVideo, after: afterVideo,
+        expected: { taskId: task.taskId, scenarioId: beforeVideo.scenarioId,
+          baselineIdentity: baseline, sourceIdentity: current },
+      }, { deadline, signal });
+      save('video-delivery-binding.json', preparedVideo);
+      videoDelivery = await deliverReviewedVideo(preparedVideo, options.videoDelivery ? {
+        ...options.videoDelivery, budget: { deadline, signal },
+        authorize: async action => {
+          currentSource(); signal.throwIfAborted();
+          const receipt = authority.reserve({ kind: 'git', source: current, detail: action });
+          return {
+            receiptId: sha256(JSON.stringify(action)),
+            check: () => { currentSource(); signal.throwIfAborted(); receipt.check(); },
+            finish: outcome => receipt.finish(outcome.status === 'succeeded' ? 'completed' :
+              outcome.status === 'failed' ? 'failed' : 'indeterminate'),
+          };
+        },
+      } : undefined);
+      save('video-delivery.json', videoDelivery); currentSource();
+      if (videoDelivery.status !== 'delivered') {
+        authority.phase('delivery-blocked', current, { result: videoDelivery });
+        authority.finish('blocked');
+        return { status: videoDelivery.status === 'delivery-unknown' ?
+          'needs-video-reconciliation' : 'needs-video-sharing', artifacts, worktree: activeRoot };
+      }
+      authority.phase('videos-delivered', current, videoDelivery);
+    }
     if (!task.draftPr) {
       authority.finish('completed');
       return { status: 'completed-local', artifacts, worktree: activeRoot };
     }
     // Publication is host-only, following the user's explicit task-level draft PR choice.
     const title = `chore(${profile.projectId}): ${task.objective.replace(/[\r\n]/g, ' ').slice(0, 100)}`;
-    const body = `${changes.summary}\n\n**Before:** Baseline ${checkout.baseHead}; source ${baseline}. ${beforeChecks.filter((c) => !c.passed).length} failing baseline check(s).\n\n**After:** Candidate source ${current}. ${changes.edits.map((e) => e.path).join(', ')}.\n\n**Validation:** ${afterChecks.map((c) => c.id + ': ' + (c.passed ? 'pass' : 'fail')).join('; ')}.\n\n**Review:** Independent fresh invocation: ${verdict.verdict}. Reviewed source ${current}. ${verdict.findings.join('; ')}\n\n**Limitations:** Native account inference uses bounded requests/bytes/time, not a hard credit cap. ${options.recording ? 'Recordings validated locally; external video sharing is not configured.' : 'No video requested.'}\n`;
-    save('pr-body.md', body);
+    const body = `${changes.summary}\n\n**Before:** Baseline ${checkout.baseHead}; source ${baseline}. ${beforeChecks.filter((c) => !c.passed).length} failing baseline check(s).\n\n**After:** Candidate source ${current}. ${changes.edits.map((e) => e.path).join(', ')}.\n\n**Validation:** ${afterChecks.map((c) => c.id + ': ' + (c.passed ? 'pass' : 'fail')).join('; ')}.\n\n**Review:** Independent fresh invocation: ${verdict.verdict}. Reviewed source ${current}. ${verdict.findings.join('; ')}\n\n**Limitations:** Native account inference uses bounded requests/bytes/time, not a hard credit cap. ${videoDelivery?.status==='delivered'?'Videos independently reviewed and delivered to the project evidence branch.':'No video requested.'}\n`;
+    const finalBody=body+(videoDelivery?.status==='delivered'?`\n**Videos:** [Before](${videoDelivery.beforeUrl}) · [After](${videoDelivery.afterUrl}) · [Evidence manifest](${videoDelivery.indexUrl}). Immutable evidence commit ${videoDelivery.commit}.\n`:'');
+    save('pr-body.md', finalBody);
     save('pr-title.txt', title);
-    if (options.recording) {
-      authority.phase('delivery-blocked', current, {
-        reason:
-          'Requested videos have local-only delivery; approved external destination required before PR completion',
-      });
-      authority.finish('blocked');
-      return { status: 'needs-video-sharing', artifacts, worktree: activeRoot };
-    }
     const committed = commitTicketChanges(
       activeRoot,
       current,
@@ -336,7 +362,7 @@ async function executeFixtureTask(options: RunOptions): Promise<{
       expectedRemoteUrl: repo.remoteUrl,
       allowedPaths: task.writePaths,
       title,
-      body,
+      body: finalBody,
     });
     const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit);
     finishGit('completed');
@@ -379,7 +405,8 @@ export async function runTask(options: RunOptions) {
   const signal = options.signal
     ? AbortSignal.any([options.signal, AbortSignal.timeout(task.maxRuntimeMs)])
     : AbortSignal.timeout(task.maxRuntimeMs);
-  return withRepositoryBudget({ deadline: Date.now() + task.maxRuntimeMs, signal }, () =>
-    executeFixtureTask({ ...options, task, signal }),
+  const deadline = Date.now() + task.maxRuntimeMs;
+  return withRepositoryBudget({ deadline, signal }, () =>
+    executeFixtureTask({ ...options, task, signal }, deadline),
   );
 }

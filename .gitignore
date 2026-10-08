@@ -15,3 +15,12 @@ dist/
 .codex/
 # Claude Flow runtime data
 # Environment variables
+
+# Local orchestration state and unpublished evidence
+.swarm/
+agentdb.rvf*
+ruvector.db*
+*.log
+.mcp.json
+docs/artifacts/
+.env.*
