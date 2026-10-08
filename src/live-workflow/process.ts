@@ -156,6 +156,8 @@ export function runtimeFiles(executable: string): string[] {
   visit(entry, []);
   return [...files];
 }
+/** Permit Codex managed preferences and the cfprefsd read-only shared-memory caches.
+ * No preference writes, broad managed-directory reads, forks, or direct provider egress. */
 export function inferenceProfile(
   executable: string,
   scratch: string,
@@ -163,5 +165,5 @@ export function inferenceProfile(
   readFiles: string[],
 ): string {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid broker port');
-  return `(version 1)\n(deny default)\n(allow process-exec ${literal(realpathSync(executable))})\n(allow process-info* (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (literal "/dev/null") ${readFiles.map(literal).join(' ')} (subpath ${JSON.stringify(scratch)}))\n(allow file-write* (subpath ${JSON.stringify(scratch)}))\n(allow network-outbound (remote ip "localhost:${port}"))`;
+  return `(version 1)\n(deny default)\n(allow process-exec ${literal(realpathSync(executable))})\n(allow process-info* (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (literal "/dev/null") ${readFiles.map(literal).join(' ')} (subpath ${JSON.stringify(scratch)}))\n(allow file-write* (subpath ${JSON.stringify(scratch)}))\n(allow mach-lookup (global-name "com.apple.cfprefsd.agent") (global-name "com.apple.cfprefsd.daemon"))\n(allow ipc-posix-shm-read* (ipc-posix-name "apple.cfprefs.${process.getuid!()}v1") (ipc-posix-name "apple.cfprefs.daemonv1"))\n(allow user-preference-read (preference-domain "com.openai.codex"))\n(allow file-read-data (literal "/private/etc/codex/requirements.toml") (literal "/private/etc/codex/managed_config.toml") (literal "/private/etc/codex/config.toml"))\n(allow network-outbound (remote ip "localhost:${port}"))`;
 }

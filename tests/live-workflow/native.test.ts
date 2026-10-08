@@ -12,12 +12,12 @@ import { join } from "node:path";
 import { RunAuthority } from "../../src/live-workflow/authority.js";
 import { NativeCodexModel } from "../../src/live-workflow/provider.js";
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
+import { fixtureResponse } from './native-fixture.js';
 const binary = join(homedir(), ".local/bin/codex");
 test(
   "native 0.161.0 worker completes JSON through loopback fixture under no-fork Seatbelt",
   {
     skip:
-      process.env.FORGEMIND_NATIVE_DIAGNOSTIC !== "1" ||
       process.platform !== "darwin" ||
       !existsSync(binary),
     timeout: 65000,
@@ -57,57 +57,7 @@ test(
       authority,
       source: () => source,
       credentials: () => ({ accessToken: "fixture", accountId: "fixture" }),
-      transport: async () => {
-        const item = {
-          id: "msg_fixture",
-          type: "message",
-          role: "assistant",
-          status: "completed",
-          content: [
-            { type: "output_text", text: '{"ok":true}', annotations: [] },
-          ],
-        };
-        const response = {
-          id: "resp_fixture",
-          object: "response",
-          created_at: 1,
-          status: "completed",
-          model: task.model,
-          output: [item],
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-        };
-        const events = [
-          {
-            type: "response.created",
-            response: { ...response, status: "in_progress", output: [] },
-          },
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...item, status: "in_progress", content: [] },
-          },
-          {
-            type: "response.content_part.added",
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            part: { type: "output_text", text: "", annotations: [] },
-          },
-          {
-            type: "response.output_text.delta",
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            delta: '{"ok":true}',
-          },
-          { type: "response.output_item.done", output_index: 0, item },
-          { type: "response.completed", response },
-        ];
-        return new Response(
-          events.map((e) => "data: " + JSON.stringify(e) + "\n\n").join(""),
-          { headers: { "content-type": "text/event-stream" } },
-        );
-      },
+      transport: async () => fixtureResponse(task.model,{ok:true}),
     });
     try {
       assert.deepEqual(

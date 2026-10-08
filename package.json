@@ -25,7 +25,9 @@
     "project:inspect": "npm run build && node dist/src/local-runtime/live-cli.js inspect",
     "project:run": "npm run build && node dist/src/local-runtime/live-cli.js run",
     "test:live": "npm run build && node --test dist/tests/live-workflow/*.test.js",
-    "probe:live-native": "npm run build && FORGEMIND_NATIVE_DIAGNOSTIC=1 node --test dist/tests/live-workflow/native.test.js"
+    "probe:live-native": "npm run build && node --test dist/tests/live-workflow/native.test.js",
+    "evidence:prepare": "npm run build && node dist/src/local-runtime/video-cli.js prepare",
+    "evidence:deliver": "npm run build && node dist/src/local-runtime/video-cli.js deliver"
   },
   "engines": {
     "node": ">=26.7.0"

@@ -152,3 +152,11 @@ for (const reason of [
       await b.close();
     }
   });
+
+test('native advertised tools are removed from input; executable tool history is rejected',async()=>{
+ for(const kind of ['additional_tools','function_call_output']){
+  const f=fixture();let calls=0;
+  const broker=await startBroker({task,source:()=>source,authority:f.authority,credentials:()=>({accessToken:'fixture',accountId:'fixture'}),signal:AbortSignal.timeout(5000),transport:async(_url,init)=>{calls++;const body=JSON.parse(String(init?.body));assert.equal(body.additional_tools,undefined);assert.deepEqual(body.tools,[]);assert.deepEqual(body.input,[{type:'message',role:'user',content:'fixture'}]);return new Response('data: '+JSON.stringify({type:'response.completed',response:{status:'completed',model:task.model}})+'\n\n');}});
+  try{const response=await fetch(`http://127.0.0.1:${broker.port}/v1/responses`,{method:'POST',headers:{authorization:'Bearer '+broker.token},body:JSON.stringify({model:task.model,stream:true,additional_tools:[{type:'function',name:'shell'}],input:[{type:kind,tools:[{type:'function',name:'shell'}]},{type:'message',role:'user',content:'fixture'}]})});await response.text();assert.equal(calls,kind==='additional_tools'?1:0);if(kind==='additional_tools')broker.assertSuccess();else assert.throws(()=>broker.assertSuccess());}finally{await broker.close();}
+ }
+});

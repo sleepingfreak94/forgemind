@@ -27,9 +27,9 @@ export function inspectProject(workspace: string) {
       repositoryAdapter: "fixture-verified",
       generatedPlanAndCoding: "fixture-verified",
       review: "fixture-verified",
-      recording: "fixture-verified; local delivery only",
+      recording: "fixture-verified; reviewed evidence-branch adapter; actual delivery unverified",
       draftPullRequest: "fixture-verified; GitHub publication unverified",
-      nativeProvider: "blocked; native sandbox conformance unresolved",
+      nativeProvider: "macOS 0.161.0 local-transport conformance verified; live billing blocked",
       checks: "macOS single-process checks only",
     },
   };

@@ -10,7 +10,7 @@ import {
   rmSync,
   existsSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { runTask } from "../../src/live-workflow/orchestrator.js";
 import { sha256 } from "../../src/live-workflow/validation.js";
@@ -18,6 +18,7 @@ import {
   NativeCodexModel,
   startBroker,
 } from "../../src/live-workflow/provider.js";
+import { fixtureResponse } from './native-fixture.js';
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
 
 function fixture() {
@@ -212,3 +213,46 @@ for (const verdict of ["pass", "revise"] as const)
       }
     },
   );
+
+test('real native fixture drives plan, edit and independent review end to end without provider access',{
+ skip:process.platform!=='darwin'||!existsSync(join(homedir(),'.local/bin/codex')),timeout:90000},async()=>{
+ const f=fixture();f.task.model='gpt-6.1-sol';f.task.maxPromptBytes=262144;let calls=0;
+ const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),content:'after'}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
+ try{const result=await runTask({...f.options,modelFactory:(authority,source)=>new NativeCodexModel({executable:realpathSync(join(homedir(),'.local/bin/codex')),task:f.task,authority,source,credentials:()=>({accessToken:'fixture',accountId:'fixture'}),transport:async(_url,init)=>{const body=JSON.parse(String(init?.body));assert.deepEqual(body.tools,[]);assert.ok(body.input.every((item:{type?:string})=>item.type==='message'||item.type===undefined));return fixtureResponse(f.task.model,outputs[calls++]);}})});
+ assert.equal(result.status,'completed-local');assert.equal(calls,3);assert.equal(readFileSync(join(result.worktree!,'value.txt'),'utf8'),'after');assert.equal(readFileSync(join(f.repo,'value.txt'),'utf8'),'before');
+ const receipt=JSON.parse(readFileSync(join(result.artifacts,'receipt.json'),'utf8'));assert.equal(receipt.run.requests,3);assert.equal(receipt.run.status,'completed');
+ }finally{f.cleanup();}
+});
+
+// Synthetic color clips exercise delivery gating; they are not application evidence.
+test('requested video cannot complete locally without approved reviewer delivery', {
+  skip: process.platform !== 'darwin' || !existsSync('/opt/homebrew/bin/ffmpeg') || !existsSync('/opt/homebrew/bin/ffprobe'),
+  timeout: 90000,
+}, async () => {
+  const f = fixture(), artifacts = join(f.root, 'videos');
+  mkdirSync(artifacts); let calls = 0;
+  const probe = realpathSync('/opt/homebrew/bin/ffprobe');
+  const recording = (phase: string) => ({
+    explicitlyRequested: true as const, taskId: f.task.taskId, scenarioId: 'delivery-gate-fixture',
+    artifactsDirectory: artifacts, outputPath: join(artifacts, phase + '.mp4'),
+    captureTarget: 'synthetic color fixture; no application behavior',
+    command: { executable: realpathSync('/opt/homebrew/bin/ffmpeg'), argv: ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=10', '-t', '0.5', '-c:v', 'libx264', join(artifacts, phase + '.mp4')] },
+    limits: { maxDurationSeconds: 2, maxRuntimeMs: 5000, maxOutputBytes: 8192, maxArtifactBytes: 1048576, terminateGraceMs: 100 },
+  });
+  const outputs = [
+    { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value checked'] },
+  ];
+  try {
+    const result = await runTask({ ...f.options,
+      recording: { before: recording('before'), after: recording('after'), probe: { kind: 'ffprobe', executable: probe, sha256: sha256(readFileSync(probe)) } },
+      modelFactory: () => ({ complete: async () => outputs[calls++] }),
+    });
+    assert.equal(result.status, 'needs-video-sharing');
+    const receipt = JSON.parse(readFileSync(join(result.artifacts, 'receipt.json'), 'utf8'));
+    assert.equal(receipt.run.status, 'blocked');
+    assert.equal(JSON.parse(readFileSync(join(result.artifacts, 'video-delivery.json'), 'utf8')).status, 'local-only-blocked');
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+  } finally { f.cleanup(); }
+});

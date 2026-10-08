@@ -1,6 +1,6 @@
 # Local project memory
 
-Status: implemented local-owner SQLite service, document ingestion, keyword/exact retrieval, lifecycle and supplied-plan integration. This is the project-memory slice from [the implementation plan](./project-memory-plan.md). Automatic model-generated planning, semantic retrieval, live coding, recording and PR publishing remain separate milestones.
+Status: implemented local-owner SQLite service, document ingestion, keyword/exact retrieval, lifecycle and supplied-plan integration. This is the project-memory slice from [the implementation plan](./project-memory-plan.md). Native plan/edit/review and reviewed evidence-branch adapters now have fixture coverage; see [execution status](live-workflow.md). Semantic retrieval and production live coding remain unavailable.
 
 ## Attach a project
 

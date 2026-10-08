@@ -68,20 +68,18 @@ export async function startBroker(options: BrokerOptions): Promise<{
         });
       else if (encoding && encoding !== 'identity') throw new Error('Unsupported encoding');
       const body = JSON.parse(bytes.toString());
-      if (
-        body.additional_tools?.length ||
-        body.input?.some(
-          (item: Record<string, unknown>) => item.type !== 'message' && item.type !== undefined,
-        )
-      )
-        throw new Error('Additional tools or tool input denied');
       if (body.model !== options.task.model || !Array.isArray(body.input) || body.stream !== true)
         throw new Error('Provider model/shape mismatch');
+      if (body.input.some((item:Record<string,unknown>)=>!item||typeof item!=='object'||(item.type!==undefined&&!['message','additional_tools'].includes(String(item.type)))))
+        throw new Error('Tool input denied');
+      // Native 0.161 advertises tools as input items. Drop those descriptors entirely;
+      // no tool declarations or historical tool calls/results reach the transport.
+      const inputMessages = body.input.filter((item:Record<string,unknown>)=>item.type!=='additional_tools');
       // Model has no native tools. Every repository side effect occurs in trusted owner adapters.
       const outbound = {
         model: options.task.model,
         instructions: body.instructions,
-        input: body.input,
+        input: inputMessages,
         stream: true,
         store: false,
         tools: [],
@@ -258,6 +256,7 @@ export class NativeCodexModel implements ModelPort {
     try {
       const settings: Record<string, unknown> = {
         model_provider: 'forgemind_broker',
+        approval_policy: 'never',
         'model_providers.forgemind_broker': {
           name: 'ForgeMind controlled ChatGPT route',
           base_url: `http://127.0.0.1:${broker.port}/v1`,
@@ -277,7 +276,6 @@ export class NativeCodexModel implements ModelPort {
         'features.shell_snapshot': false,
         'features.multi_agent': false,
         'features.apps': false,
-        'features.skills': false,
         'features.hooks': false,
         'features.enable_request_compression': false,
         'analytics.enabled': false,
@@ -297,6 +295,7 @@ export class NativeCodexModel implements ModelPort {
         'exec',
         '--ignore-user-config',
         '--ignore-rules',
+        '--strict-config',
         '--skip-git-repo-check',
         '--ephemeral',
         '--sandbox',
@@ -357,7 +356,7 @@ export class NativeCodexModel implements ModelPort {
       if (result.code !== 0) {
         authority.phase('model-process-failed', this.options.source(), {
           code: result.code,
-          diagnostic: result.stderr.split(broker.token).join('[broker-token]').slice(-4000),
+          diagnostic: (result.stderr || result.stdout).split(broker.token).join('[broker-token]').slice(-4000),
         });
         broker.assertSuccess();
         throw new Error('Native Codex failed; no automatic retry');

@@ -2,7 +2,7 @@
 
 ## Project onboarding and visible plans
 
-Use `npm run project:init -- --workspace /absolute/path/to/project --project-id project-a` to choose project-specific plan approval, draft PR and before/after evidence preferences. Add `--new` to scaffold missing draft PRD/SRS/ADR templates. `npm run project:plan` prepares a supplied plan; `npm run project:prepare` also onboards an unfamiliar project. See [workflow instructions](docs/project-workflow.md). Full application memory and live task orchestration remain pending.
+Use `npm run project:init -- --workspace /absolute/path/to/project --project-id project-a` to choose project-specific plan approval, draft PR and before/after evidence preferences. Add `--new` to scaffold missing draft PRD/SRS/ADR templates. `npm run project:plan` prepares a supplied plan; `npm run project:prepare` also onboards an unfamiliar project. See [workflow instructions](docs/project-workflow.md). Local document memory is available. Native execution and evidence delivery adapters have fixture coverage; live model requests remain blocked until subscription-only billing is enforceable. See [execution and evidence delivery](docs/live-workflow.md).
 
 ## Windows setup checks
 
@@ -43,5 +43,11 @@ npm run harness -- --check
 This diagnostic uses ambient development CLI configuration and is separate from the enforced application host. Ruflo is not a production dependency or globally registered MCP server. Local development state is ignored under `.askme-harness/`.
 
 Project memory setup: [persist and retrieve project decisions](docs/project-memory.md). After initializing a project, use `npm run memory -- ingest --workspace /absolute/path/to/project`, inspect/validate candidates, then prepare plans with cited memory.
+
+## This repository
+
+ForgeMind’s project profile is registered in `config/forgemind-project.json` for [sleepingfreak94/forgemind](https://github.com/sleepingfreak94/forgemind). PRD and ADR documents already exist; a separate SRS has not been supplied. Project defaults show plans, retain text evidence and prepare draft PRs. Requested recordings require separate capture and review; delivery uses the selected project’s evidence branch.
+
+Run `npm ci`, `npm run doctor`, and `npm test` after cloning. Node 26.7.0 or newer is required. To attach another project, pass its absolute path to `project:init`; do not change ForgeMind’s origin to the target project’s remote.
 
 Historical `docs/artifacts/` links refer to local, unpublished validation evidence; raw runtime artifacts are excluded from this repository.
