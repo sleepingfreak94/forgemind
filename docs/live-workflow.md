@@ -98,6 +98,18 @@ npm run project:run -- --workspace /path/to/project --task /path/to/task.json
 
 For this draft PR manifest, also supply the publication tuple shown above. Without it, the CLI exits with a publication configuration error before account access. With the tuple but without connection options, the CLI validates the manifest and exits with status 2 and `providerRequests: 0`. Run `npm run probe:live-native` to repeat native conformance with a fake local transport. The default suite also runs this test on macOS when the Codex executable exists. It verifies executable/protocol/sandbox compatibility, not account billing or real model quality. The sandbox permits the `com.openai.codex` managed-preferences domain, read-only cfprefsd caches and three exact system policy paths; forks, unrelated file data and direct provider egress remain denied. Managed policy is not stubbed or bypassed.
 
+## Compact coding edits
+
+For small changes to an existing file, the coding prompt prefers a versioned exact text replacement:
+
+```json
+{"path":"styles.css","beforeSha256":"<whole-file SHA-256>","format":"text-replacements-v1","replacements":[{"before":"<unique original text>","after":"<replacement text>"}]}
+```
+
+The host verifies the whole-file digest and strict UTF-8, then resolves every nonempty anchor against the same original file. Missing, ambiguous, overlapping, unchanged or malformed operations are rejected. It permits at most 100 operations per file, 1 MiB of replacement text per proposal and 256 KiB per fragment and resulting file. Untouched bytes, line endings and mode are preserved. All files are validated before the first write; existing path/link checks, authority receipts and immediate pre-write hash/source checks still apply. A file uses either replacement operations or complete `content`, never both. Complete content remains available for compatibility, file creation and deletion. No fuzzy matching, regex, automatic retry or whole-file fallback is performed.
+
+This format reduces output amplification for large files. Synthetic native fixtures establish protocol compatibility, not live provider reliability, latency or completion. A separately confirmed REBOS attempt reached real planning and passing baseline checks, then its coding stream terminated before edits; its sole cause remains unproven and its failed run is preserved. Session, request, byte and runtime limits are unchanged.
+
 ## Recording and delivery
 
 `recordEvidence` accepts an explicit scenario, capture target, baseline/candidate identities, exact capture command, bounded duration/output/runtime, and pinned probe. The host must authorize recording and probe commands. Before and After are manifest labels; the adapter does not add visible overlays. It validates container metadata and file integrity, not visual coverage or readability. A human or browser reviewer must inspect playback and verify the scenario before delivery.

@@ -267,7 +267,7 @@ for (const verdict of ["pass", "revise"] as const)
 test('real native fixture drives plan, edit and independent review end to end without provider access',{
  skip:process.platform!=='darwin'||!existsSync(join(homedir(),'.local/bin/codex')),timeout:90000},async()=>{
  const f=fixture();f.task.model='gpt-6.1-sol';f.task.maxPromptBytes=262144;let calls=0;
- const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),content:'after'}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
+ const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),format:'text-replacements-v1',replacements:[{before:'before',after:'after'}]}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
  try{const result=await runTask({...f.options,modelFactory:(authority,source)=>new NativeCodexModel({executable:realpathSync(join(homedir(),'.local/bin/codex')),task:f.task,authority,source,credentials:()=>({accessToken:'fixture',accountId:'fixture'}),transport:async(_url,init)=>{const body=JSON.parse(String(init?.body));assert.deepEqual(body.tools,[]);assert.ok(body.input.every((item:{type?:string})=>item.type==='message'||item.type===undefined));return fixtureResponse(f.task.model,outputs[calls++]);}})});
  assert.equal(result.status,'completed-local');assert.equal(calls,3);assert.equal(readFileSync(join(result.worktree!,'value.txt'),'utf8'),'after');assert.equal(readFileSync(join(f.repo,'value.txt'),'utf8'),'before');
  const receipt=JSON.parse(readFileSync(join(result.artifacts,'receipt.json'),'utf8'));assert.equal(receipt.run.requests,3);assert.equal(receipt.run.status,'completed');
@@ -307,7 +307,8 @@ test('authenticated public-route pipeline uses real sandboxed Codex with synthet
   f.task.model = 'gpt-6.1-sol'; f.task.maxPromptBytes = 262144; let calls = 0;
   const outputs = [
     { objective: f.task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
-    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), format: 'text-replacements-v1',
+      replacements: [{ before: 'before', after: 'after' }] }] },
     { verdict: 'pass', findings: [], acceptance: ['Value is after'] },
   ];
   try {

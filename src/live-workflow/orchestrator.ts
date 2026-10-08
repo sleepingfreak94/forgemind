@@ -250,7 +250,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const beforeVideo = await capture('before');
     progress('Generating bounded code edits');
     const raw = await model.complete(
-      'Implement the approved plan. Return complete UTF-8 content for each changed authorized file, with the exact supplied beforeSha256 (null for new files). To delete a file use null content. Do not change unrelated paths or weaken tests. Do not execute tools.',
+      'Implement the approved plan. For small changes to existing files prefer {path,beforeSha256,format:"text-replacements-v1",replacements:[{before,after}]}. Use the exact supplied whole-file beforeSha256. Each nonempty before must match exactly once in the original file; operations must not overlap, use regex, or depend on another operation. Keep anchors short but unique. The host preserves untouched bytes. Alternatively return {path,beforeSha256,content} with complete UTF-8 content (null digest for new files; null content deletes a file). Never mix formats within an edit. Do not change unrelated paths or weaken tests. Do not execute tools.',
       { task, plan: generated, sources, memory: context ?? null, beforeChecks },
       codingSchema,
       signal,

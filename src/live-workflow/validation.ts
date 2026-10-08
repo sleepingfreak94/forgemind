@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve, relative } from "node:path";
 import type {
   LiveTask,
   GeneratedPlan,
-  CodingResult,
+  CodingProposal,
   ReviewResult,
 } from "./contracts.js";
 export const sha256 = (value: string | Uint8Array): string =>
@@ -162,14 +162,16 @@ export function plan(raw: unknown, allowed: string[]): GeneratedPlan {
     throw new Error("Plan expands write scope");
   return raw as unknown as GeneratedPlan;
 }
-export function coding(raw: unknown, allowed: string[]): CodingResult {
+export function coding(raw: unknown, allowed: string[]): CodingProposal {
   object(raw, ["summary", "edits"]);
   text(raw.summary);
   if (!Array.isArray(raw.edits) || !raw.edits.length || raw.edits.length > 100)
     throw new Error("Missing edits");
   const seen = new Set();
+  let replacementBytes = 0;
   for (const edit of raw.edits) {
-    object(edit, ["path", "beforeSha256", "content"]);
+    const compact = !!edit && typeof edit === "object" && "format" in edit;
+    object(edit, compact ? ["path", "beforeSha256", "format", "replacements"] : ["path", "beforeSha256", "content"]);
     sourcePath(edit.path);
     if (!allowed.includes(edit.path) || seen.has(edit.path))
       throw new Error("Edit outside grant or duplicated");
@@ -180,7 +182,24 @@ export function coding(raw: unknown, allowed: string[]): CodingResult {
         !/^[a-f0-9]{64}$/.test(edit.beforeSha256))
     )
       throw new Error("Edit source digest missing");
-    if (
+    if (compact) {
+      if (edit.format !== "text-replacements-v1" || edit.beforeSha256 === null ||
+          !Array.isArray(edit.replacements) || !edit.replacements.length || edit.replacements.length > 100)
+        throw new Error("Invalid compact edit");
+      for (const replacement of edit.replacements) {
+        object(replacement, ["before", "after"]);
+        for (const key of ["before", "after"] as const) {
+          const value = replacement[key];
+          if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value) > 262144 ||
+              Buffer.from(value, "utf8").toString("utf8") !== value)
+            throw new Error("Invalid replacement text");
+          replacementBytes += Buffer.byteLength(value);
+        }
+        if (replacement.before === "" || replacement.before === replacement.after)
+          throw new Error("Empty or unchanged replacement");
+      }
+      if (replacementBytes > 1048576) throw new Error("Replacement payload limit");
+    } else if (
       edit.content !== null &&
       (typeof edit.content !== "string" ||
         Buffer.byteLength(edit.content) > 262144 ||
@@ -188,7 +207,7 @@ export function coding(raw: unknown, allowed: string[]): CodingResult {
     )
       throw new Error("Invalid edit content");
   }
-  return raw as unknown as CodingResult;
+  return raw as unknown as CodingProposal;
 }
 export function review(raw: unknown): ReviewResult {
   object(raw, ["verdict", "findings", "acceptance"]);
