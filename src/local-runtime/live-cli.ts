@@ -10,6 +10,7 @@ import { openChatGPTPlanSession, forgetChatGPTBillingReview } from '../live-work
 import { privateDirectory } from '../live-workflow/authority.js';
 import { runTask } from '../live-workflow/orchestrator.js';
 import { validateCommitAuthor } from '../live-workflow/repository.js';
+import { loadBrowserQaConfiguration } from '../live-workflow/browser-qa-command.js';
 import { pinFile } from '../host-enforcement/manifest.js';
 
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
@@ -20,11 +21,13 @@ const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:run --workspace /absolute/project --task /absolute/task.json
     --connection /private/forgemind-account --codex /absolute/codex
     --state-root /private/runs --worktree-root /private/worktrees
+    [--browser-qa-config /private/browser-qa.json]
     [--gh /canonical/gh --author-name "Repository owner" --author-email "owner@users.noreply.github.com"]
 
 Connection prints a browser sign-in link; complete OpenAI authentication and consent yourself.
 Run remembers the owner's credits-off acknowledgement for the same account; billing-reset forgets it.
 Draft PR tasks require all three explicit publication options before account review.
+Browser QA host config requires the connection tuple; both phase reports gate review and publication.
 No credentials are read and no worktree is created when run connection options are absent.
 No --yes, paid API fallback, endpoint override, or automatic task replay exists.
 Checks remain single-process, read-only and offline. Docker/Compose checks are unavailable.
@@ -35,7 +38,7 @@ export function parseLiveArguments(argv: readonly string[]) {
   if (!['inspect', 'run', 'connect', 'auth-status', 'billing-reset'].includes(mode ?? '')) throw new Error('Expected inspect, run, connect, auth-status or billing-reset');
   const accountMode = ['connect', 'auth-status', 'billing-reset'].includes(mode!);
   const allowed = accountMode ? ['--connection'] :
-    ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email'] : [])];
+    ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email', '--browser-qa-config'] : [])];
   const values: Record<string, string> = Object.create(null);
   for (let i = 0; i < raw.length; i += 2) {
     const key = raw[i]!, value = raw[i + 1];
@@ -50,6 +53,8 @@ export function parseLiveArguments(argv: readonly string[]) {
   const live = ['--connection', '--codex', '--state-root', '--worktree-root'];
   if (mode === 'run' && live.some(key => values[key]) && !live.every(key => values[key]))
     throw new Error('Connection, codex, state-root and worktree-root must be supplied together');
+  if (values['--browser-qa-config'] && !live.every(key => values[key]))
+    throw new Error('Browser QA config requires the complete connection tuple');
   const publication = ['--gh', '--author-name', '--author-email'];
   if (mode === 'run' && publication.some(key => values[key]) && !publication.every(key => values[key]))
     throw new Error('Publication gh, author-name and author-email must be supplied together');
@@ -82,6 +87,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   const input = realpathSync(args['--task']!), stat = lstatSync(input);
   if (input !== args['--task'] || !stat.isFile() || stat.nlink !== 1 || stat.size > 65536) throw new Error('Invalid task manifest');
   const manifest = task(JSON.parse(readFileSync(input, 'utf8')));
+  const browserQa = args['--browser-qa-config'] ? loadBrowserQaConfiguration(args['--browser-qa-config']!, root) : undefined;
   if (manifest.draftPr && !args['--gh'])
     throw new Error('Draft PR requires explicit publication --gh, --author-name and --author-email');
   if (!args['--connection']) {
@@ -116,6 +122,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
     output(await runTask({ workspace: root, task: manifest, codexExecutable: args['--codex']!,
       stateDirectory: runDirectory, worktreeDirectory: worktrees, planSession: session, signal: controller.signal,
       ...(publication ? { publication } : {}),
+      ...(browserQa ? { browserQa } : {}),
       confirmPlan: async (_plan, digest) => (await terminal.question(`Approve plan ${digest}? Enter approve ${digest}: `, { signal: controller.signal })) === `approve ${digest}`,
       onProgress: message => process.stderr.write(message + '\n') }));
   } finally { terminal.close(); process.removeListener('SIGINT', abort); }

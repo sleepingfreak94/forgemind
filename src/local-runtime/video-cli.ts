@@ -12,18 +12,19 @@ import { withRepositoryBudget } from '../live-workflow/repository-process.js';
 import { deliverReviewedVideo, prepareVideoDelivery, safeVideoPath } from '../live-workflow/video-delivery.js';
 import type { VideoDeliveryResult } from '../live-workflow/video-delivery.js';
 import type { VideoActionOutcome } from '../live-workflow/video-repository.js';
+import { validateVideoHelperHome } from '../live-workflow/video-repository.js';
 
 const usage = `Reviewed video evidence (no providers or live inference):
   evidence:prepare --workspace /repo --before /before.json --after /after.json
   evidence:deliver --workspace /repo --before /before.json --after /after.json
     --code-review /review.json --state-root /private/state --evidence-parent /private/evidence
-    --author-name NAME --author-email EMAIL [--gh /pinned/gh --gh-config-dir /private/gh]
+    --author-name NAME --author-email EMAIL [--gh /pinned/gh --gh-config-dir /private/gh [--gh-home /canonical/owner-home]]
 Delivery requires an owner TTY and exactly: approve <pairSha256>.
 Existing pair state is never reused. Unknown completion requires manual reconciliation.
 `;
 class VideoCliError extends Error {}
 const commonFlags = ['--workspace', '--before', '--after'];
-const deliveryFlags = ['--code-review', '--state-root', '--evidence-parent', '--author-name', '--author-email', '--gh', '--gh-config-dir'];
+const deliveryFlags = ['--code-review', '--state-root', '--evidence-parent', '--author-name', '--author-email', '--gh', '--gh-config-dir', '--gh-home'];
 export interface VideoCliArguments { mode: 'prepare' | 'deliver' | 'help'; values: Readonly<Record<string, string>> }
 /** Trusted terminal adapter for embedding/tests; no command-line flag can supply one. */
 export interface VideoCliTerminal {
@@ -46,6 +47,7 @@ export function parseVideoCliArguments(argv: readonly string[]): VideoCliArgumen
     if (!values[key]) throw new VideoCliError(`Required ${key}`);
   }
   if (!!values['--gh'] !== !!values['--gh-config-dir']) throw new VideoCliError('Both --gh and --gh-config-dir are required together');
+  if (values['--gh-home'] && !values['--gh']) throw new VideoCliError('--gh-home requires the explicit --gh helper');
   for (const [key, value] of Object.entries(values)) if (!['--author-name', '--author-email'].includes(key) &&
       (!isAbsolute(value) || resolve(value) !== value)) throw new VideoCliError('Canonical absolute paths required');
   if (mode === 'deliver' && (!values['--author-name']!.trim() || values['--author-name']!.length > 120 ||
@@ -133,11 +135,16 @@ export async function runVideoCli(argv: readonly string[], terminal: VideoCliTer
       safeVideoPath(v['--gh']!); privateDir(v['--gh-config-dir']!);
       const pinned = pinFile(v['--gh']!);
       if (!(lstatSync(pinned.path).mode & 0o111) || !/^\/[A-Za-z0-9_./-]+$/.test(pinned.path)) throw new VideoCliError('Explicit executable gh helper required');
-      return { pinned, options: { ghPath: pinned.path, sha256: pinned.digest, configDirectory: v['--gh-config-dir']! } };
+      const homeDirectory = v['--gh-home'] ? validateVideoHelperHome(v['--gh-home']!, repo.root) : undefined;
+      return { pinned, options: { ghPath: pinned.path, sha256: pinned.digest, configDirectory: v['--gh-config-dir']!,
+        ...(homeDirectory ? { homeDirectory } : {}) } };
     })() : undefined;
     const validateInputs = () => {
       for (const file of [beforeFile, afterFile, reviewFile]) verifyInput(file);
-      privateDir(evidenceParent, false); if (helper) { verifyFile(helper.pinned); privateDir(helper.options.configDirectory); }
+      privateDir(evidenceParent, false); if (helper) {
+        verifyFile(helper.pinned); privateDir(helper.options.configDirectory);
+        if (helper.options.homeDirectory) validateVideoHelperHome(helper.options.homeDirectory, repo.root);
+      }
     };
     output({ ...preview, codeReview: { path: reviewFile.path, sha256: reviewFile.sha256 }, stateDirectory: state });
     const attestation = `I attest that this code received independent review for the exact candidate source; I watched the actual Before and After videos, verified the matching scenario and readable playback, and approved their privacy for everyone with access to this repository. I authorize the listed evidence files to be published to ${prepared.destination} on ${prepared.branch}.`;
