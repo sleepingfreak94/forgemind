@@ -14,6 +14,12 @@ npm run demo:codex
 
 These commands check setup, types and portable fixtures, then run an offline protocol demo. They do not use a model provider. Windows commands and remaining verification gaps are described in [Windows setup](windows.md).
 
+## Continuous integration
+
+The [portable workflow](../.github/workflows/portable.yml) runs on pull requests, pushes to main and manual dispatch. It installs locked dependencies without lifecycle scripts, then runs `npm run verify:portable` on Linux and Windows with Node.js 26.7.0. Actions are pinned to immutable commits; repository access is read-only and checkout credentials are not persisted.
+
+This checks setup, types, compilation and portable fixtures. It does not certify macOS host enforcement, native agent accounts, model inference, billing controls or unattended workflows. Hosted results must be inspected before claiming platform verification.
+
 ## Reporting problems
 
 Open an [issue](https://github.com/sleepingfreak94/forgemind/issues) with your OS, Node version, repository commit, reproducible steps, expected result and actual result. State whether observations came from a fixture or a real supervised run. Redact account details, credentials, tokens and private project content from logs and screenshots.
