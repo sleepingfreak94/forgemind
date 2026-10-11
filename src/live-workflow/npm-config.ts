@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 
-/** Snapshot-only exception for the two public security settings used by REBOS.
+/** Snapshot-only exception for the two supported public npm security settings.
  * Never evaluate npm syntax, interpolate variables, or include unknown values. */
 export function readPublicNpmConfig(path: string): Buffer {
   let fd: number | undefined;

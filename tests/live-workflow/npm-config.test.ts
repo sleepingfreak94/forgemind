@@ -23,7 +23,7 @@ function fixture(t: TestContext) {
   return { base, root, git, config: join(root, 'backend/.npmrc') };
 }
 
-test('REBOS boolean npm config is included in source identity and isolated checkout, without enabling config edits', t => {
+test('Supported boolean npm config is included in source identity and isolated checkout, without enabling config edits', t => {
   const f = fixture(t), identity = sourceIdentity(f.root), info = discoverRepository(f.root);
   const actions: string[] = [];
   const checkout = createTaskWorktree(info, 'npm-config', f.base, action => { actions.push(action.args.join(' ')); });
