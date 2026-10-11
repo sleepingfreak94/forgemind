@@ -1,7 +1,7 @@
 # ForgeMind Agent Architecture
 
 Status: Draft for architecture review  
-Last updated: 2026-10-07
+Last updated: 2026-10-11
 
 ## Purpose
 
@@ -232,7 +232,7 @@ Every driver must declare and test support for structured input/output, progress
 
 ## Model routing profiles
 
-Project workflow choices are separate from model routing. [Onboarding/preflight](./project-workflow.md) registers PRD/SRS/ADRs and asks about plan behavior, draft PR and evidence format. The lead prepares a concrete plan, displays/approves it according to owner choices, satisfies requested review/video prerequisites, and obtains runtime action capabilities before implementation. An accepted ADR, preference file or plan review cannot grant tool access. The offline preflight is implemented; full runtime orchestration and project memory are still pending.
+Project workflow choices are separate from model routing. [Onboarding/preflight](./project-workflow.md) registers PRD/SRS/ADRs and asks about plan behavior, draft PR and evidence format. The lead prepares a concrete plan, displays/approves it according to owner choices, satisfies requested review/video prerequisites, and obtains runtime action capabilities before implementation. An accepted ADR, preference file or plan review cannot grant tool access. Offline preflight and [local project memory](project-memory.md) are implemented. The [supervised coding pipeline](live-workflow.md) also implements isolated edits, checks, fresh review, configured browser-QA handoff and authorized draft publication. Broader orchestration, cross-agent checkpoint continuation and unattended end-to-end execution remain pending.
 
 Office Cursor and personal Codex have separate profiles in [model-routing.md](./model-routing.md). Native office Cursor agent files configure role-specific Grok 4.6/4.7 targets; personal Codex model assignments remain a reference proposal. Driver selection does not itself select a model or establish account/budget access. Effective model/effort/speed, fallback, permissions, and billing must be validated independently.
 
@@ -242,12 +242,12 @@ Decision recorded on 2026-10-07: the maintainer selected Codex as the first real
 
 1. Use a deterministic fake driver to validate the canonical contracts and persistence flow.
    The [local policy slice](./local-policy.md) now provides a deterministic fake action executor for authorization tests; full driver session/events/resume conformance is still pending.
-2. Implement and validate the Codex driver first. The [initial read-only App Server protocol slice](./codex-driver.md) targets CLI 0.160.0. The [real offline host](./host-enforcement.md) now provides durable command authorization, native restrictions and supervision. Deterministic protocol execution and native initialize-only startup pass inside Seatbelt; provider/spend/write enforcement and live model-turn conformance remain pending. Protected coding execution is not enabled.
+2. Implement and validate the Codex driver first. The [initial read-only App Server protocol slice](./codex-driver.md) targets CLI 0.160.0. The [real offline host](./host-enforcement.md) now provides durable command authorization, native restrictions and supervision. Deterministic protocol execution and native initialize-only startup pass inside Seatbelt. A separate [supervised Codex route](live-workflow.md) targets CLI 0.161.0, keeps credentials in an owner broker, validates edits in an isolated worktree and requires explicit account-control review. A real project pilot exercised planning and coding, then host browser verification, independent review and draft publication. The native revise result is retained; complete unattended live-provider execution and billing/quota behavior remain unverified.
 3. Evaluate Cursor against the same conformance suite and a cross-agent checkpoint handoff.
 
 ### Recommended integration surfaces
 
-These transport recommendations follow documentation and local CLI inspection; runtime conformance remains untested.
+These transport recommendations originate from documentation and local CLI inspection. Subsequent Codex protocol/offline-host conformance and the scoped supervised pilot are documented in [execution status](live-workflow.md); native Cursor and cross-agent continuation remain unverified.
 
 - **Codex:** prefer local App Server over stdio for bidirectional lifecycle events and approval handling. Official documentation describes thread start/resume, turn events, and interruption. The installed CLI labels App Server experimental, and current documentation states it is not supported for production workloads. Pin the adapter's supported CLI/schema version and validate compatibility before production use. See [Codex App Server](https://learn.chatgpt.com/docs/app-server).
 - **Cursor:** evaluate ACP over stdio first. Official documentation describes session creation/loading, progress updates, cancellation, and permission requests. The installed CLI recognizes the hidden `acp` command. See [Cursor ACP](https://cursor.com/docs/cli/acp).
@@ -262,7 +262,7 @@ Read-only checks on 2026-10-07:
 | Codex CLI | `0.160.0` | `--version`, `app-server --help` |
 | Cursor CLI (`cursor-agent`) | `2026.07.09-a3815c0` | `--version`, `--help`, `acp --help` |
 
-Executable presence and help output establish command availability only. Authentication, protocol handshakes, model access, permission enforcement, cancellation, and restart/resume behavior have not been tested. No provider task was launched during this inspection.
+Executable presence and help output establish command availability only. Authentication, protocol handshakes, model access, permission enforcement, cancellation, and restart/resume behavior have not been tested. No provider task was launched during this inspection. Subsequent supervised project-pilot and scripted acceptance evidence is described separately in [the execution guide](live-workflow.md#project-acceptance); the historical inspection table does not certify current native Cursor support.
 
 ### Required compatibility evidence
 

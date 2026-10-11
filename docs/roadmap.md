@@ -1,7 +1,9 @@
 # ForgeMind Roadmap
 
 Status: Proposed  
-Last updated: 2026-08-23
+Last updated: 2026-10-11
+
+This is the target roadmap, including capabilities and benchmark goals that are not yet achieved. The current local technical preview implements policy/host enforcement, onboarding, cited project memory and supervised Codex workflow slices. See [current implementation status](handoff.md#current-state) and [scoped execution evidence](live-workflow.md#project-acceptance); fixture and supervised-pilot success do not establish the Phase 1 exit criteria below.
 
 ## Roadmap principles
 

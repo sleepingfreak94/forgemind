@@ -1,5 +1,37 @@
 # ForgeMind
 
+ForgeMind is a local-first harness for supervised AI coding. It brings project memory, explicit permissions, isolated edits, checks, and review evidence into one workflow around a coding agent.
+
+**Status: early technical preview.** Start with local onboarding, memory, and offline demos. Supervised Codex execution is available on macOS with explicit account setup; it still has verification gaps described below. Native Cursor execution and Windows/Linux enforcement are unavailable.
+
+ForgeMind is for developers who want to inspect what an agent was allowed to do, which source it changed, and what evidence supports the result. Its current implementation includes:
+
+- Project-scoped memory with reviewed records, source citations, and stale-source rejection.
+- Isolated task worktrees, explicit action grants, and durable receipts.
+- Validated edits, baseline/candidate checks, and a fresh review invocation.
+- Browser-QA evidence handoff and reviewed before/after video delivery through trusted host adapters.
+- Task-scoped draft PR preparation and publication under explicit host authorization.
+
+Ruflo is an optional development coordination sidecar; ForgeMind's application runtime is separate.
+
+## Try the offline demo
+
+Requires **Node.js 26.7.0 or newer** and Git. Clone the repository, then run:
+
+```bash
+git clone https://github.com/sleepingfreak94/forgemind.git
+cd forgemind
+npm ci
+npm run verify:portable
+npm run demo:codex
+```
+
+The demo uses a deterministic local protocol fixture and makes no provider requests. Portable checks validate setup and fixtures; they do not certify native execution. See [Windows setup](docs/windows.md) for PowerShell commands and verification limits.
+
+To connect your own project, follow [project onboarding](docs/project-workflow.md) and [project memory](docs/project-memory.md). For supervised execution, read the account setup and host requirements below first.
+
+[Contributing](docs/contributing.md) · [Architecture](docs/architecture.md) · [MIT license](LICENSE)
+
 ## Project onboarding and visible plans
 
 Use `npm run project:init -- --workspace /absolute/path/to/project --project-id project-a` to choose project-specific plan approval, draft PR and before/after evidence preferences. Add `--new` to scaffold missing draft PRD/SRS/ADR templates. `npm run project:plan` prepares a supplied plan; `npm run project:prepare` also onboards an unfamiliar project. See [workflow instructions](docs/project-workflow.md). Local document memory is available. Native execution and evidence delivery adapters have fixture coverage; supervised Codex execution requires explicit ChatGPT-plan sign-in and account-control review. See [execution and evidence delivery](docs/live-workflow.md).
@@ -31,7 +63,7 @@ For UI tasks, a trusted host can configure automatic browser QA with `RunOptions
 
 Use `npm run project:inspect -- --workspace /absolute/project` for credential-free readiness inspection, and `npm run probe:live-native` for native conformance with synthetic local responses. Neither certifies your account's billing setting or live model quality. Real account sign-in, credit-disabled inference and quota-exhaustion behavior must be verified separately; passing fixture tests does not certify them. Current task checks are single-process, read-only and offline: Docker/Compose build/check profiles are not integrated. See [execution and evidence limits](docs/live-workflow.md).
 
-REBOS acceptance verified the automatic QA handoff with supervised Chrome observations (32 candidate checks), validated cited stack-memory retrieval and stale-source rejection, and actual reviewed video delivery through the native GitHub helper. Watch [Before](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/before.mp4) / [After](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/after.mp4). The rendered frontend used explicitly synthetic read-only data, and the orchestration replay used scripted model responses with zero provider requests. See [the acceptance scope and remaining limits](docs/live-workflow.md#rebos-acceptance).
+A supervised coding pilot on a project applied a small UI fix, passed 28 baseline and 28 candidate checks, and reached a draft PR after browser verification and independent host review. A later acceptance replay verified the automatic QA handoff with supervised Chrome observations (32 candidate checks), validated cited stack-memory retrieval and stale-source rejection, and actual reviewed video delivery through the native GitHub helper. The rendered frontend used explicitly synthetic read-only data, and the orchestration replay used scripted model responses with zero provider requests. See [the acceptance scope and remaining limits](docs/live-workflow.md#project-acceptance).
 
 If you later enable connected-app credits or want ForgeMind to ask again, clear the saved acknowledgement:
 

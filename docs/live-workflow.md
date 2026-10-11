@@ -61,14 +61,14 @@ ForgeMind's own repository destination is separate: a target project's remote is
 | Capability | Current evidence / limit |
 | --- | --- |
 | Isolated task checkout | Git fixture tests; clean source required; original checkout preserved |
-| Plan generation | Selected files and validated memory through the reviewed plan session; synthetic transport tested, real inference pending |
-| Coding | Host validates complete UTF-8 edits against exact paths and preimage hashes; synthetic model tested |
+| Plan generation | Selected files and validated memory through the reviewed plan session; synthetic transport tested; real planning observed in a supervised project pilot |
+| Coding | Host validates complete UTF-8 edits against exact paths and preimage hashes; synthetic model tested; a small real UI edit observed in the project pilot |
 | Checks | Actual macOS Seatbelt execution; single-process commands, scratch writes only, no network/fork |
-| Browser QA handoff | Optional trusted host callback runs automatically after baseline/candidate checks; strict reports and receipts gate review/publication; REBOS supervised Chrome replay verified, unattended capture unavailable |
+| Browser QA handoff | Optional trusted host callback runs automatically after baseline/candidate checks; strict reports and receipts gate review/publication; supervised Chrome replay on a project verified, unattended capture unavailable |
 | Review | Separate model invocation receives source-bound diff/checks and configured browser QA reports; revise/blocked stops completion; live independence unverified |
-| Recording | Explicit pinned capture/probe with limits and digests; actual REBOS Before/After clips playback/privacy reviewed and delivered to an immutable GitHub evidence commit |
-| Draft PR | Exact origin/base/head checks, task-only commit, non-force push and draft creation; subprocess/network fixtures only |
-| Live Codex | Supervised ChatGPT-plan route implemented; real account/inference verification pending; native local-transport conformance is separate evidence |
+| Recording | Explicit pinned capture/probe with limits and digests; actual Before/After clips from a project playback/privacy reviewed and delivered to an immutable GitHub evidence commit |
+| Draft PR | Exact origin/base/head checks, task-only commit, non-force push and draft creation; actual publication exercised after independent host review |
+| Live Codex | Supervised ChatGPT-plan route implemented; real planning/coding/review observed in a supervised pilot; full workflow and billing/quota verification remain incomplete |
 
 The orchestration entry point is `src/live-workflow/orchestrator.ts`. Its model dependency injection is for trusted conformance code, never loaded from project configuration or CLI input. Production instead requires a branded, authenticated owner-reviewed plan session. Arbitrary objects or fixture dependencies cannot authorize production requests. No paid/API-key fallback is implemented.
 
@@ -117,7 +117,7 @@ For small changes to an existing file, the coding prompt prefers a versioned exa
 
 The host verifies the whole-file digest and strict UTF-8, then resolves every nonempty anchor against the same original file. Missing, ambiguous, overlapping, unchanged or malformed operations are rejected. It permits at most 100 operations per file, 1 MiB of replacement text per proposal and 256 KiB per fragment and resulting file. Untouched bytes, line endings and mode are preserved. All files are validated before the first write; existing path/link checks, authority receipts and immediate pre-write hash/source checks still apply. A file uses either replacement operations or complete `content`, never both. Complete content remains available for compatibility, file creation and deletion. No fuzzy matching, regex, automatic retry or whole-file fallback is performed.
 
-This format reduces output amplification for large files. Synthetic native fixtures establish protocol compatibility, not live provider reliability, latency or completion. A separately confirmed REBOS attempt reached real planning and passing baseline checks, then its coding stream terminated before edits; its sole cause remains unproven and its failed run is preserved. Session, request, byte and runtime limits are unchanged.
+This format reduces output amplification for large files. Synthetic native fixtures establish protocol compatibility, not live provider reliability, latency or completion. An earlier supervised attempt on a project reached real planning and passing baseline checks, then its coding stream terminated before edits; its sole cause remains unproven and its failed run is preserved. A later explicitly authorized pilot completed real planning and coding, applied a small UI fix, and passed 28 baseline and 28 candidate checks. Its native review requested browser evidence; subsequent browser verification and an independent exact-source host review passed, followed by a task-scoped draft PR. The native revise receipt remains preserved; this does not establish an unattended end-to-end live-provider workflow. Session, request, byte and runtime limits are unchanged.
 
 ## Automatic browser QA handoff
 
@@ -190,13 +190,13 @@ If the native helper's existing Keychain authentication needs the owner's HOME, 
 
 The orchestration API accepts trusted host recording and delivery options. Requested video delivery gates **both local completion and draft PR completion**. Without the required options/reviews it returns `needs-video-sharing`; ambiguous publication returns `needs-video-reconciliation`. A successful delivery adds immutable links to the PR description. The supervised coding CLI requires its own authenticated, owner-reviewed account connection; video delivery approval does not authorize inference.
 
-## REBOS acceptance
+## Project acceptance
 
-The supervised acceptance replay verified the automatic browser-QA callback using fresh actual Chrome observations of REBOS frontend assets. It reproduced eight baseline centering failures and passed the same 32 candidate checks across zero-builder and populated-data/search-no-match scenarios at 1440, 720, 375 and 320 CSS pixels. Both reports and their hashes reached the review seam with source-bound command/artifact receipts. The replay used three scripted model responses and zero provider requests; its review seam is not evidence of independent live-model review. A separate reviewer assessed the implementation and acceptance artifacts.
+The supervised acceptance replay verified the automatic browser-QA callback using fresh actual Chrome observations of a project's frontend assets. It reproduced eight baseline centering failures and passed the same 32 candidate checks across zero-builder and populated-data/search-no-match scenarios at 1440, 720, 375 and 320 CSS pixels. Both reports and their hashes reached the review seam with source-bound command/artifact receipts. The replay used three scripted model responses and zero provider requests; its review seam is not evidence of independent live-model review. A separate reviewer assessed the implementation and acceptance artifacts.
 
 The frontend served explicitly synthetic data through a loopback GET-only fixture; this verifies rendered layout and handoff, not backend operations or production data. Actual macOS screen recordings show the same zero-builder scenario at 720 CSS pixels, with readable Before/After/source labels. Both approximately ten-second, silent clips passed Chrome playback, full decode and independent visual/privacy review. They show steady layout, not interactions or every tested width.
 
-The native GitHub helper delivered only the reviewed clips and sanitized index to a separate orphan evidence branch in the REBOS repository. Immutable evidence: [Before](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/before.mp4), [After](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/after.mp4), [source-bound index](https://github.com/sleepingfreak94/rebos/blob/0800ef42f6b7adfb85a5489df5f7258b1bf27cf1/evidence.json). The first attempt stopped at authentication before any push; a reconciled new attempt with the explicit owner HOME succeeded. Failed receipts remain preserved.
+The native GitHub helper delivered only the reviewed clips and sanitized index to a separate orphan evidence branch in the project repository. The immutable evidence commit, recording hashes and delivery receipts were verified during acceptance; project-identifying links are omitted from this public guide. The first attempt stopped at authentication before any push; a reconciled new attempt with the explicit owner HOME succeeded. Failed receipts remain preserved.
 
 Memory acceptance separately verified one explicitly validated, cited Laravel/PostgreSQL stack decision, exclusion before validation, stale-source rejection and supplied-plan preparation against the current workspace. Retrieval remains local keyword/exact search; other imported candidates remain unvalidated. See [project memory](project-memory.md).
 
@@ -208,7 +208,7 @@ Validation included 77 focused browser-QA checks, 112 portable regressions and 1
 - Verify real OAuth sign-in, credit-disabled inference and quota-exhaustion behavior; local-transport conformance is not live-provider evidence.
 - Add reviewed multiprocess/build/Docker check profiles; current checks cannot run npm, PHP workers or Compose stacks requiring subprocesses/network/writes.
 - Integrate per-task preference confirmation. Execution fixtures currently require complete project-level preferences; onboarding still supports both preference modes.
-- Verify a complete live-provider coding task, live independent model review and unattended browser/recording automation; supervised REBOS evidence delivery is verified above.
+- Verify a complete live-provider coding task, live independent model review and unattended browser/recording automation; supervised project evidence delivery is verified above.
 - Windows and Linux enforcement remain unsupported; no unsandboxed fallback exists.
 
 Run `npm run test:live` for fixture and macOS check evidence, and `npm test` for integration regressions. Native tests skip only when the required host/executable is unavailable. A green fixture suite does not authorize a real account request; explicit sign-in and account-control review remain required.

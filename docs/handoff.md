@@ -1,17 +1,18 @@
 # ForgeMind Architecture Handoff
 
-Status: Foundational design package  
-Last updated: 2026-10-07
+Status: Architecture vision with an implemented local technical preview
+
+Last updated: 2026-10-11
 
 ## Current vision
 
-ForgeMind is an open-source, repository-independent AI Engineering Intelligence Platform. It is the shared control and intelligence plane between engineers, coding agents, repositories, organizational knowledge, skills, and validated memory.
+ForgeMind targets a repository-independent AI Engineering Intelligence Platform. The vision below includes planned capabilities; the current technical preview is described in the next section. It is the shared control and intelligence plane between engineers, coding agents, repositories, organizational knowledge, skills, and validated memory.
 
 ForgeMind does not replace Codex, Claude Code, Cursor, or future coding agents. It gives them portable task packets, relevant evidence, scoped capabilities, durable checkpoints, reusable skills, and conservative learning. A team should be able to change agents without losing its accumulated engineering knowledge.
 
 ## Current state
 
-This repository contains the architecture package plus TypeScript local identity/policy, context optimization, Codex and Cursor protocol adapters, and real offline host slices. The macOS host enforces durable launch authorization and native sandbox/lifecycle restrictions. Both deterministic driver fixtures and native Codex initialize-only startup pass inside this host; native Cursor execution, provider/spend/write enforcement and the broader application remain pending.
+This repository contains the architecture package and an implemented local preview: TypeScript identity/policy, bounded context, Codex/Cursor protocol adapters, enforced macOS offline execution, onboarding, local cited project memory, and a separately authenticated supervised Codex pipeline. The supervised route validates edits in isolated worktrees, runs baseline/candidate checks, invokes fresh review, and supports trusted browser-QA handoff, reviewed video delivery and authorized draft publication. A real project pilot and later scripted acceptance replay provide scoped evidence; see [the execution guide](live-workflow.md#project-acceptance). Native Cursor execution, Windows/Linux enforcement, semantic/organization memory, cross-agent continuation and unattended end-to-end live-provider verification remain pending.
 
 ## Architectural decisions
 
@@ -19,9 +20,9 @@ This repository contains the architecture package plus TypeScript local identity
 2. **Scoped memory:** global, organization, project, and session scopes with structured records; no permanent full conversations.
 3. **Skills as capability packages:** portable open package shape plus immutable versions, trust, tests, locks, and registry governance.
 4. **Selective context:** intent-driven code, memory, skill, and knowledge retrieval into a bounded, cited task packet.
-5. **MCP at the edge:** ForgeMind is an MCP server for agents and an MCP host/client for optional connectors; MCP is not the internal workflow or memory model.
+5. **MCP at the edge:** the design places MCP server/client facades at the edge, outside the internal workflow and memory model. The general application MCP facade and connector platform remain planned.
 6. **Policy outside models:** models propose; deterministic policy authorizes.
-7. **Learning is quarantined:** results produce observations and candidates; validation and authorized promotion create memory.
+7. **Learning is quarantined:** the design requires validation and authorized promotion before trusting lessons. Local document candidates and explicit owner validation are implemented; automatic outcome-learning and broader promotion remain planned.
 8. **Source permissions persist:** indexes preserve ACLs and retrieval revalidates protected content.
 9. **Local-first modularity:** begin with a modular monolith behind bounded interfaces; distribute only after measurement.
 10. **Source-bound evidence:** packets, results, tests, checkpoints, and receipts bind to exact source/content versions.
@@ -32,12 +33,12 @@ This repository contains the architecture package plus TypeScript local identity
 15. **Real offline execution host:** default-deny macOS Seatbelt, selected-file snapshots, sealed command manifests, credential isolation, independent watchdog, revocation/fencing checks and source-bound terminal receipts are implemented. The legacy direct live-task launcher is disabled. See [ADR-0010](./adr/ADR-0010-offline-host-enforcement.md) and [host instructions](./host-enforcement.md).
 16. **Cursor ACP slice:** explicit model/mode configuration, canonical text packets, strict JSON-RPC and conservative lifecycle handling are implemented with deterministic and real offline host fixtures. Cursor persistence is confined to private scratch; native login, prompts, model routing and billing remain unverified. See [ADR-0011](./adr/ADR-0011-cursor-acp-protocol-slice.md).
 17. **Windows verification path:** native PowerShell clone/build/portable fixture commands, a read-only doctor and shell-independent test discovery are implemented. Fixtures use canonical workspace paths. A native Windows run remains to be captured; Windows SID/ACL policy and an enforced host are still unimplemented. See [Windows instructions](./windows.md).
-18. **Project planning preferences:** onboarding stores project/document identity and non-secret draft PR, evidence and plan review choices; new projects can scaffold missing draft PRD/SRS/ADR templates. Source/settings-bound preflight supports owner review and before-video receipts. The supplied-plan CLI is offline; local project memory now feeds cited context into its plan digest. Wider memory scopes, automatic planning and live task/completion integration remain pending. See [ADR-0012](./adr/ADR-0012-project-onboarding-and-plan-preflight.md).
+18. **Project planning preferences:** onboarding stores project/document identity and non-secret draft PR, evidence and plan review choices; new projects can scaffold missing draft PRD/SRS/ADR templates. Source/settings-bound preflight supports owner review and before-video receipts. The supplied-plan CLI is offline; local project memory now feeds cited context into its plan digest. Wider memory scopes remain pending. The supervised pipeline now performs model planning and task execution under explicit account/host setup; supplied-plan onboarding remains a separate offline route. See [ADR-0012](./adr/ADR-0012-project-onboarding-and-plan-preflight.md).
 19. **Durable project memory:** local-owner SQLite persistence bound to project/workspace, registered document candidates, exact-digest validation, FTS5 retrieval, lifecycle/redaction and cited plan context are implemented. See [ADR-0013](./adr/ADR-0013-durable-project-memory.md) and [setup](./project-memory.md). Semantic retrieval and broader memory scopes remain pending.
 
 ## Canonical flow
 
-The initial [Codex protocol slice](./codex-driver.md) and [Cursor ACP slice](./cursor-driver.md) share the enforced offline host. Native provider execution, checkpoint interoperability and Headroom evaluation remain subsequent gates.
+The initial [Codex protocol slice](./codex-driver.md) and [Cursor ACP slice](./cursor-driver.md) share the enforced offline host. The separate supervised Codex route has scoped real-provider pilot evidence. Complete unattended execution, billing/quota verification, checkpoint interoperability and Headroom evaluation remain subsequent gates. The diagram below is the intended architecture, not a claim that every retrieval/learning component is implemented.
 
 ```mermaid
 flowchart LR
@@ -160,7 +161,7 @@ Controls and validation expectations are detailed in [architecture.md](./archite
 
 ## Open questions requiring decisions
 
-### Before implementation
+### Remaining preview and architecture decisions
 
 - Ratify or amend ADR-0001 through ADR-0005.
 - Choose the second MVP language after TypeScript, or defer it.
@@ -168,7 +169,7 @@ Controls and validation expectations are detailed in [architecture.md](./archite
 - Validate the chosen Codex-first/Cursor-next integration surfaces and capability gaps; decide remaining driver order. Codex App Server is experimental and Cursor compatibility is not yet certified.
 - Decide whether read-only GitHub is a required MVP dependency or an optional demonstrator.
 - Approve task packet/checkpoint schema ownership and versioning policy.
-- Integrate the implemented ADR-0007 local identity/policy boundary with real drivers and verify sandbox enforcement.
+- Extend the implemented macOS policy/host boundary only with independently reviewed provider, command and platform conformance evidence.
 - Define raw session, checkpoint, candidate, audit, backup, and deletion retention defaults.
 - Decide which actions always require interactive approval.
 
@@ -187,7 +188,7 @@ Controls and validation expectations are detailed in [architecture.md](./archite
 2. Convert canonical contracts into language-neutral schemas and golden examples.
 3. Create source-bound evaluation datasets for context reduction, retrieval, continuation, ACL isolation, and deletion.
 4. Create threat models for the first Agent Driver, TypeScript analyzer, GitHub connector, and skill loader.
-5. Prototype a deterministic end-to-end vertical slice with fake agent/connector adapters.
+5. Extend the existing deterministic fixtures and supervised pipeline to remaining connector and continuation capabilities.
 6. Add real adapters one at a time behind conformance tests.
 7. Benchmark the candidate against full-history/full-file and agent-native baselines before optimizing.
 
