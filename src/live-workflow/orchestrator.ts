@@ -28,6 +28,8 @@ import { recordEvidence, validateEvidencePair } from './evidence.js';
 import type { RecordingRequest, ProbeConfiguration, EvidenceManifest } from './evidence.js';
 import { assertChatGPTPlanSession } from './chatgpt-plan.js';
 import type { ChatGPTPlanSession } from './chatgpt-plan.js';
+import { BrowserQaHandoff } from './browser-qa.js';
+import type { BrowserQaSetup } from './browser-qa.js';
 
 export interface RecordingSetup {
   before: Omit<RecordingRequest, 'phase' | 'sourceIdentity' | 'baselineIdentity'>;
@@ -43,6 +45,8 @@ export interface RunOptions {
   confirmPlan: (plan: unknown, digest: string) => Promise<boolean>;
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
+  /** Trusted host automatic handoff; configured adapters are mandatory for both phases. */
+  browserQa?: BrowserQaSetup;
   videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
   /** Trusted host publication inputs; never read from task/project/model data. */
   publication?: PublishOptions & { author: CommitAuthor };
@@ -94,9 +98,13 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     return actual;
   };
   const progress = (message: string) => options.onProgress?.(message);
+  let browserQa: BrowserQaHandoff | undefined;
+  let browserQaReady = false;
+  const assertBrowserQa = () => { if (browserQaReady) browserQa!.assertCurrent(); };
   const pending: ActionReceipt[] = [];
   const authorizeGit = (action: Readonly<RepositoryAction>) => {
     signal.throwIfAborted();
+    assertBrowserQa();
     const r = authority.reserve({
       kind: 'git',
       source: current,
@@ -200,6 +208,8 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     });
     currentSource();
     const baseline = current;
+    if (options.browserQa) browserQa = new BrowserQaHandoff({ setup: options.browserQa, workspace: activeRoot,
+      task, baselineSource: baseline, artifacts, authority, source: currentSource, signal });
     progress('Running baseline checks');
     const beforeChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal);
     save('before-checks.json', beforeChecks);
@@ -247,7 +257,9 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         throw e;
       }
     };
+    if (browserQa) { progress('Handing baseline to trusted host browser QA'); await browserQa.capture('baseline'); }
     const beforeVideo = await capture('before');
+    currentSource();
     progress('Generating bounded code edits');
     const raw = await model.complete(
       'Implement the approved plan. For small changes to existing files prefer {path,beforeSha256,format:"text-replacements-v1",replacements:[{before,after}]}. Use the exact supplied whole-file beforeSha256. Each nonempty before must match exactly once in the original file; operations must not overlap, use regex, or depend on another operation. Keep anchors short but unique. The host preserves untouched bytes. Alternatively return {path,beforeSha256,content} with complete UTF-8 content (null digest for new files; null content deletes a file). Never mix formats within an edit. Do not change unrelated paths or weaken tests. Do not execute tools.',
@@ -274,6 +286,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     currentSource();
     if (afterChecks.some((c) => !c.passed))
       throw new Error('Candidate checks failed; worktree retained for inspection');
+    if (browserQa) { progress('Handing candidate to trusted host browser QA'); await browserQa.capture('candidate'); }
     const afterVideo = await capture('after');
     if (beforeVideo && afterVideo)
       validateEvidencePair(beforeVideo, afterVideo, {
@@ -282,6 +295,9 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         baselineIdentity: baseline,
         sourceIdentity: current,
       });
+    currentSource();
+    const browserQaReports = browserQa?.assertCurrent();
+    browserQaReady = !!browserQa;
     progress('Running independent review in a fresh Codex invocation');
     const verdict = review(
       await model.complete(
@@ -294,6 +310,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
           diff: diff.diff,
           beforeChecks,
           afterChecks,
+          browserQa: browserQaReports ?? null,
           videos: { before: beforeVideo ?? null, after: afterVideo ?? null },
           source: readSources(
             activeRoot,
@@ -307,6 +324,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     );
     save('review.json', { ...verdict, source: current });
     currentSource();
+    assertBrowserQa();
     authority.phase('reviewed', current, { verdict: verdict.verdict });
     if (verdict.verdict !== 'pass')
       throw new Error('Independent review requires revision; candidate preserved');
@@ -321,11 +339,11 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       videoDelivery = await deliverReviewedVideo(preparedVideo, options.videoDelivery ? {
         ...options.videoDelivery, budget: { deadline, signal },
         authorize: async action => {
-          currentSource(); signal.throwIfAborted();
+          currentSource(); signal.throwIfAborted(); assertBrowserQa();
           const receipt = authority.reserve({ kind: 'git', source: current, detail: action });
           return {
             receiptId: sha256(JSON.stringify(action)),
-            check: () => { currentSource(); signal.throwIfAborted(); receipt.check(); },
+            check: () => { currentSource(); signal.throwIfAborted(); assertBrowserQa(); receipt.check(); },
             finish: outcome => receipt.finish(outcome.status === 'succeeded' ? 'completed' :
               outcome.status === 'failed' ? 'failed' : 'indeterminate'),
           };
@@ -340,6 +358,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       }
       authority.phase('videos-delivered', current, videoDelivery);
     }
+    currentSource(); assertBrowserQa();
     if (!task.draftPr) {
       authority.finish('completed');
       return { status: 'completed-local', artifacts, worktree: activeRoot };
@@ -347,7 +366,8 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     // Publication is host-only, following the user's explicit task-level draft PR choice.
     const title = `chore(${profile.projectId}): ${task.objective.replace(/[\r\n]/g, ' ').slice(0, 100)}`;
     const body = `${changes.summary}\n\n**Before:** Baseline ${checkout.baseHead}; source ${baseline}. ${beforeChecks.filter((c) => !c.passed).length} failing baseline check(s).\n\n**After:** Candidate source ${current}. ${changes.edits.map((e) => e.path).join(', ')}.\n\n**Validation:** ${afterChecks.map((c) => c.id + ': ' + (c.passed ? 'pass' : 'fail')).join('; ')}.\n\n**Review:** Independent fresh invocation: ${verdict.verdict}. Reviewed source ${current}. ${verdict.findings.join('; ')}\n\n**Limitations:** Native account inference uses bounded requests/bytes/time, not a hard credit cap. ${videoDelivery?.status==='delivered'?'Videos independently reviewed and delivered to the project evidence branch.':'No video requested.'}\n`;
-    const finalBody=body+(videoDelivery?.status==='delivered'?`\n**Videos:** [Before](${videoDelivery.beforeUrl}) · [After](${videoDelivery.afterUrl}) · [Evidence manifest](${videoDelivery.indexUrl}). Immutable evidence commit ${videoDelivery.commit}.\n`:'');
+    const qaBody = browserQaReports ? `\n**Browser QA:** Scenario ${browserQaReports.candidate.report.scenarioId}; ${browserQaReports.candidate.report.checks.length} paired checks, all candidate checks pass. Baseline report SHA-256 ${browserQaReports.baseline.reportSha256}; candidate report SHA-256 ${browserQaReports.candidate.reportSha256}. Private run artifacts are host evidence; they are not uploaded by this handoff.\n` : '';
+    const finalBody=body+qaBody+(videoDelivery?.status==='delivered'?`\n**Videos:** [Before](${videoDelivery.beforeUrl}) · [After](${videoDelivery.afterUrl}) · [Evidence manifest](${videoDelivery.indexUrl}). Immutable evidence commit ${videoDelivery.commit}.\n`:'');
     save('pr-body.md', finalBody);
     save('pr-title.txt', title);
     const committed = commitTicketChanges(

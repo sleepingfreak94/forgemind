@@ -9,7 +9,11 @@ import { safeVideoPath, takeReviewedVideoInput } from './video-delivery.js';
 import type { PreparedVideoDelivery, VideoReviewBinding } from './video-delivery.js';
 
 export interface VideoAuthor { name: string; email: string }
-export interface VideoCredentialHelper { ghPath: string; sha256: string; configDirectory: string }
+export interface VideoCredentialHelper {
+  ghPath: string; sha256: string; configDirectory: string;
+  /** Explicit trusted-host home for OS keychain lookup; never inherited from tasks. */
+  homeDirectory?: string;
+}
 export type VideoActionKind = 'create-isolated-repository' | 'write-export' | 'git-init' | 'git-add' | 'git-commit' | 'remote-check' | 'push';
 export interface VideoDeliveryAction {
   kind: VideoActionKind; binding: Readonly<VideoReviewBinding>; cwd: string;
@@ -59,6 +63,15 @@ function outside(project: string, path: string): boolean {
   const rel = relative(project, path);
   return rel === '..' || rel.startsWith(`..${sep}`);
 }
+/** A host-selected credential home may contain the source, but cannot be inside it. */
+export function validateVideoHelperHome(path: string, projectRoot: string): string {
+  if (typeof path !== 'string' || /[\x00-\x1f\x7f]/.test(path)) throw new Error('Unsafe credential helper home');
+  safeVideoPath(path);
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o022) ||
+      !outside(realpathSync(projectRoot), path)) throw new Error('Owner credential helper home outside source required');
+  return path;
+}
 function authorIdentity(author: VideoAuthor): void {
   if (!author || typeof author.name !== 'string' || !author.name.trim() || author.name.length > 120 ||
       /[<>\x00-\x1f\x7f]/.test(author.name) || !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+$/.test(author.email) ||
@@ -94,8 +107,11 @@ export async function publishVideoRepository(prepared: PreparedVideoDelivery, ra
       const helperPin = helper ? pinFile(helper.ghPath) : undefined;
       if (helperPin && (helperPin.digest !== helper!.sha256 || !(lstatSync(helperPin.path).mode & 0o111) ||
           !lstatSync(helper!.configDirectory).isDirectory())) throw new Error('Unverified credential helper');
+      const home = helper?.homeDirectory === undefined ? undefined : validateVideoHelperHome(helper.homeDirectory, input.projectRoot);
+      const homePin = home ? lstatSync(home) : undefined;
       const env: Record<string, string> = {
-        PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: root, XDG_CONFIG_HOME: root, LANG: 'C', LC_ALL: 'C',
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home ?? root,
+        XDG_CONFIG_HOME: root, XDG_CACHE_HOME: root, XDG_DATA_HOME: root, XDG_STATE_HOME: root, LANG: 'C', LC_ALL: 'C',
         GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_GLOBAL: '/dev/null',
         GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/usr/bin/false', SSH_ASKPASS: '/usr/bin/false',
         GIT_OPTIONAL_LOCKS: '0', GIT_ATTR_NOSYSTEM: '1', GIT_LFS_SKIP_SMUDGE: '1', GIT_NO_REPLACE_OBJECTS: '1',
@@ -123,6 +139,11 @@ export async function publishVideoRepository(prepared: PreparedVideoDelivery, ra
         if (rootPin && !configPin && readdirSync(root).length) throw new Error('Evidence init requires an empty directory');
         if (configPin) { safeVideoPath(configPin.path); verifyFile(configPin); }
         if (helperPin) { safeVideoPath(helperPin.path); verifyFile(helperPin); safeVideoPath(helper!.configDirectory); }
+        if (home) {
+          validateVideoHelperHome(home, input.projectRoot);
+          const now = lstatSync(home);
+          if (now.dev !== homePin!.dev || now.ino !== homePin!.ino) throw new Error('Credential helper home replaced');
+        }
         if (wroteFiles) for (const f of input.files) {
           const path = join(root, f.path); safeVideoPath(path); verifyFile(exportPins.get(f.path)!); const s = lstatSync(path);
           if (!s.isFile() || s.nlink !== 1 || s.size !== f.bytes.length || sha256(readFileSync(path)) !== f.sha256) throw new Error('Export changed');

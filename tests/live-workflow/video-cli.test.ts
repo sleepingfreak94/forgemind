@@ -77,6 +77,44 @@ test('strict argument grammar rejects skip-approval, live flags, unknown/duplica
     ['prepare', ...common, '--workspace', '/other'], ['prepare', '--workspace', 'relative'], ['prepare', ...common, '--skip-approval'],
     ['deliver', ...common], ['prepare', ...common, '--gh', '/gh']]) assert.throws(() => parseVideoCliArguments(argv));
 });
+test('gh-home is an optional deliver-only canonical path requiring the complete explicit helper tuple', () => {
+  const common = ['--workspace', '/repo', '--before', '/before.json', '--after', '/after.json'];
+  const delivery = ['deliver', ...common, '--code-review', '/review.json', '--state-root', '/state',
+    '--evidence-parent', '/evidence', '--author-name', 'Fixture', '--author-email', 'fixture@example.invalid'];
+  const helper = ['--gh', '/gh', '--gh-config-dir', '/config'];
+  assert.equal(parseVideoCliArguments([...delivery, ...helper]).values['--gh-home'], undefined);
+  assert.equal(parseVideoCliArguments([...delivery, ...helper, '--gh-home', '/owner']).values['--gh-home'], '/owner');
+  for (const argv of [[...delivery, '--gh-home', '/owner'], [...delivery, '--gh', '/gh', '--gh-home', '/owner'],
+    ['prepare', ...common, '--gh-home', '/owner'], [...delivery, ...helper, '--gh-home=/owner'],
+    [...delivery, ...helper, '--gh-home', '/owner', '--gh-home', '/other']]) assert.throws(() => parseVideoCliArguments(argv));
+  for (const home of ['relative', '/a/../owner', '/a//owner', '/owner\n', '--yes'])
+    assert.throws(() => parseVideoCliArguments([...delivery, ...helper, '--gh-home', home]));
+});
+test('unsafe explicit helper homes are rejected before owner approval, state writes or network', async t => {
+  networkGuard(t); const f = fixture(t), helper = join(f.base, 'gh'), unsafe = join(f.base, 'unsafe-home');
+  writeFileSync(helper, '#!/bin/sh\nexit 1\n', { mode: 0o700 }); mkdirSync(unsafe, { mode: 0o700 }); chmodSync(unsafe, 0o777);
+  const alias = join(f.base, 'home-alias'); symlinkSync(f.base, alias);
+  for (const home of [f.root, unsafe, alias, join(f.base, 'missing'), f.reviewPath]) {
+    const term = terminal();
+    assert.equal(await runVideoCli([...f.deliver, '--gh', helper, '--gh-config-dir', f.base, '--gh-home', home], term.io), 2);
+    assert.equal(term.prompts.length, 0); assert.equal(existsSync(f.state), false); assert.deepEqual(readdirSync(f.evidence), []);
+  }
+});
+test('CLI explicitly forwards helper home into durable action environment without inheriting Git config', async t => {
+  const f = fixture(t), helper = join(f.base, 'gh'); networkGuard(t, f.evidence);
+  writeFileSync(helper, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  writeFileSync(join(f.base, '.gitconfig'), 'invalid Git config must never load');
+  const term = terminal(true, prompt => /Type exactly (approve [a-f0-9]{64}):/.exec(prompt)![1]!);
+  assert.equal(await runVideoCli([...f.deliver, '--gh', helper, '--gh-config-dir', f.base, '--gh-home', f.base], term.io), 2);
+  assert.equal(term.prompts.length, 1);
+  const receipt = JSON.parse(readFileSync(join(String(term.last().stateDirectory), 'authority-receipt.json'), 'utf8'));
+  const action = JSON.parse(receipt.phases.find((p: { name: string; data: string }) => p.name === 'video-action-reserved' &&
+    JSON.parse(p.data).action.kind === 'git-init').data).action;
+  assert.equal(action.environment.HOME, f.base); assert.equal(action.environment.GH_CONFIG_DIR, f.base);
+  assert.equal(action.environment.GIT_CONFIG_GLOBAL, '/dev/null'); assert.equal(action.environment.GIT_CONFIG_SYSTEM, '/dev/null');
+  for (const key of ['XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME']) assert.equal(action.environment[key], action.cwd);
+  assert.equal(receipt.run.requests, 0);
+});
 test('preview derives exact binding, displays local files, and does not expose manifest content or write', async t => {
   networkGuard(t); const f = fixture(t), term = terminal(false), beforeFiles = readdirSync(f.base), head = git(f.root, 'rev-parse', 'HEAD');
   const expected = prepareVideoDelivery({ projectRoot: f.root, before: f.before, after: f.after,
