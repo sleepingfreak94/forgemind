@@ -52,9 +52,14 @@ export async function supervised(
       reaped = false,
       result: { stdout: string; stderr: string; code: number | null } | undefined,
       failure: Error | undefined;
+    let stopping = false;
     const stop = (reason: string) => {
       failure ??= new Error(reason);
-      if (p.connected) p.send('stop');
+      if (stopping) return;
+      stopping = true;
+      // A broken IPC pipe can remain connected until its IO close callback.
+      // Consume send errors; error -> stop -> send would starve that callback.
+      try { if (p.connected) p.send('stop', () => {}); } catch {}
     };
     const abort = () => stop('Cancelled');
     request.signal?.addEventListener('abort', abort, { once: true });
