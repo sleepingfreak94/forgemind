@@ -8,6 +8,7 @@ import { zstdDecompressSync, gunzipSync } from 'node:zlib';
 import { sha256 } from './validation.js';
 import { supervised, inferenceProfile, runtimeFiles } from './process.js';
 import { invocationBudget } from './invocation-budget.js';
+import { providerBatches } from './provider-batches.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import type { RunAuthority } from './authority.js';
 import { assertChatGPTPlanSession } from './chatgpt-plan.js';
@@ -142,17 +143,17 @@ export async function startBroker(options: BrokerOptions): Promise<{
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-store',
       });
-      let total = 0,
-        pending = '',
-        completed = false;
-      const decoder = new TextDecoder();
-      for await (const raw of upstream.body) {
-        receipt.check();
+      const assertForwardable = () => {
+        receipt!.check();
         options.planSession?.assertActive();
         signal.throwIfAborted();
         if (options.source() !== source) throw new Error('Source changed during inference');
-        total += raw.length;
-        if (total > options.task.maxOutputBytes) throw new Error('Provider response byte limit');
+      };
+      let pending = '',
+        completed = false;
+      const decoder = new TextDecoder();
+      for await (const raw of providerBatches(upstream.body, signal, options.task.maxOutputBytes)) {
+        assertForwardable();
         pending += decoder.decode(raw, { stream: true });
         let boundary: RegExpExecArray | null;
         while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(pending))) {
@@ -173,7 +174,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
               if (event.response.model !== options.task.model) throw new Error('Model fallback denied');
             }
           }
-          if (!res.write(frame + '\n\n'))
+          if (!res.write(frame + '\n\n')) {
             await new Promise<void>((resolve, reject) => {
               const cleanup = () => { res.off('drain', drain); res.off('close', close); signal.removeEventListener('abort', abort); };
               const drain = () => { cleanup(); resolve(); };
@@ -182,10 +183,12 @@ export async function startBroker(options: BrokerOptions): Promise<{
               if (signal.aborted) { abort(); return; }
               res.once('drain', drain); res.once('close', close); signal.addEventListener('abort', abort, { once: true });
             });
+            assertForwardable();
+          }
         }
       }
       if (!completed || pending.trim()) throw new Error('Missing terminal provider completion');
-      receipt.check();
+      assertForwardable();
       receipt.finish('completed', digest);
       receipt = undefined;
       success = true;
