@@ -128,13 +128,19 @@ export class ProjectMemory {
     validate.text(query, 2048);
     if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error('invalid result limit');
     const documents = scanDocuments(this.workspaceRoot, this.projectId); this.#expire();
-    const eligible = this.#records().filter(record => record.state === 'validated' && this.#current(record, documents));
+    const qualifications = new Set(documents.map(doc => JSON.stringify([doc.path, doc.sha256, doc.status])));
+    const tombstones = new Set(this.#storage.db.prepare('SELECT path, sha256 FROM deleted_sources').all()
+      .map(row => JSON.stringify([row.path, row.sha256])));
+    const eligible = this.#records().filter(record => record.state === 'validated' && record.sources.every(source =>
+      qualifications.has(JSON.stringify([source.path, source.sha256, source.status])) &&
+      !tombstones.has(JSON.stringify([source.path, source.sha256]))));
     const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])].slice(0, 32);
     if (!terms.length || !eligible.length) return [];
     const expression = terms.map(term => `"${term}"`).join(' OR ');
     // Each database is project/workspace-bound. Membership and validity are checked before matching.
-    const matching = this.#storage.db.prepare('SELECT record_id FROM memory_fts WHERE memory_fts MATCH ? AND record_id = ?');
-    const records = eligible.filter(record => !!matching.get(expression, record.id));
+    const matching = new Set(this.#storage.db.prepare('SELECT record_id FROM memory_fts WHERE memory_fts MATCH ? AND record_id IN (SELECT value FROM json_each(?))')
+      .all(expression, JSON.stringify(eligible.map(record => record.id))).map(row => row.record_id as string));
+    const records = eligible.filter(record => matching.has(record.id));
     const score = (record: MemoryRecord) => terms.reduce((n, term) => n + (record.title.toLowerCase().includes(term) ? 3 : 0) + (record.text.toLowerCase().includes(term) ? 1 : 0), 0);
     records.sort((a, b) => score(b) - score(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     return freeze(records.slice(0, limit).map(record => {
