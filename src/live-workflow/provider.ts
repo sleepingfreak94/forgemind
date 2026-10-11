@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { zstdDecompressSync, gunzipSync } from 'node:zlib';
 import { sha256 } from './validation.js';
 import { supervised, inferenceProfile, runtimeFiles } from './process.js';
+import { invocationBudget } from './invocation-budget.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import type { RunAuthority } from './authority.js';
 import { assertChatGPTPlanSession } from './chatgpt-plan.js';
@@ -45,6 +46,8 @@ export async function startBroker(options: BrokerOptions): Promise<{
     signal = AbortSignal.any([options.signal, controller.signal]);
   const server = createServer(async (req, res) => {
     let receipt: ActionReceipt | undefined;
+    const disconnect = () => { if (!res.writableFinished) controller.abort(new Error('Client disconnected')); };
+    res.once('close', disconnect);
     try {
       if (
         used ||
@@ -171,9 +174,13 @@ export async function startBroker(options: BrokerOptions): Promise<{
             }
           }
           if (!res.write(frame + '\n\n'))
-            await new Promise<void>((r, j) => {
-              res.once('drain', r);
-              res.once('close', () => j(new Error('Client disconnected')));
+            await new Promise<void>((resolve, reject) => {
+              const cleanup = () => { res.off('drain', drain); res.off('close', close); signal.removeEventListener('abort', abort); };
+              const drain = () => { cleanup(); resolve(); };
+              const close = () => { cleanup(); reject(new Error('Client disconnected')); };
+              const abort = () => { cleanup(); reject(signal.reason ?? new Error('Cancelled')); };
+              if (signal.aborted) { abort(); return; }
+              res.once('drain', drain); res.once('close', close); signal.addEventListener('abort', abort, { once: true });
             });
         }
       }
@@ -197,7 +204,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
           }),
         );
       } else res.destroy();
-    }
+    } finally { res.off('close', disconnect); }
   });
   server.requestTimeout = options.task.maxRuntimeMs;
   server.headersTimeout = 10000;
@@ -273,15 +280,17 @@ export class NativeCodexModel implements ModelPort {
     writeFileSync(join(scratch, 'schema.json'), JSON.stringify(schema), {
       mode: 0o600,
     });
-    const broker = await startBroker({
+    const invocation = invocationBudget(task.maxRuntimeMs, signal);
+    let broker: Awaited<ReturnType<typeof startBroker>>;
+    try { broker = await startBroker({
       task,
       source: this.options.source,
       authority,
       ...(this.options.credentials ? { credentials: this.options.credentials } : {}),
       ...(this.options.planSession ? { planSession: this.options.planSession } : {}),
-      signal,
+      signal: invocation.signal,
       ...(this.options.transport ? { transport: this.options.transport } : {}),
-    });
+    }); } catch (error) { invocation.dispose(); throw error; }
     let receipt: ActionReceipt | undefined;
     try {
       const settings: Record<string, unknown> = {
@@ -377,10 +386,10 @@ export class NativeCodexModel implements ModelPort {
           FORGEMIND_BROKER_TOKEN: broker.token,
           OPENSSL_CONF: '/dev/null',
         },
-        timeoutMs: Math.min(task.maxRuntimeMs, 300000),
+        timeoutMs: invocation.timeoutMs,
         maxOutputBytes: task.maxOutputBytes,
         input: prompt,
-        signal,
+        signal: invocation.signal,
         check: () => receipt!.check(),
       });
       if (result.code !== 0) {
@@ -406,6 +415,7 @@ export class NativeCodexModel implements ModelPort {
       } catch {}
       throw e;
     } finally {
+      invocation.dispose();
       await broker.close();
     }
   }
