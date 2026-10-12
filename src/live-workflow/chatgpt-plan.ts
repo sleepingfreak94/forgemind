@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { loadChatGPTConnection } from './chatgpt-auth.js';
 import type { ChatGPTConnection } from './chatgpt-auth.js';
 import { ChatGPTStore, chatGPTAccountFingerprint } from './chatgpt-store.js';
+import { ensureChatGPTConnection } from './chatgpt-refresh.js';
 import type { ChatGPTBillingReview } from './chatgpt-store.js';
 
 const sessions = new WeakMap<object, { directory: string; connection: ChatGPTConnection; expiresAt: number; review: ChatGPTBillingReview }>();
@@ -28,7 +29,7 @@ export function forgetChatGPTBillingReview(directory: string): void {
  * Same-account credential renewal retains it. Project files cannot enable it. */
 export async function openChatGPTPlanSession(directory: string, terminal: BillingTerminal): Promise<ChatGPTPlanSession> {
   if (!terminal.isTTY) throw new Error('Subscription-only execution requires an interactive account settings review');
-  const connection = loadChatGPTConnection(directory);
+  const connection = await ensureChatGPTConnection(directory);
   if (!connection.email) throw new Error('A signed account email is required to match the account in browser settings');
   directory = realpathSync(directory);
   let review = reviewStore(directory, store => store.billingReview(connection));
@@ -54,6 +55,17 @@ export async function openChatGPTPlanSession(directory: string, terminal: Billin
 }
 /** No API-key, native-login credential extraction, endpoint override or retry path. */
 export class ChatGPTPlanSession {
+  async prepare(minimumLifetimeMs: number, signal: AbortSignal, check: () => void = () => undefined): Promise<void> {
+    const state = sessions.get(this);
+    if (!state) throw new Error('Authenticated subscription-only session required');
+    signal.throwIfAborted(); check();
+    const review = reviewStore(state.directory, store => store.billingReview(state.connection));
+    if (review?.reviewId !== state.review.reviewId) throw new Error('Subscription-only account acknowledgement was reset or changed');
+    const next = await ensureChatGPTConnection(state.directory, { minimumLifetimeMs, signal, expectedConnection: state.connection, check });
+    signal.throwIfAborted(); check();
+    state.connection = next; state.expiresAt = next.expiresAt;
+    this.assertActive();
+  }
   assertActive(): void {
     const state = sessions.get(this);
     if (!state) throw new Error('Authenticated subscription-only session required');
@@ -83,7 +95,7 @@ export class ChatGPTPlanSession {
   }
 }
 
-export function assertChatGPTPlanSession(session: ChatGPTPlanSession): void {
+export function assertChatGPTPlanSession(session: ChatGPTPlanSession, requireActive = true): void {
   if (!sessions.has(session)) throw new Error('Unrecognized authenticated ChatGPT plan session');
-  session.assertActive();
+  if (requireActive) session.assertActive();
 }

@@ -239,8 +239,23 @@ export class NativeCodexModel implements ModelPort {
   ): Promise<unknown> {
     const { task, authority } = this.options;
     if (this.options.planSession) {
-      assertChatGPTPlanSession(this.options.planSession);
+      assertChatGPTPlanSession(this.options.planSession, false);
+      // Reject mixed fixture credentials before any owner-network action.
       if (this.options.transport || this.options.credentials) throw new Error('Production and fixture dependencies cannot be combined');
+      signal.throwIfAborted();
+      const preparationSource = this.options.source();
+      const preparation = authority.reserve({ kind: 'command', source: preparationSource,
+        detail: { operation: 'owner-session-prepare', minimumLifetimeMs: task.maxRuntimeMs + 30000, inference: false } });
+      const checkPreparation = () => {
+        signal.throwIfAborted(); preparation.check();
+        if (this.options.source() !== preparationSource) throw new Error('Task source changed during session preparation');
+      };
+      try {
+        checkPreparation();
+        await this.options.planSession.prepare(task.maxRuntimeMs + 30000, signal, checkPreparation);
+        checkPreparation(); preparation.finish('completed');
+      } catch (error) { try { preparation.finish('indeterminate'); } catch {} throw error; }
+      assertChatGPTPlanSession(this.options.planSession);
     } else if (!this.options.transport || !this.options.credentials)
       throw new Error(
         'Live inference blocked: subscription-only spending cannot currently be enforced for ChatGPT login',

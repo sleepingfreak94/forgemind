@@ -15,7 +15,7 @@ export interface ChatGPTConnection {
   refreshToken?: string;
   idToken: string;
   scope: string;
-  /** Unix time in milliseconds. Expiry requires reconnect; no automatic refresh. */
+  /** Unix time in milliseconds. Owner refresh renews access; an in-flight request retains this deadline. */
   expiresAt: number;
   email?: string;
 }
@@ -25,6 +25,13 @@ const DIRECT_SCOPE = 'chatgpt.tokens.use.direct';
 const CONNECTION = 'chatgpt-connection.json';
 const HOST = 'chatgpt-host.json';
 const LOCK = 'chatgpt.lock';
+const REFRESH_LOCK = 'chatgpt-refresh.lock';
+const PENDING = 'chatgpt-refresh-pending.json';
+const REGISTRATION = 'chatgpt-registration.json';
+export type ChatGPTRegistration = Pick<ChatGPTConnection, 'schemaVersion' | 'hostId' | 'clientId' | 'subject'>;
+export const connectionDigest = (c: ChatGPTConnection): string =>
+  createHash('sha256').update(JSON.stringify([c.schemaVersion, c.hostId, c.clientId, c.subject,
+    c.accessToken, c.refreshToken, c.idToken, c.scope, c.expiresAt, c.email])).digest('hex');
 const BILLING_REVIEW = 'chatgpt-billing-review.json';
 export interface ChatGPTBillingReview {
   schemaVersion: 1;
@@ -213,7 +220,57 @@ export class ChatGPTStore {
     if (data.schemaVersion !== 1 || !hostId(data.hostId) || Object.keys(data).length !== 2) throw authError('invalid host registration');
     return data.hostId;
   }
+  /** Separate exclusive rotation ownership; never steal locks using time or PID. */
+  lockRefresh(): (() => void) & { check(): void } {
+    this.check();
+    let fd: number;
+    try { fd = openSync(join(this.directory, REFRESH_LOCK), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch { throw authError('renewal is locked; inspect the existing renewal lock'); }
+    const identity = fstatSync(fd);
+    secureFile(identity); writeFileSync(fd, randomBytes(32).toString('hex')); fsyncSync(fd); fsyncSync(this.fd);
+    let released = false;
+    const check = () => {
+      if (released) throw authError('renewal lock already released');
+      this.check(); const current = lstatSync(join(this.directory, REFRESH_LOCK)); secureFile(current);
+      if (!sameFile(identity, current) || !sameFile(identity, fstatSync(fd))) throw authError('renewal ownership changed');
+    };
+    return Object.assign(() => {
+      try { check(); unlinkSync(join(this.directory, REFRESH_LOCK)); fsyncSync(this.fd); }
+      finally { released = true; closeSync(fd); }
+    }, { check });
+  }
+  unlock(): void {
+    this.checkLock(); unlinkSync(join(this.directory, LOCK)); fsyncSync(this.fd);
+    closeSync(this.lockFd!); this.lockFd = undefined; this.lockIdentity = undefined;
+  }
+  registration(): ChatGPTRegistration | undefined {
+    const value = this.read(REGISTRATION); if (value === undefined) return undefined;
+    const v = record(value);
+    if (Object.keys(v).sort().join(',') !== 'clientId,hostId,schemaVersion,subject' || v.schemaVersion !== 1
+      || !hostId(v.hostId) || v.hostId !== this.getHostId() || !issuedClient(v.clientId) || !textField(v.subject, 512))
+      throw authError('invalid retained registration');
+    return v as unknown as ChatGPTRegistration;
+  }
+  pendingRefresh(): boolean { return this.read(PENDING, false) !== undefined; }
+  beginRefresh(connection: ChatGPTConnection): void {
+    this.checkLock();
+    if (this.pendingRefresh()) throw authError('previous renewal is indeterminate; reconnect required');
+    this.write(PENDING, { schemaVersion: 1, connectionSha256: connectionDigest(connection), startedAt: Date.now() });
+  }
+  finishRefresh(): void {
+    this.checkLock(); if (!this.pendingRefresh()) return;
+    unlinkSync(join(this.directory, PENDING)); fsyncSync(this.fd);
+  }
+  invalidateConnection(): void {
+    this.checkLock(); const c = this.connection(true);
+    if (c) {
+      this.write(REGISTRATION, { schemaVersion: 1, hostId: c.hostId, clientId: c.clientId, subject: c.subject });
+      this.read(CONNECTION); this.checkLock(); unlinkSync(join(this.directory, CONNECTION)); fsyncSync(this.fd);
+    }
+    this.forgetBillingReview(); this.finishRefresh();
+  }
   connection(allowExpired = false): ChatGPTConnection | undefined {
+    if (!allowExpired && this.pendingRefresh()) throw authError('previous renewal is indeterminate or in progress; reconnect if it did not finish');
     const v = this.read(CONNECTION);
     if (v === undefined) return undefined;
     const c = validateConnection(v, allowExpired);
@@ -226,6 +283,9 @@ export class ChatGPTStore {
     if (c.hostId !== this.getHostId()) throw authError('host identity mismatch');
     const previous = this.connection(true);
     if (previous && (previous.clientId !== c.clientId || previous.subject !== c.subject)) throw authError('account identity mismatch');
+    const registration = this.registration();
+    if (registration && (registration.clientId !== c.clientId || registration.subject !== c.subject)) throw authError('retained registration mismatch');
+    this.write(REGISTRATION, { schemaVersion: 1, hostId: c.hostId, clientId: c.clientId, subject: c.subject });
     // Reconnecting an intact account retains its review; a disconnected record does not.
     if (!previous) this.forgetBillingReview();
     this.write(CONNECTION, c);

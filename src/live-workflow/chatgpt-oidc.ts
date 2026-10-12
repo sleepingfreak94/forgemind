@@ -13,13 +13,13 @@ export const openAIIdentity = Object.freeze({
 export type ChatGPTTransport = (url: string, init: RequestInit) => Promise<Response>;
 const MAX_RESPONSE = 128 * 1024;
 
-export async function identityJSON(transport: ChatGPTTransport, url: string, init: RequestInit): Promise<Record<string, unknown>> {
+async function identityReply(transport: ChatGPTTransport, url: string, init: RequestInit, tokenErrors = false): Promise<{ status: number; data: Record<string, unknown> }> {
   if (!([openAIIdentity.discovery, openAIIdentity.token, openAIIdentity.jwks] as readonly string[]).includes(url)) throw authError('untrusted identity endpoint');
   let response: Response | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     response = await transport(url, { ...init, redirect: 'manual', credentials: 'omit', referrerPolicy: 'no-referrer' });
-    if (response.redirected || response.status !== 200 || !response.body) throw authError('identity request failed');
+    if (response.redirected || (response.status !== 200 && !(tokenErrors && url === openAIIdentity.token && [400, 401, 403].includes(response.status))) || !response.body) throw authError('identity request failed');
     const length = response.headers.get('content-length');
     if (length && (!/^\d+$/.test(length) || Number(length) > MAX_RESPONSE)) throw authError('identity response exceeds limit');
     reader = response.body.getReader();
@@ -32,12 +32,18 @@ export async function identityJSON(transport: ChatGPTTransport, url: string, ini
       if (size > MAX_RESPONSE) throw authError('identity response exceeds limit');
       chunks.push(Buffer.from(part.value));
     }
-    return record(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    return { status: response.status, data: record(JSON.parse(Buffer.concat(chunks).toString('utf8'))) };
   } catch { throw authError('identity request failed or returned invalid data'); }
   finally {
     if (reader) { try { await reader.cancel(); } catch { /* discard untrusted response */ } reader.releaseLock(); }
     else if (response?.body) { try { await response.body.cancel(); } catch { /* discard */ } }
   }
+}
+export async function identityJSON(transport: ChatGPTTransport, url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  return (await identityReply(transport, url, init)).data;
+}
+export async function identityTokenResponse(transport: ChatGPTTransport, init: RequestInit): Promise<{ status: number; data: Record<string, unknown> }> {
+  return identityReply(transport, openAIIdentity.token, init, true);
 }
 export async function discoverIdentity(transport: ChatGPTTransport, signal: AbortSignal): Promise<void> {
   const d = await identityJSON(transport, openAIIdentity.discovery, { signal });
@@ -51,8 +57,8 @@ function decodePart(part: string): Record<string, unknown> {
   if (bytes.toString('base64url') !== part) throw authError('invalid ID token encoding');
   return record(JSON.parse(bytes.toString('utf8')));
 }
-export async function verifyIdentity(
-  token: string, clientId: string, nonce: string, transport: ChatGPTTransport, signal: AbortSignal,
+async function verifyClaims(
+  token: string, clientId: string, nonce: string, transport: ChatGPTTransport, signal: AbortSignal, anchor?: Record<string, unknown>,
 ): Promise<{ subject: string; expiresAt: number; email?: string }> {
   try {
     const parts = token.split('.');
@@ -86,9 +92,29 @@ export async function verifyIdentity(
       || !Number.isSafeInteger(claims.iat) || (claims.iat as number) > now + 5
       || (claims.iat as number) >= (claims.exp as number)
       || (claims.nbf !== undefined && (!Number.isSafeInteger(claims.nbf) || (claims.nbf as number) > now))
-      || claims.nonce !== nonce || !textField(claims.sub, 512)) throw authError('ID token claims failed');
+      || (!anchor ? claims.nonce !== nonce : claims.nonce !== undefined && claims.nonce !== nonce) || !textField(claims.sub, 512)) throw authError('ID token claims failed');
+    if (anchor && (claims.sub !== anchor.sub || JSON.stringify(audiences(claims.aud)) !== JSON.stringify(audiences(anchor.aud))
+      || (claims.auth_time !== undefined && claims.auth_time !== anchor.auth_time))) throw authError('refresh identity changed');
     const result = { subject: claims.sub, expiresAt: (claims.exp as number) * 1000 };
     // Only a signed, provider-verified email is suitable for the owner's identity review.
     return claims.email_verified === true && textField(claims.email, 320) ? { ...result, email: claims.email } : result;
   } catch { throw authError('ID token validation failed'); }
+}
+
+function audiences(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (!Array.isArray(value) || !value.every(v => typeof v === 'string')) throw authError('invalid audience');
+  return [...value].sort() as string[];
+}
+export async function verifyIdentity(token: string, clientId: string, nonce: string, transport: ChatGPTTransport, signal: AbortSignal): Promise<{ subject: string; expiresAt: number; email?: string }> {
+  return verifyClaims(token, clientId, nonce, transport, signal);
+}
+/** The protected original token was verified at sign-in; keep it as the nonce/audience anchor across rotations. */
+export async function verifyRefreshIdentity(token: string, original: { idToken: string; clientId: string; subject: string; email?: string }, transport: ChatGPTTransport, signal: AbortSignal): Promise<void> {
+  try {
+    const anchor = decodePart(original.idToken.split('.')[1]!);
+    if (anchor.iss !== openAIIdentity.issuer || anchor.sub !== original.subject || !textField(anchor.nonce)) throw authError('invalid original identity');
+    const verified = await verifyClaims(token, original.clientId, anchor.nonce, transport, signal, anchor);
+    if (verified.subject !== original.subject || (verified.email !== undefined && verified.email !== original.email)) throw authError('refresh identity changed');
+  } catch { throw authError('refreshed ID token validation failed'); }
 }
