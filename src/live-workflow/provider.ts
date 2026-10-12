@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, lstatSync, realpathSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { zstdDecompressSync, gunzipSync } from 'node:zlib';
+import { NATIVE_ENVELOPE_MAX_BYTES, decodeNativeRequest, outboundPromptBytes } from './request-budget.js';
 import { sha256 } from './validation.js';
 import { supervised, inferenceProfile, runtimeFiles } from './process.js';
 import { invocationBudget } from './invocation-budget.js';
@@ -63,21 +63,10 @@ export async function startBroker(options: BrokerOptions): Promise<{
       for await (const c of req) {
         const b = Buffer.from(c);
         size += b.length;
-        if (size > options.task.maxPromptBytes) throw new Error('Prompt transport limit');
+        if (size > NATIVE_ENVELOPE_MAX_BYTES) throw new Error('Prompt transport limit');
         chunks.push(b);
       }
-      let bytes = Buffer.concat(chunks);
-      const encoding = req.headers['content-encoding'];
-      if (encoding === 'zstd')
-        bytes = zstdDecompressSync(bytes, {
-          maxOutputLength: options.task.maxPromptBytes,
-        });
-      else if (encoding === 'gzip')
-        bytes = gunzipSync(bytes, {
-          maxOutputLength: options.task.maxPromptBytes,
-        });
-      else if (encoding && encoding !== 'identity') throw new Error('Unsupported encoding');
-      const body = JSON.parse(bytes.toString());
+      const body = JSON.parse(decodeNativeRequest(Buffer.concat(chunks), req.headers['content-encoding']));
       if (body.model !== options.task.model || !Array.isArray(body.input) || body.stream !== true)
         throw new Error('Provider model/shape mismatch');
       if (body.input.some((item:Record<string,unknown>)=>!item||typeof item!=='object'||(item.type!==undefined&&!['message','additional_tools'].includes(String(item.type)))))
@@ -102,7 +91,8 @@ export async function startBroker(options: BrokerOptions): Promise<{
         service_tier: 'default',
       };
       const payload = JSON.stringify(outbound);
-      const requestNumber = options.authority.reserveRequest(Buffer.byteLength(payload));
+      const promptBytes = outboundPromptBytes(payload, options.task.maxPromptBytes);
+      const requestNumber = options.authority.reserveRequest(promptBytes);
       const digest = sha256(payload),
         source = options.source();
       receipt = options.authority.reserve({
@@ -114,7 +104,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
           effort: options.task.effort,
           requestNumber,
           promptSha256: digest,
-          promptBytes: Buffer.byteLength(payload),
+          promptBytes,
           maxResponseBytes: options.task.maxOutputBytes,
           paidApiFallback: false,
           ...(options.planSession ? { connection: options.planSession.binding() } : {}),
