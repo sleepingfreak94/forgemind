@@ -28,7 +28,9 @@ const child = spawn(config.executable, config.args, {
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let failure = false,
-  bytes = 0;
+  bytes = 0,
+  childExited = false;
+let reason: 'deadline' | 'output-limit' | 'interrupted' | 'spawn' | undefined;
 const kill = () => {
   if (child.pid)
     try {
@@ -37,15 +39,21 @@ const kill = () => {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
     }
 };
-const stop = () => {
+const stop = (cause: 'deadline' | 'output-limit' | 'interrupted') => {
   failure = true;
+  reason ??= cause;
   kill();
+  // An inherited pipe may outlive the child's process group. On failure,
+  // stop waiting for EOF; partial output must still have a failing status.
+  child.stdout.destroy();
+  child.stderr.destroy();
 };
-const timer = setTimeout(stop, remaining);
-process.on('SIGTERM', stop);
-process.on('SIGINT', stop);
+const timer = setTimeout(() => stop('deadline'), remaining);
+process.on('SIGTERM', () => stop('interrupted'));
+process.on('SIGINT', () => stop('interrupted'));
 child.on('error', () => {
   failure = true;
+  reason ??= 'spawn';
 });
 for (const [input, output] of [
   [child.stdout, process.stdout],
@@ -54,7 +62,7 @@ for (const [input, output] of [
   input.on('data', (chunk: Buffer) => {
     bytes += chunk.length;
     if (bytes > 64 * 1024 * 1024) {
-      stop();
+      stop('output-limit');
       return;
     }
     if (!output.write(chunk)) {
@@ -63,12 +71,13 @@ for (const [input, output] of [
     }
   });
 }
-child.on('exit', kill);
+child.on('exit', () => { childExited = true; kill(); });
 child.on('close', (code) => {
   clearTimeout(timer);
   kill();
   if (failure) {
     process.stderr.write('Repository command timed out or exceeded its output bound\n');
+    process.stderr.write('Repository diagnostic: ' + JSON.stringify({ reason: reason ?? 'spawn', childExited, outputBytes: bytes }) + '\n');
     process.exitCode = 124;
   } else process.exitCode = code ?? 1;
 });
