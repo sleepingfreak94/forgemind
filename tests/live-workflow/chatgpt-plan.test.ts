@@ -226,7 +226,7 @@ for (const phase of ['headers', 'body'])
 const task: LiveTask = { schemaVersion: 1, taskId: 'public-route', objective: 'fixture', readPaths: ['value.txt'],
   writePaths: ['value.txt'], checks: [], model: 'fixture-model', effort: 'low', maxModelRequests: 3,
   maxPromptBytes: 20000, maxOutputBytes: 20000, maxRuntimeMs: 5000, draftPr: false };
-for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
+for (const scenario of ['completed-crlf', 'quota', 'failed-stream', 'stream-error', 'unknown-stream-error'])
   test('authenticated broker handles public route ' + scenario + ' without fallback or replay', async () => {
     const f = connection(), nativeFetch = globalThis.fetch, actions: string[] = [], receipts: unknown[] = [];
     let calls = 0, observedReasoning: unknown;
@@ -245,7 +245,9 @@ for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
         observedReasoning = payload.reasoning;
         assert.equal(payload.store, false); assert.deepEqual(payload.tools, []);
         if (scenario === 'quota') return new Response('synthetic-secret-provider-body', { status: 429 });
-        const event = scenario === 'failed-stream' ? { type: 'response.failed', response: { error: { message: 'synthetic-secret-provider-body' } } } :
+        const event = scenario === 'failed-stream' ? { type: 'response.failed', response: { error: { code: 'server_error', type: 'server_error', message: 'synthetic-secret-provider-body' } } } :
+          scenario === 'stream-error' ? { type: 'error', code: 'rate_limit_exceeded', message: 'synthetic-secret-provider-body' } :
+          scenario === 'unknown-stream-error' ? { type: 'error', error: { code: 'synthetic-secret-provider-body', type: 'synthetic-secret-provider-body', message: 'synthetic-secret-provider-body' } } :
           { type: 'response.completed', response: { status: 'completed', model: task.model } };
         const bytes = Buffer.from('data:' + JSON.stringify(event) + '\r\n\r\n');
         // Exercise a CRLF boundary split across chunks and data fields without a space.
@@ -262,7 +264,13 @@ for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
       assert.deepEqual(observedReasoning, { effort: task.effort });
       assert.doesNotMatch(responseText, /synthetic-secret-provider-body/);
       if (scenario === 'completed-crlf') { broker.assertSuccess(); assert.equal(actions.at(-1), 'completed'); }
-      else { assert.throws(() => broker!.assertSuccess()); assert.equal(actions.at(-1), 'indeterminate'); }
+      else {
+        const expected = scenario === 'quota' ? 'Provider rejected request (429); no retry or model fallback' :
+          scenario === 'failed-stream' ? 'Provider stream failed (response.failed; code=server_error; type=server_error)' :
+          scenario === 'stream-error' ? 'Provider stream failed (error; code=rate_limit_exceeded; type=unknown)' :
+          'Provider stream failed (error; code=unknown; type=unknown)';
+        assert.throws(() => broker!.assertSuccess(), { message: expected }); assert.equal(actions.at(-1), 'indeterminate');
+      }
       assert.doesNotMatch(JSON.stringify(receipts), /synthetic-access-token/);
       assert.match(JSON.stringify(receipts), /owner-confirmed-server-credit-control-off/);
       try { const replay = await dispatch(); await replay.text(); } catch {}

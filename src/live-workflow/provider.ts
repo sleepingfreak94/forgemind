@@ -163,8 +163,13 @@ export async function startBroker(options: BrokerOptions): Promise<{
             .map(line => line.slice(5).replace(/^ /, '')).join('\n');
           if (data && data !== '[DONE]') {
             const event = JSON.parse(data);
-            if (event.type === 'response.failed' || event.type === 'error')
-              throw new Error('Provider stream failed');
+            if (event.type === 'response.failed' || event.type === 'error') {
+              // Fixed codes only: raw provider messages and arbitrary code/type values may contain secrets.
+              const error = event.type === 'response.failed' ? event.response?.error : event.error ?? event;
+              const code = ['server_error', 'rate_limit_exceeded', 'insufficient_quota', 'context_length_exceeded', 'invalid_request_error', 'invalid_api_key', 'permission_denied', 'invalid_prompt'].includes(error?.code) ? error.code : 'unknown';
+              const type = ['server_error', 'invalid_request_error', 'rate_limit_error', 'authentication_error', 'permission_error'].includes(error?.type) ? error.type : 'unknown';
+              throw new Error('Provider stream failed (' + event.type + '; code=' + code + '; type=' + type + ')');
+            }
             const items = [...(event.item ? [event.item] : []), ...(event.response?.output ?? [])];
             if (items.some((item) => !['message', 'reasoning'].includes(item.type)))
               throw new Error('Native tools forbidden');
