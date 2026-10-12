@@ -21,6 +21,10 @@ function reviewStore<T>(directory: string, action: (store: ChatGPTStore) => T): 
   const store = new ChatGPTStore(directory);
   try { store.lock(); return action(store); } finally { store.close(); }
 }
+function snapshot(directory: string, allowExpired = false) {
+  const store = new ChatGPTStore(directory);
+  try { return store.reviewedSnapshot(allowExpired); } finally { store.close(); }
+}
 /** Forgetting the acknowledgement also invalidates already-open sessions. */
 export function forgetChatGPTBillingReview(directory: string): void {
   reviewStore(directory, store => store.forgetBillingReview());
@@ -32,7 +36,9 @@ export async function openChatGPTPlanSession(directory: string, terminal: Billin
   const connection = await ensureChatGPTConnection(directory);
   if (!connection.email) throw new Error('A signed account email is required to match the account in browser settings');
   directory = realpathSync(directory);
-  let review = reviewStore(directory, store => store.billingReview(connection));
+  const selected = snapshot(directory);
+  if (record(selected.connection) !== record(connection)) throw new Error('Connection changed while opening account session');
+  let review = selected.review;
   if (!review) {
     const phrase = `credits-disabled ${identity(connection)}`;
     const answer = await terminal.confirm(
@@ -59,7 +65,9 @@ export class ChatGPTPlanSession {
     const state = sessions.get(this);
     if (!state) throw new Error('Authenticated subscription-only session required');
     signal.throwIfAborted(); check();
-    const review = reviewStore(state.directory, store => store.billingReview(state.connection));
+    const selected = snapshot(state.directory, true);
+    if (record(selected.connection) !== record(state.connection)) throw new Error('Selected ChatGPT connection changed or was disconnected');
+    const review = selected.review;
     if (review?.reviewId !== state.review.reviewId) throw new Error('Subscription-only account acknowledgement was reset or changed');
     const next = await ensureChatGPTConnection(state.directory, { minimumLifetimeMs, signal, expectedConnection: state.connection, check });
     signal.throwIfAborted(); check();
@@ -70,10 +78,10 @@ export class ChatGPTPlanSession {
     const state = sessions.get(this);
     if (!state) throw new Error('Authenticated subscription-only session required');
     if (Date.now() >= state.expiresAt) throw new Error('ChatGPT connection expired; reconnect required');
-    const current = loadChatGPTConnection(state.directory);
+    const selected = snapshot(state.directory), current = selected.connection;
     if (record(current) !== record(state.connection))
       throw new Error('Selected ChatGPT connection changed or was disconnected');
-    const review = reviewStore(state.directory, store => store.billingReview(current));
+    const review = selected.review;
     if (review?.reviewId !== state.review.reviewId) throw new Error('Subscription-only account acknowledgement was reset or changed');
   }
   binding(): { clientId: string; accountSha256: string; billingReview: string; confirmedAt: number; expiresAt: number } {

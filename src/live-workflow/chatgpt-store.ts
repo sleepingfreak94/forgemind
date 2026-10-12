@@ -278,6 +278,25 @@ export class ChatGPTStore {
     if (host.schemaVersion !== 1 || host.hostId !== c.hostId) throw authError('host identity mismatch');
     return c;
   }
+  /** Read-only stable owner snapshot. Readers never create the writer lock.
+   * Mutation/pending rotation and changes between observations fail closed. */
+  reviewedSnapshot(allowExpired = false): { connection: ChatGPTConnection; review?: ChatGPTBillingReview } {
+    const stable = () => {
+      if (this.read(LOCK, false) !== undefined) throw authError('account state is locked while being updated');
+      if (this.pendingRefresh()) throw authError('previous renewal is indeterminate or in progress');
+    };
+    stable();
+    const connection = this.connection(allowExpired);
+    if (!connection) throw authError('not connected; reconnect required');
+    const review = this.billingReview(connection);
+    stable();
+    const verified = this.connection(allowExpired);
+    const verifiedReview = verified ? this.billingReview(verified) : undefined;
+    stable();
+    if (!verified || connectionDigest(connection) !== connectionDigest(verified)
+      || JSON.stringify(review) !== JSON.stringify(verifiedReview)) throw authError('account state changed during read');
+    return { connection, ...(review ? { review } : {}) };
+  }
   save(connection: ChatGPTConnection): void {
     const c = validateConnection(connection);
     if (c.hostId !== this.getHostId()) throw authError('host identity mismatch');
@@ -339,10 +358,7 @@ export class ChatGPTStore {
 export function loadChatGPTConnection(directory: string): ChatGPTConnection {
   const store = new ChatGPTStore(directory);
   try {
-    store.lock();
-    const c = store.connection();
-    if (!c) throw authError('not connected; reconnect required');
-    return c;
+    return store.reviewedSnapshot().connection;
   } finally { store.close(); }
 }
 export function chatGPTStatus(directory: string): { connected: boolean; clientId?: string; expiresAt?: number; planUsageEnabled: boolean } {
