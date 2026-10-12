@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { readProject } from '../project-workflow/project.js';
 import { ProjectMemory } from '../memory/service.js';
@@ -7,6 +7,7 @@ import { databasePath } from '../memory/database.js';
 import { RunAuthority, privateDirectory } from './authority.js';
 import { NativeCodexModel } from './provider.js';
 import { readSources, plan, review, sha256, task as validateTask } from './validation.js';
+import { snapshotCheckCommands, assertSameCheckCommands, checkEvidence, reviewInstructions } from './review-evidence.js';
 import { planSchema, codingSchema, reviewSchema } from './contracts.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import { applyEdits } from './edits.js';
@@ -211,7 +212,8 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     if (options.browserQa) browserQa = new BrowserQaHandoff({ setup: options.browserQa, workspace: activeRoot,
       task, baselineSource: baseline, artifacts, authority, source: currentSource, signal });
     progress('Running baseline checks');
-    const beforeChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal);
+    const baselineCommands = snapshotCheckCommands(task.checks);
+    const beforeChecks = await runChecks(activeRoot, current, baselineCommands, directory, authority, signal);
     save('before-checks.json', beforeChecks);
     currentSource();
     const capture = async (phase: 'before' | 'after'): Promise<EvidenceManifest | undefined> => {
@@ -281,7 +283,9 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       throw new Error('Proposed edit is ignored or has no reviewable Git diff');
     save('candidate.patch', diff.diff);
     progress('Running candidate checks');
-    const afterChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal);
+    const candidateCommands = snapshotCheckCommands(task.checks);
+    assertSameCheckCommands(baselineCommands, candidateCommands);
+    const afterChecks = await runChecks(activeRoot, current, candidateCommands, directory, authority, signal);
     save('after-checks.json', afterChecks);
     currentSource();
     if (afterChecks.some((c) => !c.passed))
@@ -298,10 +302,18 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     currentSource();
     const browserQaReports = browserQa?.assertCurrent();
     browserQaReady = !!browserQa;
+    const candidateSources = readSources(activeRoot, [...new Set([...task.readPaths, ...task.writePaths])], task.maxPromptBytes);
+    const boundCheckEvidence = {
+      baseline: checkEvidence(baseline, baselineCommands, beforeChecks, readFileSync(join(artifacts, 'before-checks.json'))),
+      candidate: checkEvidence(current, candidateCommands, afterChecks, readFileSync(join(artifacts, 'after-checks.json'))),
+      baselineFiles: sources.map(({ path, sha256 }) => ({ path, sha256 })),
+      candidateFiles: candidateSources.map(({ path, sha256 }) => ({ path, sha256 })),
+    };
+    save('check-evidence.json', boundCheckEvidence);
     progress('Running independent review in a fresh Codex invocation');
     const verdict = review(
       await model.complete(
-        'You are the independent reviewer. You did not implement this candidate. Assess correctness, regressions, security, maintainability, policy and evidence. Return pass only if criteria are met; do not repair files. Report blocking findings as revise/blocked.',
+        reviewInstructions(task.draftPr),
         {
           objective: task.objective,
           plan: generated,
@@ -312,11 +324,8 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
           afterChecks,
           browserQa: browserQaReports ?? null,
           videos: { before: beforeVideo ?? null, after: afterVideo ?? null },
-          source: readSources(
-            activeRoot,
-            [...new Set([...task.readPaths, ...task.writePaths])],
-            task.maxPromptBytes,
-          ),
+          source: candidateSources,
+          checkEvidence: boundCheckEvidence,
         },
         reviewSchema,
         signal,
