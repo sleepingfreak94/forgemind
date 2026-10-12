@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { authError, ChatGPTStore, directScope, isAuthError, issuedClient, requestedChatGPTScopes, textField } from './chatgpt-store.js';
-import type { ChatGPTConnection } from './chatgpt-store.js';
+import type { ChatGPTConnection, ChatGPTRegistration } from './chatgpt-store.js';
 import { discoverIdentity, identityJSON, openAIIdentity, verifyIdentity } from './chatgpt-oidc.js';
 import type { ChatGPTTransport } from './chatgpt-oidc.js';
 
@@ -19,7 +19,7 @@ export interface ChatGPTConnectOptions {
 export interface ChatGPTConnectResult {
   clientId: string;
   subject: string;
-  /** Unix epoch milliseconds; reconnect is required on expiry. */
+  /** Unix epoch milliseconds; access may be renewed automatically before inference. */
   expiresAt: number;
   /** Granted direct scope only; this makes no billing/credit-setting claim. */
   planUsageEnabled: boolean;
@@ -29,7 +29,7 @@ function sameState(value: string | null, expected: string): boolean {
   if (!value || value.length !== expected.length) return false;
   return timingSafeEqual(Buffer.from(value), Buffer.from(expected));
 }
-function callbackListener(state: string, previous: ChatGPTConnection | undefined, signal: AbortSignal): {
+function callbackListener(state: string, previous: ChatGPTRegistration | undefined, signal: AbortSignal): {
   server: Server; result: Promise<CallbackResult>; dispose: () => void;
 } {
   let resolve!: (value: CallbackResult) => void, reject!: (error: Error) => void;
@@ -111,11 +111,13 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
       const cancel = (): void => controller.abort();
       const timer = setTimeout(cancel, timeout);
       options.signal?.addEventListener('abort', cancel, { once: true });
+      let releaseRefresh: ((() => void) & { check(): void }) | undefined;
       let listener: ReturnType<typeof callbackListener> | undefined;
       try {
+        releaseRefresh = store.lockRefresh();
         store.lock();
         const hostId = store.getHostId();
-        const previous = store.connection(true);
+        const previous = store.connection(true) ?? store.registration();
         const state = randomBytes(32).toString('base64url');
         const nonce = randomBytes(32).toString('base64url');
         const verifier = randomBytes(64).toString('base64url');
@@ -161,7 +163,9 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
           ...(identity.email === undefined ? {} : { email: identity.email }),
         };
         if (controller.signal.aborted) throw authError('sign-in cancelled');
+        releaseRefresh.check();
         store.save(connection);
+        store.finishRefresh();
         return { clientId: connection.clientId, subject: connection.subject, expiresAt: connection.expiresAt, planUsageEnabled: true };
       } catch (error) {
         // Only module-authored messages escape. Transport/browser/provider errors can contain credentials.
@@ -176,7 +180,7 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
           listener.server.closeAllConnections();
           await new Promise<void>(resolve => listener!.server.close(() => resolve()));
         }
-        store.close();
+        try { releaseRefresh?.(); } finally { store.close(); }
       }
     },
   };
