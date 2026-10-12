@@ -5,7 +5,7 @@ export function invocationBudget(taskRuntimeMs: number, taskSignal: AbortSignal)
   if (!Number.isSafeInteger(taskRuntimeMs) || taskRuntimeMs < 1 || taskRuntimeMs > 900000)
     throw new Error('Invalid invocation runtime');
   taskSignal.throwIfAborted();
-  const timeoutMs = Math.min(taskRuntimeMs, 300000), controller = new AbortController();
+  const timeoutMs = taskRuntimeMs, controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('Invocation deadline')), timeoutMs);
   timer.unref();
   return { timeoutMs, signal: AbortSignal.any([taskSignal, controller.signal]),
