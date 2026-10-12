@@ -1,0 +1,196 @@
+import { DatabaseSync } from 'node:sqlite';
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
+import type { Stats } from 'node:fs';
+import { isAbsolute, join, relative, sep } from 'node:path';
+import { digest, serialize } from '../context-engine/validation.js';
+import { canonicalWorkspace } from './documents.js';
+
+const legacySchema = [
+  'CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), project_id TEXT NOT NULL, workspace TEXT NOT NULL) STRICT',
+  `CREATE TABLE records (id TEXT PRIMARY KEY, digest TEXT NOT NULL, kind TEXT NOT NULL,
+    state TEXT NOT NULL, expires_at INTEGER, body TEXT) STRICT`,
+  "CREATE VIRTUAL TABLE memory_fts USING fts5(record_id UNINDEXED, title, text, tokenize='unicode61')",
+  'CREATE TABLE audit (sequence INTEGER PRIMARY KEY, action TEXT NOT NULL, record_id TEXT NOT NULL, at INTEGER NOT NULL) STRICT',
+  'CREATE TABLE deleted_sources (path TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY(path, sha256)) STRICT'
+];
+const historySchema = `CREATE TABLE run_history (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+  digest TEXT NOT NULL, body TEXT, recorded_at INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))) STRICT`;
+const weeklySchema = [
+  `CREATE TABLE weekly_control (singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    watermark INTEGER NOT NULL DEFAULT 0 CHECK(watermark >= 0),
+    last_due INTEGER NOT NULL DEFAULT 0 CHECK(last_due >= 0),
+    fence INTEGER NOT NULL DEFAULT 0 CHECK(fence >= 0),
+    lease_expiry INTEGER NOT NULL DEFAULT 0 CHECK(lease_expiry >= 0), lease_owner TEXT) STRICT`,
+  `CREATE TABLE weekly_summaries (id TEXT PRIMARY KEY, digest TEXT NOT NULL,
+    lower_sequence INTEGER NOT NULL CHECK(lower_sequence >= 0),
+    upper_sequence INTEGER NOT NULL CHECK(upper_sequence >= lower_sequence),
+    cursor INTEGER NOT NULL CHECK(cursor >= lower_sequence AND cursor <= upper_sequence),
+    due INTEGER NOT NULL CHECK(due >= 0),
+    state TEXT NOT NULL CHECK(state IN ('pending','complete','invalidated')), body TEXT) STRICT`,
+  `CREATE TABLE weekly_dependencies (summary_id TEXT NOT NULL REFERENCES weekly_summaries(id),
+    run_id TEXT NOT NULL, run_digest TEXT NOT NULL, PRIMARY KEY(summary_id, run_id)) STRICT`,
+  'CREATE INDEX weekly_dependencies_run ON weekly_dependencies(run_id, run_digest)',
+  "CREATE UNIQUE INDEX weekly_one_pending ON weekly_summaries(state) WHERE state = 'pending'",
+  `CREATE TRIGGER weekly_history_invalidation AFTER UPDATE OF revoked, body, digest ON run_history
+    WHEN NEW.revoked = 1 OR NEW.body IS NULL
+      OR OLD.body IS NOT NEW.body OR OLD.digest IS NOT NEW.digest
+    BEGIN
+      UPDATE weekly_summaries SET body = NULL, state = 'invalidated'
+      WHERE id IN (SELECT summary_id FROM weekly_dependencies WHERE run_id = OLD.id);
+    END`
+];
+function normalizeSQL(sql: string): string {
+  let result = '', delimiter = '';
+  for (let i = 0; i < sql.length; i++) {
+    const char = sql[i]!;
+    if (delimiter) {
+      result += char;
+      if (char === delimiter) {
+        if (sql[i + 1] === delimiter) result += sql[++i]!;
+        else delimiter = '';
+      }
+    } else if (char === "'" || char === '"' || char === '`' || char === '[') {
+      delimiter = char === '[' ? ']' : char;
+      result += char;
+    } else if (!/\s/.test(char)) result += char;
+  }
+  return result.endsWith(';') ? result.slice(0, -1) : result;
+}
+function checkSchema(db: DatabaseSync, statements: string[]): void {
+  for (const statement of statements) {
+    const name = /^CREATE (?:VIRTUAL TABLE|TABLE|UNIQUE INDEX|INDEX|TRIGGER) (\w+)/.exec(statement)?.[1];
+    const actual = db.prepare('SELECT sql FROM sqlite_schema WHERE name = ?').get(name ?? '')?.sql;
+    if (typeof actual !== 'string' || normalizeSQL(actual) !== normalizeSQL(statement)) throw new Error('corrupt memory schema');
+  }
+}
+function checkIdentity(db: DatabaseSync, projectId: string, root: string): void {
+  checkSchema(db, [legacySchema[0]!]);
+  const identities = db.prepare('SELECT * FROM identity').all(), identity = identities[0];
+  if (identities.length !== 1 || identity?.singleton !== 1 || identity.project_id !== projectId || identity.workspace !== root) {
+    throw new Error('memory database identity mismatch');
+  }
+}
+function checkWeekly(db: DatabaseSync): void {
+  checkSchema(db, weeklySchema);
+  const rows = db.prepare(`SELECT *, typeof(singleton) AS singleton_type, typeof(watermark) AS watermark_type,
+    typeof(last_due) AS last_due_type, typeof(fence) AS fence_type,
+    typeof(lease_expiry) AS lease_expiry_type, typeof(lease_owner) AS owner_type FROM weekly_control`).all();
+  const row = rows[0];
+  if (rows.length !== 1 || !row || row.singleton !== 1 || row.singleton_type !== 'integer'
+    || !['null', 'text'].includes(String(row.owner_type))) throw new Error('corrupt weekly control');
+  for (const field of ['watermark', 'last_due', 'fence', 'lease_expiry']) {
+    if (row[`${field}_type`] !== 'integer' || typeof row[field] !== 'number' || row[field] < 0) throw new Error('corrupt weekly control');
+  }
+}
+function privateStat(stat: Stats, directory: boolean): void {
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1)) throw new Error('unsafe memory storage');
+  if (typeof process.getuid === 'function' && (stat.uid !== process.getuid() || (stat.mode & 0o077))) throw new Error('memory storage must be private to the owner');
+}
+function privatePath(path: string, directory: boolean): Stats {
+  const stat = lstatSync(path); privateStat(stat, directory); return stat;
+}
+function identity(stat: Stats): string {
+  return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode, stat.uid, stat.nlink].join(':');
+}
+function checkSidecars(path: string): void {
+  let wal = false;
+  for (const suffix of ['-journal', '-wal', '-shm']) {
+    try { privatePath(path + suffix, false); if (suffix !== '-journal') wal = true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
+  if (wal) throw new Error('unsupported memory journal sidecars');
+}
+function supportedVersion(version: unknown): number {
+  if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw new Error('unsupported memory schema');
+  return version;
+}
+function preflight(path: string): { identity: string; header: Buffer } {
+  const before = privatePath(path, false);
+  checkSidecars(path);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(fd); privateStat(stat, false);
+    if (identity(stat) !== identity(before)) throw new Error('memory storage changed');
+    const header = Buffer.alloc(stat.size === 0 ? 0 : 100);
+    let offset = 0;
+    while (offset < header.length) {
+      const count = readSync(fd, header, offset, header.length - offset, offset);
+      if (!count) throw new Error('invalid memory database header');
+      offset += count;
+    }
+    if (header.length) {
+      if (!header.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) throw new Error('invalid memory database header');
+      supportedVersion(header.readUInt32BE(60));
+      if (header[18] !== 1 || header[19] !== 1) throw new Error('unsupported memory journal mode');
+    }
+    const after = privatePath(path, false), descriptor = fstatSync(fd); privateStat(descriptor, false);
+    if (identity(stat) !== identity(after) || identity(stat) !== identity(descriptor)) throw new Error('memory storage changed');
+    checkSidecars(path);
+    return { identity: identity(stat), header };
+  } finally { closeSync(fd); }
+}
+function probeVersion(path: string, header: Buffer): number {
+  if (!header.length) return 0;
+  // Recovery is an owner operation: read-only probing fails closed on hot journals.
+  const probe = new DatabaseSync(path, { readOnly: true, timeout: 1000 });
+  try { return supportedVersion(probe.prepare('PRAGMA user_version').get()?.user_version); }
+  finally { probe.close(); }
+}
+export function databasePath(directory: string, root: string, projectId: string): string {
+  return join(directory, digest(serialize({ root, projectId })), 'memory.sqlite');
+}
+/** Owner-only persistence. Do not expose this connection or its directory to an agent. */
+export class MemoryDatabase {
+  readonly db: DatabaseSync;
+  readonly path: string;
+  constructor(directory: string, root: string, projectId: string) {
+    canonicalWorkspace(root);
+    const offset = relative(root, directory);
+    if (!isAbsolute(directory) || !offset || !offset.startsWith(`..${sep}`) && offset !== '..' && !isAbsolute(offset)) throw new Error('memory storage must be outside the project');
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (realpathSync(directory) !== directory) throw new Error('memory storage must be canonical');
+    privatePath(directory, true);
+    const home = join(directory, digest(serialize({ root, projectId })));
+    mkdirSync(home, { mode: 0o700, recursive: true }); privatePath(home, true);
+    if (realpathSync(home) !== home) throw new Error('memory storage must be canonical');
+    this.path = databasePath(directory, root, projectId);
+    try { closeSync(openSync(this.path, 'wx', 0o600)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const checked = preflight(this.path), version = probeVersion(this.path, checked.header);
+    // Immediate revalidation narrows replacement races; it is not distributed locking.
+    const latest = preflight(this.path);
+    if (checked.identity !== latest.identity || !checked.header.equals(latest.header)) throw new Error('memory storage changed');
+    this.db = new DatabaseSync(this.path, { timeout: 1000, enableForeignKeyConstraints: true });
+    try {
+      if (this.db.prepare('PRAGMA journal_mode').get()?.journal_mode !== 'delete') throw new Error('unsupported memory journal mode');
+      this.db.exec('PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;');
+      this.transaction(() => {
+        if (this.db.prepare('PRAGMA user_version').get()?.user_version !== version) throw new Error('memory schema changed');
+        const fresh = version === 0 && !this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+        if (fresh) {
+          for (const statement of legacySchema) this.db.exec(statement);
+          this.db.prepare('INSERT INTO identity VALUES (1, ?, ?)').run(projectId, root);
+          this.db.exec("INSERT INTO memory_fts(memory_fts, rank) VALUES ('secure-delete', 1)");
+        } else {
+          checkIdentity(this.db, projectId, root);
+          checkSchema(this.db, legacySchema);
+        }
+        const history = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'run_history'").get();
+        if (version < 2 && !history) this.db.exec(historySchema);
+        else checkSchema(this.db, [historySchema]);
+        if (version !== 3) {
+          for (const statement of weeklySchema) this.db.exec(statement);
+          this.db.exec('INSERT INTO weekly_control(singleton) VALUES (1); PRAGMA user_version = 3;');
+        }
+        checkWeekly(this.db);
+      });
+    } catch (error) { this.db.close(); throw error; }
+  }
+  transaction<T>(work: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = work(); this.db.exec('COMMIT'); return result; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  close(): void { if (this.db.isOpen) this.db.close(); }
+}

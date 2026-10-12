@@ -1,0 +1,217 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { RunHistory } from '../../src/memory/run-history.js';
+import { bytes, digest, serialize } from '../../src/context-engine/validation.js';
+import { createWeeklyAccumulator, appendWeeklyRecords, finishWeeklySummary, validateWeeklySummary } from '../../src/memory/weekly-summary.js';
+import type { Accumulator, WeeklyScope } from '../../src/memory/weekly-summary.js';
+import type { RunRecord, TerminalRunInput } from '../../src/memory/run-contracts.js';
+import { fixture } from './fixture.js';
+
+function input(n: number, execution: 'authenticated' | 'fixture' = 'authenticated', paths = ['src/example.ts']): TerminalRunInput {
+  const source = digest('source'), candidate = digest('candidate');
+  return { schemaVersion: 1, runId: digest(`run-${n}`), taskId: `task-${n}`, execution, startedAt: 10, endedAt: 20,
+    outcome: 'completed', lastPhase: 'terminal', baselineSource: source, candidateSource: candidate, changedPaths: paths,
+    checks: [{ phase: 'baseline', id: 'baseline', outcome: 'failed', exitCode: 1, source, evidenceSha256: digest('baseline evidence') },
+      { phase: 'candidate', id: 'candidate', outcome: 'passed', exitCode: 0, source: candidate, evidenceSha256: digest('candidate evidence') }],
+    review: { outcome: 'pass', source: candidate, evidenceSha256: digest('review evidence') }, terminalReceiptSha256: digest('SECRET RECEIPT') };
+}
+function withHistory(fn: (history: RunHistory, scope: WeeklyScope) => void, upper = 4): void {
+  const f = fixture(); let history: RunHistory | undefined;
+  try {
+    history = new RunHistory(f.directory, f.root, () => 1000);
+    fn(history, { projectId: f.projectId, originalRoot: f.root, dueAt: 2000, lowerExclusive: 0, upperInclusive: upper });
+  } finally { history?.close(); f.dispose(); }
+}
+function clone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
+function complete(scope: WeeklyScope, records: readonly RunRecord[], options = {}): ReturnType<typeof finishWeeklySummary> {
+  return finishWeeklySummary(appendWeeklyRecords(createWeeklyAccumulator(scope, options), records, scope.upperInclusive));
+}
+function rehash(raw: Record<string, unknown>): Record<string, unknown> {
+  const { id: _id, digest: _digest, ...body } = raw;
+  const id = digest(serialize(body)); return { ...body, id, digest: digest(serialize({ ...body, id })) };
+}
+function restamp(r: RunRecord, patch: Partial<RunRecord>): RunRecord {
+  const { id: _id, digest: _digest, sequence, recordedAt, ...facts } = { ...r, ...patch };
+  return { ...facts, sequence, recordedAt,
+    id: digest(serialize({ projectId: facts.projectId, workspaceRoot: facts.workspaceRoot, runId: facts.runId })),
+    digest: digest(serialize(facts)) };
+}
+
+test('genuine history pages and serialized restarts produce identical scoped summaries', () => withHistory((history, scope) => {
+  for (let i = 1; i <= 4; i++) history.record(input(i, i % 2 ? 'authenticated' : 'fixture'));
+  const records = history.list({ afterSequence: 0, throughSequence: 4, limit: 100 });
+  const expected = complete(scope, records);
+  for (let split = 1; split < 4; split++) {
+    let state = appendWeeklyRecords(createWeeklyAccumulator(scope), records.slice(0, split), split);
+    state = appendWeeklyRecords(clone(state), records.slice(split), 4);
+    assert.equal(serialize(finishWeeklySummary(state)), serialize(expected));
+  }
+  let state = createWeeklyAccumulator(scope);
+  for (const r of records) state = appendWeeklyRecords(clone(state), [r], r.sequence);
+  assert.deepEqual(finishWeeklySummary(state), expected);
+  assert.equal(expected.authenticated.runs, 2); assert.equal(expected.fixture.runs, 2);
+  assert.equal(expected.selectedRuns, 2); assert.equal(expected.excludedFixtureCount, 2);
+  assert.equal(expected.dependencyCount, 4); assert.equal(expected.examples.length, 2);
+  assert.equal(expected.authenticated.checks.baselineFailed, 2);
+  assert.equal(expected.authenticated.checks.candidatePassed, 2);
+  assert.equal(expected.authenticated.reviews.pass, 2);
+  const all = complete(scope, records, { executionSelection: 'all' });
+  assert.equal(all.selectedRuns, 4); assert.equal(all.excludedFixtureCount, 0);
+  assert.equal(all.examples.length, 4); assert.equal(all.dependencySha256, expected.dependencySha256);
+  let rolling = digest(serialize({ domain: 'weekly-summary-dependencies-v1' }));
+  for (const r of records) rolling = digest(serialize({ domain: 'weekly-summary-dependency-v1', previous: rolling, id: r.id, digest: r.digest, sequence: r.sequence }));
+  assert.equal(expected.dependencySha256, rolling);
+  const { id, digest: claimed, ...body } = expected;
+  assert.equal(id, digest(serialize(body))); assert.equal(claimed, digest(serialize({ ...body, id })));
+  assert.deepEqual(validateWeeklySummary(clone(expected)), expected);
+  assert.ok(Object.isFrozen(expected)); assert.ok(Object.isFrozen(expected.authenticated.outcomes));
+  for (const forbidden of ['SECRET RECEIPT', 'objective', 'stdout', 'stderr', 'errors', 'findings', 'commands', 'exitCode']) assert.ok(!serialize(expected).includes(forbidden));
+}));
+
+test('whole UTF-8 provenance is bounded and omissions remain independent of page partitions', () => withHistory((history, scope) => {
+  const paths = Array.from({ length: 30 }, (_, i) => `src/${'界'.repeat(40)}-${i}.ts`);
+  const records = Array.from({ length: 12 }, (_, i) => history.record(input(i + 1, 'authenticated', i === 0 ? paths : ['src/界.ts'])));
+  const summary = complete(scope, records, { maxBytes: 65536 });
+  assert.equal(summary.examples.length, 8); assert.equal(summary.omittedExamples, 4);
+  assert.equal(summary.examples[0].sequence, 2);
+  assert.equal(summary.examples[0].changedPaths[0], 'src/界.ts');
+  assert.ok(bytes(serialize(summary)) <= summary.maxBytes);
+  let minimum = 1;
+  while (minimum <= 8192) {
+    try { createWeeklyAccumulator(scope, { maxBytes: minimum }); break; } catch { minimum++; }
+  }
+  assert.ok(minimum < 8192);
+  assert.throws(() => createWeeklyAccumulator(scope, { maxBytes: minimum - 1 }));
+  const small = complete(scope, records, { maxBytes: minimum });
+  assert.equal(small.examples.length, 0); assert.equal(small.omittedExamples, 12);
+  assert.ok(bytes(serialize(small)) <= minimum);
+  const budget = minimum + 1500;
+  const single = complete(scope, records, { maxBytes: budget });
+  let state = createWeeklyAccumulator(scope, { maxBytes: budget });
+  for (const r of records) state = appendWeeklyRecords(clone(state), [r], r.sequence);
+  assert.equal(serialize(finishWeeklySummary(state)), serialize(single));
+  assert.equal(single.selectedRuns, single.examples.length + single.omittedExamples);
+}), 12));
+
+test('scope, interval, cursor, ordering and all record integrity boundaries fail closed', () => withHistory((history, scope) => {
+  const a = history.record(input(1)), b = history.record(input(2));
+  const state = createWeeklyAccumulator(scope);
+  assert.throws(() => finishWeeklySummary(state));
+  assert.throws(() => appendWeeklyRecords(state, [], 0));
+  assert.throws(() => appendWeeklyRecords(state, [], 5));
+  assert.throws(() => appendWeeklyRecords(state, [a], 0));
+  assert.throws(() => appendWeeklyRecords(state, [b, a], 2));
+  assert.throws(() => appendWeeklyRecords(state, [a, { ...a, sequence: 2 }], 2));
+  assert.throws(() => appendWeeklyRecords(state, Array(101).fill(a), 4));
+  const next = appendWeeklyRecords(state, [a], 1);
+  assert.throws(() => appendWeeklyRecords(next, [a], 2));
+  const narrowed = createWeeklyAccumulator({ ...scope, lowerExclusive: 1 });
+  assert.throws(() => appendWeeklyRecords(narrowed, [a], 4));
+  for (const patch of [
+    { id: digest('wrong') }, { digest: digest('wrong') }, { taskId: 'other-task' },
+    { projectId: 'another-project' }, { workspaceRoot: '/another-root' }, { sequence: 0 },
+    { sequence: 1.5 }, { sequence: -1 }, { sequence: 5 }, { recordedAt: -1 }, { recordedAt: Infinity },
+    { schemaVersion: 2 }, { outcome: 'unknown' }, { lastPhase: 'unknown' }, { runId: 'bad' },
+    { objective: 'SECRET' }, { changedPaths: ['../secret'] }, { checks: [{ ...a.checks[0], command: 'SECRET' }] },
+    { review: { ...a.review, findings: ['SECRET'] } }, { terminalReceiptSha256: 'bad' }
+  ]) assert.throws(() => appendWeeklyRecords(state, [{ ...a, ...patch } as RunRecord], 4));
+  const badFacts = restamp(a, { checks: [{ ...a.checks[0], exitCode: 0 }] });
+  assert.throws(() => appendWeeklyRecords(state, [badFacts], 4));
+  const malformedPath = restamp(a, { changedPaths: [`src/${'x'.repeat(513)}`] });
+  assert.throws(() => appendWeeklyRecords(state, [malformedPath], 4));
+  const throughGap = appendWeeklyRecords(next, [], 4);
+  const finished = finishWeeklySummary(throughGap);
+  assert.equal(finished.dependencyCount, 1); assert.equal(finished.cursor, 4);
+  assert.equal(finished.selectedRuns, 1);
+}));
+
+test('descriptor-safe boundaries never invoke getters and reject unsafe shapes', () => withHistory((history, scope) => {
+  const record = history.record(input(1)); const state = createWeeklyAccumulator(scope);
+  let calls = 0;
+  const getter = () => { calls++; return 1; };
+  const badRecord = { ...record }; Object.defineProperty(badRecord, 'sequence', { enumerable: true, get: getter });
+  assert.throws(() => appendWeeklyRecords(state, [badRecord], 4));
+  const badState = { ...state }; Object.defineProperty(badState, 'cursor', { enumerable: true, get: getter });
+  assert.throws(() => finishWeeklySummary(badState));
+  const badScope = { ...scope }; Object.defineProperty(badScope, 'dueAt', { enumerable: true, get: getter });
+  assert.throws(() => createWeeklyAccumulator(badScope));
+  const array = [record]; Object.defineProperty(array, '0', { enumerable: true, get: getter });
+  assert.throws(() => appendWeeklyRecords(state, array, 4));
+  const summary = complete(scope, [record]);
+  const badSummary = clone(summary); Object.defineProperty(badSummary.examples[0], 'taskId', { enumerable: true, get: getter });
+  assert.throws(() => validateWeeklySummary(badSummary)); assert.equal(calls, 0);
+  for (const bad of [Object.assign(Object.create({ inherited: true }), record), { ...record, [Symbol('secret')]: 1 }])
+    assert.throws(() => appendWeeklyRecords(state, [bad], 4));
+  assert.throws(() => appendWeeklyRecords(state, new Array(1), 4));
+  const nonenumerable = { ...record }; Object.defineProperty(nonenumerable, 'hidden', { value: 'secret' });
+  assert.throws(() => appendWeeklyRecords(state, [nonenumerable], 4));
+  const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+  assert.throws(() => validateWeeklySummary(cyclic));
+  const options = {}; Object.defineProperty(options, 'maxBytes', { enumerable: true, get: getter });
+  assert.throws(() => createWeeklyAccumulator(scope, options)); assert.equal(calls, 0);
+}));
+
+test('framing, malformed serialized states, summary hashes and byte budgets are validated', () => withHistory((history, scope) => {
+  const record = history.record(input(1)); const summary = complete(scope, [record]);
+  for (const patch of [
+    { schemaVersion: 2 }, { historical: false }, { trust: 'trusted' }, { executionSelection: 'fixture' },
+    { cursor: 3 }, { maxBytes: 65537 }, { maxBytes: 1 }, { dueAt: -1 }, { lowerExclusive: 5 },
+    { upperInclusive: 0 }, { projectId: 'invalid project' }, { originalRoot: '/a/../b' },
+    { dependencyCount: 2 }, { selectedRuns: 2 }, { excludedFixtureCount: 1 }, { omittedExamples: 1 },
+    { dependencySha256: 'bad' }, { extra: 'unknown' }
+  ]) assert.throws(() => validateWeeklySummary(rehash({ ...summary, ...patch })));
+  assert.throws(() => validateWeeklySummary({ ...summary, id: digest('wrong') }));
+  assert.throws(() => validateWeeklySummary({ ...summary, digest: digest('wrong') }));
+  assert.throws(() => validateWeeklySummary({ ...summary, dueAt: summary.dueAt + 1 }));
+  for (const patch of [
+    { sequence: 0 }, { runId: 'bad' }, { id: digest('wrong') }, { taskId: 'bad task' },
+    { changedPaths: ['../bad'] }, { stdout: 'SECRET' }, { checks: [{ ...summary.examples[0].checks[0], rawReceipt: 'SECRET' }] },
+    { review: { source: digest('other'), evidenceSha256: digest('evidence') } }
+  ]) assert.throws(() => validateWeeklySummary(rehash({ ...summary, examples: [{ ...summary.examples[0], ...patch }] })));
+  const initial = createWeeklyAccumulator(scope);
+  const malformed = clone(initial) as unknown as Record<string, unknown>;
+  delete malformed.omittedExamples; assert.throws(() => finishWeeklySummary(malformed as unknown as Accumulator));
+  assert.throws(() => appendWeeklyRecords({ ...initial, unknown: true } as Accumulator, [], 4));
+  assert.throws(() => createWeeklyAccumulator({ ...scope, extra: true } as WeeklyScope));
+  for (const maxBytes of [0, -1, 1.5, 65537, Infinity]) assert.throws(() => createWeeklyAccumulator(scope, { maxBytes }));
+  assert.throws(() => createWeeklyAccumulator(scope, { executionSelection: 'fixture' } as never));
+  const badCounters = clone(initial); (badCounters.authenticated.outcomes as Record<string, number>).completed = 1;
+  assert.throws(() => appendWeeklyRecords(badCounters, [], 4));
+  const empty = finishWeeklySummary(appendWeeklyRecords(initial, [], 4));
+  assert.equal(empty.dependencyCount, 0); assert.equal(empty.examples.length, 0);
+  assert.throws(() => validateWeeklySummary(rehash({ ...empty, dependencySha256: digest('nonempty') })));
+}));
+
+test('checked addition rejects overflow without retaining history or changing prior state', () => withHistory((history, scope) => {
+  const record = history.record(input(1));
+  const state = clone(createWeeklyAccumulator({ ...scope, upperInclusive: Number.MAX_SAFE_INTEGER }));
+  const mutable = state as unknown as Record<string, unknown>;
+  mutable.cursor = 1; mutable.dependencyCount = 1; mutable.selectedRuns = 1; mutable.omittedExamples = 1;
+  mutable.dependencySha256 = digest('opaque trusted accumulator commitment');
+  const c = state.authenticated as unknown as Record<string, unknown>;
+  c.runs = 1; (c.outcomes as Record<string, number>).completed = 1;
+  (c.phases as Record<string, number>).terminal = 1; (c.reviews as Record<string, number>).pass = 1;
+  // A malformed counter sum must fail even when each individual count is safe.
+  const checks = c.checks as Record<string, number>;
+  checks.baselinePassed = Number.MAX_SAFE_INTEGER; checks.candidatePassed = 1;
+  assert.throws(() => appendWeeklyRecords(state, [{ ...record, sequence: 2 }], 2));
+  assert.equal(checks.baselinePassed, Number.MAX_SAFE_INTEGER);
+  assert.ok(!Object.keys(state).includes('records')); assert.ok(!Object.keys(state).includes('ids'));
+}));
+
+test('changed and revoked dependencies rebuild a new historical identity', () => withHistory((history, scope) => {
+  const a = history.record(input(1)), b = history.record(input(2, 'fixture'));
+  const original = complete(scope, [a, b]);
+  const changed = restamp(b, { terminalReceiptSha256: digest('changed receipt') });
+  const rebuilt = complete(scope, [a, changed]);
+  assert.notEqual(rebuilt.dependencySha256, original.dependencySha256);
+  assert.notEqual(rebuilt.id, original.id); assert.notEqual(rebuilt.digest, original.digest);
+  assert.deepEqual(rebuilt.examples, original.examples);
+  history.revoke(b.id, b.digest);
+  const active = history.list({ afterSequence: 0, throughSequence: scope.upperInclusive, limit: 100 });
+  const revoked = complete(scope, active);
+  assert.equal(revoked.dependencyCount, 1); assert.notEqual(revoked.id, original.id);
+  assert.notEqual(revoked.digest, original.digest);
+  // Historical validation remains structural; it does not consult current history.
+  assert.deepEqual(validateWeeklySummary(original), original);
+}));
