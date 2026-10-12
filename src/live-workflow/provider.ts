@@ -5,7 +5,7 @@ import { readFileSync, lstatSync, realpathSync, mkdirSync, mkdtempSync, writeFil
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { NATIVE_ENVELOPE_MAX_BYTES, decodeNativeRequest, outboundPromptBytes } from './request-budget.js';
-import { sha256 } from './validation.js';
+import { responseBudget, sha256 } from './validation.js';
 import { supervised, inferenceProfile, runtimeFiles } from './process.js';
 import { invocationBudget } from './invocation-budget.js';
 import { providerBatches } from './provider-batches.js';
@@ -34,6 +34,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
   close: () => Promise<void>;
   assertSuccess: () => void;
 }> {
+  const budget = responseBudget(options.task), task = structuredClone(options.task);
   if (options.planSession) {
     assertChatGPTPlanSession(options.planSession);
     if (options.transport || options.credentials) throw new Error('Production and fixture dependencies cannot be combined');
@@ -67,7 +68,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
         chunks.push(b);
       }
       const body = JSON.parse(decodeNativeRequest(Buffer.concat(chunks), req.headers['content-encoding']));
-      if (body.model !== options.task.model || !Array.isArray(body.input) || body.stream !== true)
+      if (body.model !== task.model || !Array.isArray(body.input) || body.stream !== true)
         throw new Error('Provider model/shape mismatch');
       if (body.input.some((item:Record<string,unknown>)=>!item||typeof item!=='object'||(item.type!==undefined&&!['message','additional_tools'].includes(String(item.type)))))
         throw new Error('Tool input denied');
@@ -76,7 +77,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
       const inputMessages = body.input.filter((item:Record<string,unknown>)=>item.type!=='additional_tools');
       // Model has no native tools. Every repository side effect occurs in trusted owner adapters.
       const outbound = {
-        model: options.task.model,
+        model: task.model,
         instructions: body.instructions,
         input: inputMessages,
         stream: true,
@@ -85,13 +86,13 @@ export async function startBroker(options: BrokerOptions): Promise<{
         tool_choice: 'none',
         parallel_tool_calls: false,
         // Native CLI uses "none" internally; the public API disables summaries by omission.
-        reasoning: { effort: options.task.effort },
+        reasoning: { effort: task.effort },
         text: body.text,
         include: [],
         service_tier: 'default',
       };
       const payload = JSON.stringify(outbound);
-      const promptBytes = outboundPromptBytes(payload, options.task.maxPromptBytes);
+      const promptBytes = outboundPromptBytes(payload, task.maxPromptBytes);
       const requestNumber = options.authority.reserveRequest(promptBytes);
       const digest = sha256(payload),
         source = options.source();
@@ -100,12 +101,13 @@ export async function startBroker(options: BrokerOptions): Promise<{
         source,
         detail: {
           endpoint: options.planSession ? 'https://api.openai.com/v1/responses' : 'https://chatgpt.com/backend-api/codex/responses',
-          model: options.task.model,
-          effort: options.task.effort,
+          model: task.model,
+          effort: task.effort,
           requestNumber,
           promptSha256: digest,
           promptBytes,
-          maxResponseBytes: options.task.maxOutputBytes,
+          maxResponseBytes: budget.maxResponseBytes,
+          maxGeneratedOutputBytes: budget.maxGeneratedOutputBytes,
           paidApiFallback: false,
           ...(options.planSession ? { connection: options.planSession.binding() } : {}),
         },
@@ -146,7 +148,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
         try { return decoder.decode(bytes, { stream: bytes !== undefined }); }
         catch { throw new Error('Provider stream invalid UTF-8'); }
       };
-      for await (const raw of providerBatches(upstream.body, signal, options.task.maxOutputBytes)) {
+      for await (const raw of providerBatches(upstream.body, signal, budget.maxResponseBytes)) {
         assertForwardable();
         pending += decode(raw);
         let boundary: RegExpExecArray | null;
@@ -192,7 +194,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
             if (event.type === 'response.completed') {
               if (event.response?.status !== 'completed') throw new Error('Incomplete response');
               completed = true;
-              if (event.response.model !== options.task.model) throw new Error('Model fallback denied');
+              if (event.response.model !== task.model) throw new Error('Model fallback denied');
             }
           }
           if (!res.write(frame + '\n\n')) {
@@ -232,7 +234,7 @@ export async function startBroker(options: BrokerOptions): Promise<{
       } else res.destroy();
     } finally { res.off('close', disconnect); }
   });
-  server.requestTimeout = options.task.maxRuntimeMs;
+  server.requestTimeout = task.maxRuntimeMs;
   server.headersTimeout = 10000;
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -270,7 +272,10 @@ export class NativeCodexModel implements ModelPort {
     schema: object,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const { task, authority } = this.options;
+    const { authority } = this.options, budget = responseBudget(this.options.task);
+    const task = structuredClone(this.options.task);
+    task.maxOutputBytes = budget.maxGeneratedOutputBytes;
+    if (Object.hasOwn(task, "maxProviderResponseBytes")) task.maxProviderResponseBytes = budget.maxResponseBytes;
     if (this.options.planSession) {
       assertChatGPTPlanSession(this.options.planSession, false);
       // Reject mixed fixture credentials before any owner-network action.

@@ -34,6 +34,18 @@ function integer(value: unknown, max: number): asserts value is number {
   if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > max)
     throw new Error("Invalid bound");
 }
+/** Resolve a fixed transport allowance without accepting inherited fields or accessors. */
+export function responseBudget(raw: Pick<LiveTask, "maxOutputBytes" | "maxProviderResponseBytes">):
+  Readonly<{ maxResponseBytes: number; maxGeneratedOutputBytes: number }> {
+  const output = raw.maxOutputBytes;
+  integer(output, 2097152);
+  const field = Object.getOwnPropertyDescriptor(raw, "maxProviderResponseBytes");
+  if ((!field && "maxProviderResponseBytes" in raw) || (field && !("value" in field)))
+    throw new Error("Invalid response budget");
+  const response = field ? field.value : output;
+  integer(response, 33554432);
+  return Object.freeze({ maxResponseBytes: response, maxGeneratedOutputBytes: output });
+}
 export function sourcePath(value: unknown): asserts value is string {
   text(value, 1024);
   if (
@@ -98,6 +110,7 @@ export function task(raw: unknown): LiveTask {
     "maxModelRequests",
     "maxPromptBytes",
     "maxOutputBytes",
+    "maxProviderResponseBytes",
     "maxRuntimeMs",
     "draftPr",
   ]);
@@ -145,7 +158,7 @@ export function task(raw: unknown): LiveTask {
   }
   integer(raw.maxModelRequests, 12);
   integer(raw.maxPromptBytes, 262144);
-  integer(raw.maxOutputBytes, 2097152);
+  responseBudget(raw as unknown as LiveTask);
   integer(raw.maxRuntimeMs, 900000);
   return structuredClone(raw) as unknown as LiveTask;
 }

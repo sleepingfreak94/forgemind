@@ -16,6 +16,8 @@ export interface LiveTask {
   maxModelRequests: number;
   maxPromptBytes: number;
   maxOutputBytes: number;
+  /** Raw provider stream allowance; omitted uses maxOutputBytes. Does not expand generated output. */
+  maxProviderResponseBytes?: number;
   maxRuntimeMs: number;
   draftPr: boolean;
 }
