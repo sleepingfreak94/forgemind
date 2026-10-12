@@ -141,10 +141,14 @@ export async function startBroker(options: BrokerOptions): Promise<{
       };
       let pending = '',
         completed = false;
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder('utf-8', { fatal: true });
+      const decode = (bytes?: Uint8Array) => {
+        try { return decoder.decode(bytes, { stream: bytes !== undefined }); }
+        catch { throw new Error('Provider stream invalid UTF-8'); }
+      };
       for await (const raw of providerBatches(upstream.body, signal, options.task.maxOutputBytes)) {
         assertForwardable();
-        pending += decoder.decode(raw, { stream: true });
+        pending += decode(raw);
         let boundary: RegExpExecArray | null;
         while ((boundary = /\r\n\r\n|\n\n|\r\r/.exec(pending))) {
           const frame = pending.slice(0, boundary.index).split(/\r\n|\r|\n/).join('\n');
@@ -152,7 +156,14 @@ export async function startBroker(options: BrokerOptions): Promise<{
           const data = frame.split('\n').filter(line => line.startsWith('data:'))
             .map(line => line.slice(5).replace(/^ /, '')).join('\n');
           if (data && data !== '[DONE]') {
-            const event = JSON.parse(data);
+            let event;
+            try { event = JSON.parse(data); }
+            catch { throw new Error('Provider stream invalid JSON'); }
+            if (event.type === 'response.incomplete') {
+              const reason = event.response?.incomplete_details?.reason;
+              throw new Error('Provider response incomplete (reason=' +
+                (reason === 'max_output_tokens' || reason === 'content_filter' ? reason : 'unknown') + ')');
+            }
             if (event.type === 'response.failed' || event.type === 'error') {
               // Fixed codes only: raw provider messages and arbitrary code/type values may contain secrets.
               const error = event.type === 'response.failed' ? event.response?.error : event.error ?? event;
@@ -197,7 +208,9 @@ export async function startBroker(options: BrokerOptions): Promise<{
           }
         }
       }
-      if (!completed || pending.trim()) throw new Error('Missing terminal provider completion');
+      pending += decode();
+      if (pending.trim()) throw new Error('Provider stream ended with unfinished frame (completed=' + completed + ')');
+      if (!completed) throw new Error('Provider stream ended without terminal completion');
       assertForwardable();
       receipt.finish('completed', digest);
       receipt = undefined;
