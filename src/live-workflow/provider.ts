@@ -166,9 +166,24 @@ export async function startBroker(options: BrokerOptions): Promise<{
             if (event.type === 'response.failed' || event.type === 'error') {
               // Fixed codes only: raw provider messages and arbitrary code/type values may contain secrets.
               const error = event.type === 'response.failed' ? event.response?.error : event.error ?? event;
-              const code = ['server_error', 'rate_limit_exceeded', 'insufficient_quota', 'context_length_exceeded', 'invalid_request_error', 'invalid_api_key', 'permission_denied', 'invalid_prompt'].includes(error?.code) ? error.code : 'unknown';
+              const code = [
+                'server_error', 'rate_limit_exceeded', 'insufficient_quota', 'context_length_exceeded',
+                'invalid_request_error', 'invalid_api_key', 'permission_denied', 'invalid_prompt',
+                'invalid_json_schema', 'model_not_found', 'unsupported_parameter', 'unsupported_value', 'invalid_value',
+                'upstream_error', 'internal_error', 'unknown_error', 'usage_limit_reached',
+                'subscription_sharing_user_not_eligible', 'subscription_sharing_usage_limit_exceeded',
+                'subscription_sharing_usage_unavailable', 'subscription_sharing_unsupported_capability',
+                'subscription_sharing_route_not_supported', 'subscription_sharing_invalid_user',
+                'chatpass_v2_scope_not_authorized', 'chatpass_v2_invalid_authorization_context',
+                'subscription_sharing_user_unavailable',
+              ].includes(error?.code) ? error.code : 'unknown';
               const type = ['server_error', 'invalid_request_error', 'rate_limit_error', 'authentication_error', 'permission_error'].includes(error?.type) ? error.type : 'unknown';
-              throw new Error('Provider stream failed (' + event.type + '; code=' + code + '; type=' + type + ')');
+              const param = [
+                'model', 'service_tier', 'reasoning', 'reasoning.effort', 'text', 'text.format', 'text.verbosity',
+                'text.format.type', 'text.format.strict', 'text.format.schema', 'text.format.name', 'include',
+                'instructions', 'tool_choice', 'tools', 'input', 'background', 'parallel_tool_calls', 'store', 'stream',
+              ].includes(error?.param) ? error.param : 'unknown';
+              throw new Error('Provider stream failed (' + event.type + '; code=' + code + '; type=' + type + '; param=' + param + ')');
             }
             const items = [...(event.item ? [event.item] : []), ...(event.response?.output ?? [])];
             if (items.some((item) => !['message', 'reasoning'].includes(item.type)))
