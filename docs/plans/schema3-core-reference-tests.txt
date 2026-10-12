@@ -1,0 +1,287 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { databasePath, MemoryDatabase } from '../../src/memory/database.js';
+import { fixture } from './fixture.js';
+
+const legacyDDL = `
+  CREATE TABLE identity (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), project_id TEXT NOT NULL, workspace TEXT NOT NULL) STRICT;
+  CREATE TABLE records (id TEXT PRIMARY KEY, digest TEXT NOT NULL, kind TEXT NOT NULL,
+    state TEXT NOT NULL, expires_at INTEGER, body TEXT) STRICT;
+  CREATE VIRTUAL TABLE memory_fts USING fts5(record_id UNINDEXED, title, text, tokenize='unicode61');
+  CREATE TABLE audit (sequence INTEGER PRIMARY KEY, action TEXT NOT NULL, record_id TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+  CREATE TABLE deleted_sources (path TEXT NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY(path, sha256)) STRICT;
+  INSERT INTO memory_fts(memory_fts, rank) VALUES ('secure-delete', 1);
+`;
+const historyDDL = `CREATE TABLE run_history (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+  digest TEXT NOT NULL, body TEXT, recorded_at INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1))) STRICT;`;
+function store(f: ReturnType<typeof fixture>) {
+  const directory = join(f.base, 'schema-state'), path = databasePath(directory, f.root, f.projectId);
+  mkdirSync(directory, { mode: 0o700 }); mkdirSync(dirname(path), { mode: 0o700 });
+  closeSync(openSync(path, 'wx', 0o600));
+  return { directory, path };
+}
+function legacy(f: ReturnType<typeof fixture>, version = 1, projectId = f.projectId) {
+  const selected = store(f);
+  inspect(selected.path, db => {
+    db.exec(legacyDDL);
+    db.prepare('INSERT INTO identity VALUES (1, ?, ?)').run(projectId, f.root);
+    db.prepare('INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)').run('legacy', 'digest', 'decision', 'active', null, '{"legacy":true}');
+    db.prepare('INSERT INTO memory_fts(record_id, title, text) VALUES (?, ?, ?)').run('legacy', 'SQLite storage', 'Durable decisions');
+    db.exec("INSERT INTO audit VALUES (7, 'create', 'legacy', 1000); INSERT INTO deleted_sources VALUES ('docs/old.md', 'old-sha');");
+    db.exec(`PRAGMA user_version = ${version}`);
+  });
+  return selected;
+}
+function inspect<T>(path: string, work: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(path);
+  try { return work(db); } finally { db.close(); }
+}
+function contents(db: DatabaseSync) {
+  return ['identity', 'records', 'memory_fts', 'audit', 'deleted_sources'].map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+}
+function snapshot(path: string) {
+  return inspect(path, db => ({
+    version: db.prepare('PRAGMA user_version').get()?.user_version,
+    schema: db.prepare('SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name').all(),
+    contents: contents(db),
+    history: db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'run_history'").get() ? db.prepare('SELECT * FROM run_history ORDER BY sequence').all() : null
+  }));
+}
+function sidecars(path: string) {
+  return ['-journal', '-wal', '-shm'].map(suffix => existsSync(path + suffix));
+}
+function rejectsUnchanged(f: ReturnType<typeof fixture>, selected: ReturnType<typeof store>, pattern: RegExp) {
+  const before = snapshot(selected.path), bytes = readFileSync(selected.path), files = sidecars(selected.path);
+  assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), pattern);
+  assert.deepEqual(readFileSync(selected.path), bytes);
+  assert.deepEqual(snapshot(selected.path), before);
+  assert.deepEqual(sidecars(selected.path), files);
+  inspect(selected.path, db => db.exec('BEGIN EXCLUSIVE; ROLLBACK;'));
+}
+
+test('fresh schema 0 becomes schema 3 with STRICT run_history', () => {
+  const f = fixture(); try {
+    const selected = store(f);
+    inspect(selected.path, db => assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 0));
+    const memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try {
+      const db = memory.db;
+      assert.equal(db.prepare('PRAGMA user_version').get()?.user_version, 3);
+      assert.equal(db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'run_history'").get()?.strict, 1);
+      assert.deepEqual(db.prepare('PRAGMA table_info(run_history)').all().map(row => row.name), ['sequence', 'id', 'digest', 'body', 'recorded_at', 'revoked']);
+      db.exec("INSERT INTO run_history(id, digest, body, recorded_at) VALUES ('first', 'digest', NULL, 1000)");
+      assert.equal(db.prepare('SELECT revoked FROM run_history').get()?.revoked, 0);
+      assert.throws(() => db.exec("INSERT INTO run_history(id, digest, recorded_at) VALUES ('first', 'digest', 1000)"));
+      assert.throws(() => db.exec('UPDATE run_history SET revoked = 2'));
+      assert.throws(() => db.exec("UPDATE run_history SET recorded_at = 'invalid'"));
+      db.exec("DELETE FROM run_history; INSERT INTO run_history(id, digest, recorded_at) VALUES ('second', 'digest', 1001)");
+      assert.equal(db.prepare('SELECT sequence FROM run_history').get()?.sequence, 2);
+    } finally { memory.close(); }
+  } finally { f.dispose(); }
+});
+test('explicit legacy schema 1 retains records, FTS, audit and deleted sources', () => {
+  const f = fixture(); try {
+    const selected = legacy(f), before = inspect(selected.path, contents);
+    const memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try {
+      assert.equal(memory.db.prepare('PRAGMA user_version').get()?.user_version, 3);
+      assert.equal(memory.db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'run_history'").get()?.strict, 1);
+      assert.deepEqual(contents(memory.db), before);
+      assert.equal(memory.db.prepare('SELECT record_id FROM memory_fts WHERE memory_fts MATCH ?').get('SQLite')?.record_id, 'legacy');
+    } finally { memory.close(); }
+  } finally { f.dispose(); }
+});
+test('schema 3 restart preserves schema and history', () => {
+  const f = fixture(); try {
+    const selected = store(f), memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try { memory.db.exec("INSERT INTO run_history(id, digest, body, recorded_at) VALUES ('saved', 'digest', 'body', 1000)"); } finally { memory.close(); }
+    const before = snapshot(selected.path), bytes = readFileSync(selected.path);
+    const schemaVersion = inspect(selected.path, db => db.prepare('PRAGMA schema_version').get());
+    const reopened = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try {
+      assert.deepEqual(snapshot(selected.path), before);
+      assert.deepEqual(reopened.db.prepare('PRAGMA schema_version').get(), schemaVersion);
+      assert.deepEqual(readFileSync(selected.path), bytes);
+    } finally { reopened.close(); }
+  } finally { f.dispose(); }
+});
+test('legacy identity mismatch rolls back schema, version and data', () => {
+  const f = fixture(); try {
+    const selected = legacy(f, 1, 'another-project'), before = snapshot(selected.path);
+    assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /identity mismatch/);
+    assert.deepEqual(snapshot(selected.path), before);
+    rejectsUnchanged(f, selected, /identity mismatch/);
+  } finally { f.dispose(); }
+});
+test('future schema rejection preserves schema, version and data', () => {
+  const f = fixture(); try {
+    const selected = legacy(f, 4), before = snapshot(selected.path);
+    assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /unsupported memory schema/);
+    assert.deepEqual(snapshot(selected.path), before);
+    rejectsUnchanged(f, selected, /unsupported memory schema/);
+  } finally { f.dispose(); }
+});
+
+for (const version of [0, 1, 2]) test(`populated genuine schema ${version} migrates without rebuilding legacy data`, () => {
+  const f = fixture(); try {
+    const selected = legacy(f, version);
+    inspect(selected.path, db => {
+      for (const state of ['expired', 'revoked', 'superseded']) {
+        db.prepare('INSERT INTO records VALUES (?, ?, ?, ?, ?, ?)').run(state, `digest-${state}`, 'decision', state, 123, null);
+      }
+      if (version === 2) {
+        db.exec(historyDDL);
+        db.exec(`INSERT INTO run_history(sequence, id, digest, body, recorded_at, revoked) VALUES
+          (2, 'retained', 'd1', 'original body', 1001, 0),
+          (5, 'redacted', 'd2', NULL, 1002, 0), (9, 'revoked', 'd3', NULL, 1003, 1),
+          (20, 'removed', 'd4', NULL, 1004, 0);
+          DELETE FROM run_history WHERE sequence = 20;`);
+      }
+    });
+    const before = snapshot(selected.path);
+    const oldSequence = version === 2 ? inspect(selected.path, db => db.prepare('SELECT * FROM sqlite_sequence').all()) : null;
+    const oldHistoryRoot = version === 2 ? inspect(selected.path, db => db.prepare("SELECT rootpage, sql FROM sqlite_schema WHERE name = 'run_history'").get()) : null;
+    const memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try {
+      assert.equal(memory.db.prepare('PRAGMA user_version').get()?.user_version, 3);
+      assert.deepEqual(contents(memory.db), before.contents);
+      assert.equal(memory.db.prepare("SELECT record_id FROM memory_fts WHERE memory_fts MATCH 'SQLite'").get()?.record_id, 'legacy');
+      if (version === 2) {
+        assert.deepEqual(memory.db.prepare('SELECT * FROM run_history ORDER BY sequence').all(), before.history);
+        assert.deepEqual(memory.db.prepare('SELECT * FROM sqlite_sequence').all(), oldSequence);
+        assert.deepEqual(memory.db.prepare("SELECT rootpage, sql FROM sqlite_schema WHERE name = 'run_history'").get(), oldHistoryRoot);
+        memory.db.exec("INSERT INTO run_history(id, digest, recorded_at) VALUES ('next', 'next-digest', 1005)");
+        assert.equal(memory.db.prepare("SELECT sequence FROM run_history WHERE id = 'next'").get()?.sequence, 21);
+      } else assert.deepEqual(memory.db.prepare('SELECT * FROM run_history').all(), []);
+    } finally { memory.close(); }
+    const migrated = snapshot(selected.path), reopened = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try { assert.deepEqual(snapshot(selected.path), migrated); } finally { reopened.close(); }
+  } finally { f.dispose(); }
+});
+
+test('weekly schema has STRICT types, bounds, keys, indexes and initial singleton', () => {
+  const f = fixture(); try {
+    const db = f.memory.database.db;
+    for (const name of ['weekly_control', 'weekly_summaries', 'weekly_dependencies']) {
+      assert.equal(db.prepare('SELECT strict FROM pragma_table_list WHERE name = ?').get(name)?.strict, 1);
+    }
+    assert.deepEqual({ ...db.prepare('SELECT * FROM weekly_control').get() },
+      { singleton: 1, watermark: 0, last_due: 0, fence: 0, lease_expiry: 0, lease_owner: null });
+    for (const field of ['watermark', 'last_due', 'fence', 'lease_expiry']) {
+      const info = db.prepare('SELECT * FROM pragma_table_info(?) WHERE name = ?').get('weekly_control', field);
+      assert.equal(info?.notnull, 1); assert.equal(info?.dflt_value, '0');
+      assert.throws(() => db.exec(`UPDATE weekly_control SET ${field} = -1`));
+      assert.throws(() => db.exec(`UPDATE weekly_control SET ${field} = NULL`));
+      assert.throws(() => db.exec(`UPDATE weekly_control SET ${field} = 'bad'`));
+    }
+    assert.throws(() => db.exec('INSERT INTO weekly_control(singleton) VALUES (2)'));
+    const insert = db.prepare('INSERT INTO weekly_summaries VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const values of [
+      ['negative', 'd', -1, 1, 0, 0, 'complete', null], ['upper', 'd', 2, 1, 1, 0, 'complete', null],
+      ['cursor-low', 'd', 1, 2, 0, 0, 'complete', null], ['cursor-high', 'd', 1, 2, 3, 0, 'complete', null],
+      ['due', 'd', 0, 0, 0, -1, 'complete', null], ['state', 'd', 0, 0, 0, 0, 'bad', null]
+    ] as const) assert.throws(() => insert.run(...values));
+    insert.run('pending', 'digest', 0, 5, 0, 0, 'pending', 'body');
+    assert.throws(() => insert.run('second', 'digest', 0, 5, 0, 0, 'pending', null));
+    insert.run('complete', 'digest', 0, 5, 5, 0, 'complete', null);
+    assert.throws(() => db.exec("INSERT INTO weekly_dependencies VALUES ('missing', 'run', 'digest')"));
+    db.exec("INSERT INTO weekly_dependencies VALUES ('pending', 'run', 'digest')");
+    assert.throws(() => db.exec("INSERT INTO weekly_dependencies VALUES ('pending', 'run', 'another')"));
+    assert.throws(() => db.exec("INSERT INTO weekly_dependencies VALUES ('pending', 'other', NULL)"));
+    assert.deepEqual(db.prepare('PRAGMA index_info(weekly_dependencies_run)').all().map(row => row.name), ['run_id', 'run_digest']);
+    const pending = db.prepare("SELECT * FROM pragma_index_list('weekly_summaries') WHERE name = 'weekly_one_pending'").get();
+    assert.equal(pending?.unique, 1); assert.equal(pending?.partial, 1);
+    const foreign = db.prepare('PRAGMA foreign_key_list(weekly_dependencies)').get();
+    assert.equal(foreign?.table, 'weekly_summaries'); assert.equal(foreign?.from, 'summary_id'); assert.equal(foreign?.to, 'id');
+    assert.equal(db.prepare("SELECT tbl_name FROM sqlite_schema WHERE type = 'trigger' AND name = 'weekly_history_invalidation'").get()?.tbl_name, 'run_history');
+  } finally { f.dispose(); }
+});
+
+for (const corruption of [
+  'DROP TABLE weekly_control', 'DELETE FROM weekly_control',
+  'PRAGMA ignore_check_constraints = ON; UPDATE weekly_control SET watermark = -1',
+  'PRAGMA ignore_check_constraints = ON; UPDATE weekly_control SET singleton = 2',
+  'DROP INDEX weekly_one_pending', 'DROP TRIGGER weekly_history_invalidation',
+  'ALTER TABLE weekly_control RENAME TO damaged_control; CREATE TABLE weekly_control AS SELECT * FROM damaged_control'
+]) test(`schema 3 rejects corruption without repair: ${corruption}`, () => {
+  const f = fixture(); try {
+    const selected = store(f), memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    memory.close(); inspect(selected.path, db => db.exec(corruption));
+    rejectsUnchanged(f, selected, /corrupt/);
+  } finally { f.dispose(); }
+});
+
+test('missing legacy identity is rejected rather than seeded', () => {
+  const f = fixture(); try {
+    const selected = legacy(f, 0);
+    inspect(selected.path, db => db.exec('DELETE FROM identity'));
+    rejectsUnchanged(f, selected, /identity mismatch/);
+  } finally { f.dispose(); }
+});
+test('SQL failure after migration DDL rolls back bytes and releases the connection', () => {
+  const f = fixture(); try {
+    const selected = legacy(f);
+    inspect(selected.path, db => db.exec('CREATE TABLE weekly_summaries (collision TEXT) STRICT'));
+    rejectsUnchanged(f, selected, /already exists/);
+    inspect(selected.path, db => db.exec('DROP TABLE weekly_summaries'));
+    const memory = new MemoryDatabase(selected.directory, f.root, f.projectId);
+    try { assert.equal(memory.db.prepare('PRAGMA user_version').get()?.user_version, 3); } finally { memory.close(); }
+  } finally { f.dispose(); }
+});
+test('competing writer prevents migration without changing bytes, schema or data', () => {
+  const f = fixture(); try {
+    const selected = legacy(f), before = snapshot(selected.path), bytes = readFileSync(selected.path);
+    inspect(selected.path, writer => {
+      writer.exec('BEGIN IMMEDIATE');
+      try {
+        assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /locked|busy/);
+        assert.deepEqual(readFileSync(selected.path), bytes);
+        assert.deepEqual(snapshot(selected.path), before);
+        assert.deepEqual(sidecars(selected.path), [false, false, false]);
+      } finally { writer.exec('ROLLBACK'); }
+    });
+    inspect(selected.path, db => db.exec('BEGIN EXCLUSIVE; ROLLBACK;'));
+    const memory = new MemoryDatabase(selected.directory, f.root, f.projectId); memory.close();
+  } finally { f.dispose(); }
+});
+test('future WAL schema is rejected before journal conversion or sidecar creation', () => {
+  const f = fixture(); try {
+    const selected = legacy(f, 4);
+    inspect(selected.path, db => db.exec('PRAGMA journal_mode = WAL'));
+    const bytes = readFileSync(selected.path), files = sidecars(selected.path);
+    assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /unsupported memory schema/);
+    assert.deepEqual(readFileSync(selected.path), bytes); assert.deepEqual(sidecars(selected.path), files);
+  } finally { f.dispose(); }
+});
+test('private paths, links and sidecars remain protected', () => {
+  const f = fixture(); try {
+    const selected = legacy(f);
+    assert.equal(statSync(selected.path).mode & 0o777, 0o600);
+    assert.equal(statSync(selected.directory).mode & 0o777, 0o700);
+    const bytes = readFileSync(selected.path);
+    if (typeof process.getuid === 'function') {
+      for (const path of [selected.directory, dirname(selected.path), selected.path]) {
+        const mode = statSync(path).mode & 0o777; chmodSync(path, mode | 0o040);
+        try { assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /private/); }
+        finally { chmodSync(path, mode); }
+      }
+    }
+    const alias = join(f.base, 'storage-alias'); symlinkSync(selected.directory, alias);
+    assert.throws(() => new MemoryDatabase(alias, f.root, f.projectId), /canonical/);
+    const linked = join(f.base, 'database-link'); linkSync(selected.path, linked);
+    try { assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /unsafe/); }
+    finally { unlinkSync(linked); }
+    for (const suffix of ['-journal', '-wal', '-shm']) {
+      symlinkSync(selected.path, selected.path + suffix);
+      try { assert.throws(() => new MemoryDatabase(selected.directory, f.root, f.projectId), /unsafe/); }
+      finally { unlinkSync(selected.path + suffix); }
+    }
+    assert.deepEqual(readFileSync(selected.path), bytes);
+  } finally { f.dispose(); }
+});
+// REQUIRED before weekly-store implementation: exhaustive real RunHistory revocation,
+// dependency/redaction behavior, STRICT constraints and transaction atomicity proof.
