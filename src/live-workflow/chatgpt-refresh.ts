@@ -57,6 +57,10 @@ export function createChatGPTRefresh(dependencies: { transport?: ChatGPTTranspor
       return c;
     };
     try {
+      const healthy = store.reviewedSnapshot(true).connection;
+      checkLive();
+      if (options.expectedConnection && connectionDigest(healthy) !== connectionDigest(options.expectedConnection)) throw authError('selected connection changed');
+      if (healthy.expiresAt - Date.now() > minimum) return healthy;
       lock(); let previous = read();
       if (previous.expiresAt - Date.now() > minimum) return previous;
       unlock(); release = store.lockRefresh(); lock(); previous = read();
