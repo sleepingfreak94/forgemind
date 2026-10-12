@@ -1,0 +1,23 @@
+src/memory/weekly-summary.ts(63,45): error TS2550: Property 'isWellFormed' does not exist on type 'string'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.
+src/memory/weekly-summary.ts(139,40): error TS18046: 'v.lowerExclusive' is of type 'unknown'.
+src/memory/weekly-summary.ts(139,71): error TS18046: 'v.upperInclusive' is of type 'unknown'.
+src/memory/weekly-summary.ts(217,34): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(79,16): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(80,16): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(81,16): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(81,43): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(81,75): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(81,106): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(113,55): error TS2532: Object is possibly 'undefined'.
+tests/memory/weekly-summary.test.ts(124,51): error TS2322: Type 'RunRecord | undefined' is not assignable to type 'RunRecord'.
+  Type 'undefined' is not assignable to type 'RunRecord'.
+tests/memory/weekly-summary.test.ts(124,63): error TS2322: Type 'RunRecord | undefined' is not assignable to type 'RunRecord'.
+  Type 'undefined' is not assignable to type 'RunRecord'.
+tests/memory/weekly-summary.test.ts(148,73): error TS2322: Type '{ phase?: 'baseline' | 'candidate'; id?: string; outcome?: 'passed' | 'failed' | 'indeterminate'; source?: string; evidenceSha256?: string; exitCode: number; }' is not assignable to type 'RunCheck'.
+  Property 'phase' is optional in type '{ phase?: "baseline" | "candidate"; id?: string; outcome?: "failed" | "indeterminate" | "passed"; source?: string; evidenceSha256?: string; exitCode: number; }' but required in type 'RunCheck'.
+tests/memory/weekly-summary.test.ts(175,51): error TS2375: Type '{ schemaVersion: 1; runId: string; taskId: string; execution: 'fixture' | 'authenticated'; startedAt: number; endedAt: number; outcome: RunOutcome; lastPhase: RunPhase; baselineSource: string; ... 10 more ...; checks: { ...; }[]; }' is not assignable to type 'RunRecord' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'checks' are incompatible.
+    Type '{ phase?: "baseline" | "candidate"; id?: string; outcome?: "failed" | "indeterminate" | "passed"; exitCode?: number | null; source?: string; evidenceSha256?: string; }[]' is not assignable to type 'readonly RunCheck[]'.
+      Type '{ phase?: 'baseline' | 'candidate'; id?: string; outcome?: 'passed' | 'failed' | 'indeterminate'; exitCode?: number | null; source?: string; evidenceSha256?: string; }' is not assignable to type 'RunCheck'.
+        Property 'phase' is optional in type '{ phase?: "baseline" | "candidate"; id?: string; outcome?: "failed" | "indeterminate" | "passed"; exitCode?: number | null; source?: string; evidenceSha256?: string; }' but required in type 'RunCheck'.
+tests/memory/weekly-summary.test.ts(226,73): error TS2532: Object is possibly 'undefined'.
