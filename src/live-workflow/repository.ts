@@ -44,8 +44,9 @@ function optional(root: string, ...args: string[]): string | undefined {
   }
 }
 function rootOf(workspace: string): string {
-  const root = realpathSync(text(realpathSync(workspace), 'rev-parse', '--show-toplevel'));
-  if (text(root, 'rev-parse', '--is-bare-repository') !== 'false') throw new Error('Bare repositories are unsupported');
+  const values = text(realpathSync(workspace), 'rev-parse', '--show-toplevel', '--is-bare-repository').split('\n');
+  if (values.pop() !== 'false') throw new Error('Bare repositories are unsupported');
+  const root = realpathSync(values.join('\n'));
   // Even name-only diff can invoke clean filters. Check effective config before any content inspection.
   if (optional(root, 'config', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$') !== undefined) {
     throw new Error('Git filters are unsupported');
@@ -135,13 +136,14 @@ export function discoverRepository(workspace: string): RepositoryInfo {
 /** Hashes framed UTF-8 path bytes, executable mode and raw content. Ignored untracked artifacts are omitted. */
 export function sourceIdentity(workspace: string): string {
   const root = rootOf(workspace);
-  if (text(root, 'ls-files', '-v').split('\n').some(line => /^[a-zS]/.test(line))) throw new Error('Hidden index paths are unsupported');
-  const entries = git(root, 'ls-files', '--stage', '-z').toString('utf8').split('\0').filter(Boolean);
-  for (const entry of entries) {
-    if (!/^(100644|100755) [a-f0-9]+ 0\t/.test(entry)) throw new Error('Symlink, submodule, or unresolved index rejected');
-  }
-  const paths = sorted([...names(git(root, 'ls-files', '--cached', '-z')),
-    ...names(git(root, 'ls-files', '--others', '--exclude-standard', '-z'))]);
+  const staged = git(root, 'ls-files', '--stage', '-v', '-z'), decoded = staged.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(staged)) throw new Error('Unsafe non-UTF8 Git path');
+  const tracked = decoded.split('\0').filter(Boolean).map(entry => {
+    if (/^[a-zS]/.test(entry)) throw new Error('Hidden index paths are unsupported');
+    if (!/^H (100644|100755) [a-f0-9]+ 0\t/.test(entry)) throw new Error('Symlink, submodule, or unresolved index rejected');
+    return pathName(entry.slice(entry.indexOf('\t') + 1));
+  });
+  const paths = sorted([...tracked, ...names(git(root, 'ls-files', '--others', '--exclude-standard', '-z'))]);
   paths.forEach(snapshotSourcePath);
   const hash = createHash('sha256');
   const frame = (bytes: Buffer) => { hash.update(`${bytes.length}:`); hash.update(bytes); };
