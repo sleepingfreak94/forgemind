@@ -269,3 +269,16 @@ for (const scenario of ['completed-crlf', 'quota', 'failed-stream'])
       assert.equal(calls, 1);
     } finally { await broker?.close(); globalThis.fetch = nativeFetch; f.cleanup(); }
   });
+
+test('native token-sharing uses only the selected reviewed account and invalidates lease after record change',async()=>{
+  const f=connection();
+  try{
+    const session=await f.open();let lease:(()=>void)|undefined;
+    const result=await session.withNativeAccess(async(token,current)=>{
+      assert.equal(token,'synthetic-access-token');current();lease=current;return 'launched';
+    },new AbortController().signal);
+    assert.equal(result,'launched');assert.doesNotMatch(JSON.stringify(session.binding()),/synthetic-access/);
+    change(f.directory,{accessToken:'changed-synthetic-token'});
+    assert.throws(()=>lease!(),/changed|disconnected/);
+  }finally{f.cleanup();}
+});

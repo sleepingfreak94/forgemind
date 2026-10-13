@@ -1,3 +1,4 @@
+import { revokeChatGPTExecutions } from './chatgpt-execution-ledger.js';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync,
@@ -28,6 +29,14 @@ const LOCK = 'chatgpt.lock';
 const REFRESH_LOCK = 'chatgpt-refresh.lock';
 const PENDING = 'chatgpt-refresh-pending.json';
 const REGISTRATION = 'chatgpt-registration.json';
+interface FileBinding { readonly identity:string;readonly sha256:string }
+export interface PendingRefreshSnapshot { readonly generation:string;readonly startedAt:number;readonly file:FileBinding }
+export interface ChatGPTReconnectSnapshot {
+  readonly host:{readonly id:string;readonly file:FileBinding};
+  readonly registration:{readonly value:ChatGPTRegistration;readonly file:FileBinding}|null;
+  readonly connection:{readonly generation:string;readonly file:FileBinding}|null;
+  readonly pending:PendingRefreshSnapshot|null;
+}
 export type ChatGPTRegistration = Pick<ChatGPTConnection, 'schemaVersion' | 'hostId' | 'clientId' | 'subject'>;
 export const connectionDigest = (c: ChatGPTConnection): string =>
   createHash('sha256').update(JSON.stringify([c.schemaVersion, c.hostId, c.clientId, c.subject,
@@ -140,7 +149,7 @@ export class ChatGPTStore {
       || (s.mode & 0o7777) !== 0o700 || realpathSync(this.directory) !== this.directory)
       throw authError('state directory changed or is unsafe');
   }
-  private read(name: string, parseJSON = true): unknown | undefined {
+  private read(name: string, parseJSON:boolean|'bytes' = true): unknown | undefined {
     this.check();
     let fd: number;
     try { fd = openSync(join(this.directory, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -160,6 +169,7 @@ export class ChatGPTStore {
       if (count > MAX_BYTES || !sameFile(before, after) || before.size !== after.size
         || before.ctimeMs !== after.ctimeMs || !sameFile(after, current) || after.ctimeMs !== current.ctimeMs)
         throw authError('credential file changed or exceeds limit');
+      if(parseJSON==='bytes')return {bytes:Buffer.from(bytes.subarray(0,count)),identity:[current.dev,current.ino,current.size,current.ctimeMs,current.mtimeMs].join(':')};
       return parseJSON ? JSON.parse(bytes.subarray(0, count).toString('utf8')) as unknown : true;
     } catch { throw authError('unsafe or invalid credential file'); }
     finally { closeSync(fd); }
@@ -247,9 +257,38 @@ export class ChatGPTStore {
     const value = this.read(REGISTRATION); if (value === undefined) return undefined;
     const v = record(value);
     if (Object.keys(v).sort().join(',') !== 'clientId,hostId,schemaVersion,subject' || v.schemaVersion !== 1
-      || !hostId(v.hostId) || v.hostId !== this.getHostId() || !issuedClient(v.clientId) || !textField(v.subject, 512))
+      || !hostId(v.hostId) || v.hostId !== record(this.read(HOST)).hostId || !issuedClient(v.clientId) || !textField(v.subject, 512))
       throw authError('invalid retained registration');
     return v as unknown as ChatGPTRegistration;
+  }
+  private fileBinding(name:string):FileBinding|null{
+    const raw=this.read(name,'bytes') as {bytes:Buffer;identity:string}|undefined;
+    return raw?Object.freeze({identity:raw.identity,sha256:createHash('sha256').update(raw.bytes).digest('hex')}):null;
+  }
+  pendingRefreshSnapshot():PendingRefreshSnapshot|null{
+    const raw=this.read(PENDING,'bytes') as {bytes:Buffer;identity:string}|undefined;
+    if(!raw)return null;
+    let value:Record<string,unknown>;
+    try{value=record(JSON.parse(raw.bytes.toString()));}catch{throw authError('invalid pending refresh metadata');}
+    if(Object.keys(value).sort().join(',')!=='connectionSha256,schemaVersion,startedAt'||value.schemaVersion!==1||
+      typeof value.connectionSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.connectionSha256)||
+      !Number.isSafeInteger(value.startedAt)||(value.startedAt as number)<=0)throw authError('invalid pending refresh metadata');
+    return Object.freeze({generation:value.connectionSha256,startedAt:value.startedAt as number,
+      file:Object.freeze({identity:raw.identity,sha256:createHash('sha256').update(raw.bytes).digest('hex')})});
+  }
+  reconnectSnapshot():ChatGPTReconnectSnapshot{
+    this.checkLock();const host=record(this.read(HOST));
+    if(host.schemaVersion!==1||!hostId(host.hostId)||Object.keys(host).length!==2)throw authError('invalid reconnect host identity');
+    const id=host.hostId,registration=this.registration(),connection=this.connection(true);
+    const required=(name:string)=>{const file=this.fileBinding(name);if(!file)throw authError('reconnect identity file disappeared');return file;};
+    if(connection&&(!registration||connection.hostId!==registration.hostId||connection.clientId!==registration.clientId||connection.subject!==registration.subject))throw authError('reconnect retained identity mismatch');
+    return Object.freeze({host:Object.freeze({id,file:required(HOST)}),
+      registration:registration?Object.freeze({value:Object.freeze({...registration}),file:required(REGISTRATION)}):null,
+      connection:connection?Object.freeze({generation:connectionDigest(connection),file:required(CONNECTION)}):null,
+      pending:this.pendingRefreshSnapshot()});
+  }
+  assertReconnectSnapshot(expected:ChatGPTReconnectSnapshot):void{
+    if(JSON.stringify(this.reconnectSnapshot())!==JSON.stringify(expected))throw authError('reconnect captured state changed');
   }
   pendingRefresh(): boolean { return this.read(PENDING, false) !== undefined; }
   beginRefresh(connection: ChatGPTConnection): void {
@@ -257,12 +296,16 @@ export class ChatGPTStore {
     if (this.pendingRefresh()) throw authError('previous renewal is indeterminate; reconnect required');
     this.write(PENDING, { schemaVersion: 1, connectionSha256: connectionDigest(connection), startedAt: Date.now() });
   }
-  finishRefresh(): void {
-    this.checkLock(); if (!this.pendingRefresh()) return;
+  finishRefresh(expected?:PendingRefreshSnapshot|null): void {
+    this.checkLock();
+    if(expected!==undefined){
+      if(JSON.stringify(this.pendingRefreshSnapshot())!==JSON.stringify(expected))throw authError('pending refresh snapshot changed');
+      if(expected===null)return; // Never unlink a marker created after captured absence.
+    }else if (!this.pendingRefresh()) return;
     unlinkSync(join(this.directory, PENDING)); fsyncSync(this.fd);
   }
   invalidateConnection(): void {
-    this.checkLock(); const c = this.connection(true);
+    this.checkLock();revokeChatGPTExecutions(this.directory); const c = this.connection(true);
     if (c) {
       this.write(REGISTRATION, { schemaVersion: 1, hostId: c.hostId, clientId: c.clientId, subject: c.subject });
       this.read(CONNECTION); this.checkLock(); unlinkSync(join(this.directory, CONNECTION)); fsyncSync(this.fd);
@@ -307,6 +350,7 @@ export class ChatGPTStore {
     this.write(REGISTRATION, { schemaVersion: 1, hostId: c.hostId, clientId: c.clientId, subject: c.subject });
     // Reconnecting an intact account retains its review; a disconnected record does not.
     if (!previous) this.forgetBillingReview();
+    if(previous&&connectionDigest(previous)!==connectionDigest(c))revokeChatGPTExecutions(this.directory);
     this.write(CONNECTION, c);
   }
   billingReview(connection: ChatGPTConnection): ChatGPTBillingReview | undefined {
@@ -329,13 +373,14 @@ export class ChatGPTStore {
     if (JSON.stringify(this.connection(true)) !== JSON.stringify(connection)) throw authError('connection changed during account review');
     const review: ChatGPTBillingReview = { schemaVersion: 1, accountSha256: chatGPTAccountFingerprint(connection),
       identitySha256: billingIdentity(connection), confirmedAt: Date.now(), reviewId: randomBytes(16).toString('hex') };
+    revokeChatGPTExecutions(this.directory);
     this.write(BILLING_REVIEW, review);
     return review;
   }
   forgetBillingReview(): void {
     this.checkLock();
     if (this.read(BILLING_REVIEW, false) === undefined) return;
-    this.checkLock();
+    this.checkLock();revokeChatGPTExecutions(this.directory);
     unlinkSync(join(this.directory, BILLING_REVIEW));
     fsyncSync(this.fd);
   }
