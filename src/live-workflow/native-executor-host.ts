@@ -1,3 +1,6 @@
+import { assertChatGPTExecutionLease } from './chatgpt-execution-leases.js';
+import type { ChatGPTExecutionLease } from './chatgpt-execution-leases.js';
+import { nativeCleanupEvidence,associateNativeCleanup } from './native-executor-process.js';
 import { launchNativeProcess, assertNativeProcess, assertNativeProcessCompleted, onceNativeLifecycle } from './native-executor-process.js';
 import type { NativeProcess } from './native-executor-process.js';
 import type { NativeLaunchPlan, NativeLifecycleReceipt } from './native-executor-launch-contracts.js';
@@ -74,6 +77,8 @@ export interface ProductionNativeHostOptions {
   plan: NativeLaunchPlan;
   lifecycle: NativeLifecycleReceipt;
   session: ChatGPTPlanSession;
+  execution?:ChatGPTExecutionLease;
+  parentBinding?:string;
   authority: ActionAuthority;
   project: NativeProjectBoundary;
   boundary: () => void;
@@ -98,32 +103,38 @@ class ProductionNativeHost implements NativeHost {
     this.nativeCwd=options.plan.privateTmp;this.rpc=process.rpc;this.authority=options.authority;this.project=options.project;
     trusted.add(this);
   }
-  boundary(): void {this.#options.boundary();this.#lease();assertNativeProcess(this.#process);}
+  boundary(): void {this.#options.execution!.assertActive();this.#options.boundary();this.#lease();assertNativeProcess(this.#process);}
   source(): string {return this.project.source();}
   check(id:string,signal:AbortSignal):Promise<unknown>{this.boundary();return this.#options.check(id,signal);}
   stop():Promise<void>{return this.#process.stop();}
   assertCompleted():void {
-    this.#options.boundary();this.#lease();assertNativeProcessCompleted(this.#process);
+    this.#options.execution!.assertActive();this.#options.boundary();this.#lease();assertNativeProcessCompleted(this.#process);
   }
+  get cleanupEvidence(){return nativeCleanupEvidence(this.#process);}
   get evidence(){return this.#process.qualificationEvidence;}
 }
 export async function createProductionNativeHost(options: ProductionNativeHostOptions): Promise<NativeHost> {
   const shared=onceNativeLifecycle(options.lifecycle);
   let launched:NativeProcess|undefined;
   try {
-    assertChatGPTPlanSession(options.session);options.boundary();
+    assertChatGPTPlanSession(options.session);assertChatGPTExecutionLease(options.execution!);
+    options.session.assertExecution(options.execution!,options.parentBinding!,options.plan.deadlineEpochMs);options.boundary();
     const binding=options.session.binding();
     if(options.plan.accountBinding!==binding.accountSha256 || options.plan.reviewBinding!==String(binding.confirmedAt))throw new Error('Native plan account review mismatch');
     return await options.session.withNativeAccess(async(token,lease)=>{
       const lifecycle=Object.freeze({runtimeBinding:shared.runtimeBinding,receiptId:shared.receiptId,
-        checkActive:()=>{lease();shared.checkActive();},
+        checkActive:()=>{options.execution!.assertActive();lease();shared.checkActive();},
         finish:(status:'completed'|'failed'|'indeterminate')=>shared.finish(status)});
-      launched=await launchNativeProcess({plan:options.plan,lifecycle,signal:options.signal,accessToken:token});
+      options.execution!.beginLaunch(options.plan.runtimeBinding);
+      launched=await launchNativeProcess({plan:options.plan,lifecycle,signal:options.signal,accessToken:token,execution:options.execution!});
       lease();return new ProductionNativeHost(options,launched,lease);
     },options.signal);
   }catch(error){
     let status:'failed'|'indeterminate'='failed';
-    if(launched){try{await launched.stop();}catch{status='indeterminate';}}
+    if(launched){
+      try{await launched.stop();}catch{status='indeterminate';}
+      associateNativeCleanup(error,launched);
+    }
     shared.finish(status);
     throw error;
   }
@@ -137,4 +148,9 @@ export function assertNativeHostCompleted(host:NativeHost):void{
   assertNativeHost(host);
   if(!(host instanceof ProductionNativeHost))throw new Error('Production native settlement required');
   host.assertCompleted();
+}
+
+export function nativeHostCleanupEvidence(host:NativeHost){
+  if(!trusted.has(host)||!(host instanceof ProductionNativeHost))throw new Error('Trusted native host cleanup required');
+  return host.cleanupEvidence;
 }

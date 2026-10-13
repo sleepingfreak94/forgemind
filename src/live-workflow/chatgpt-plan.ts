@@ -1,3 +1,4 @@
+import { ChatGPTExecutionLease } from './chatgpt-execution-leases.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { loadChatGPTConnection } from './chatgpt-auth.js';
@@ -73,6 +74,14 @@ export class ChatGPTPlanSession {
     signal.throwIfAborted(); check();
     state.connection = next; state.expiresAt = next.expiresAt;
     this.assertActive();
+  }
+  admitExecution(options:{runBinding:string;deadline:number;signal:AbortSignal;check:()=>void}):ChatGPTExecutionLease{
+    this.assertActive();const state=sessions.get(this)!;
+    return ChatGPTExecutionLease.admit(state.directory,state.connection,state.review,options);
+  }
+  assertExecution(lease:ChatGPTExecutionLease,run:string,deadline:number):void{
+    this.assertActive();const state=sessions.get(this)!;
+    lease.assertContext(state.directory,state.connection,state.review,run,deadline);
   }
   assertActive(): void {
     const state = sessions.get(this);

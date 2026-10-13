@@ -111,3 +111,10 @@ wire, runtime and authority enforcement still apply. Newly arriving historical
 usage after acknowledgement and all historical effects are denied. The history
 metadata validator accepts at most 10,000 unique terminal IDs per resume, bounded
 also by the RPC wire limits; this is a history-validation limit, not a turn quota.
+
+Concurrent native runs use [owner execution leases](auth-execution-leases.md).
+Admissions share healthy exact credentials without taking the credential writer
+lock. Renewal is deferred before token dispatch while any execution remains active
+or its cleanup is uncertain. One runner-owned opaque lease survives the live-host
+factory callback and releases only after proven reaping and durable settlement.
+Legacy unleased runs must be drained before enabling parallel admission.

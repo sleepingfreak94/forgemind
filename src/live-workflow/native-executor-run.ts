@@ -1,3 +1,6 @@
+import { ChatGPTRefreshDeferred } from './chatgpt-execution-ledger.js';
+import { nativeCleanupEvidence } from './native-executor-process.js';
+import type { ChatGPTExecutionLease } from './chatgpt-execution-leases.js';
 import { createServer } from 'node:net';
 import { serialize } from '../context-engine/validation.js';
 import { mkdirSync, writeFileSync, existsSync, realpathSync, readFileSync } from 'node:fs';
@@ -13,7 +16,7 @@ import { NativeProject } from './native-executor-project.js';
 import { NativeLifecycle } from './native-executor-lifecycle.js';
 import { NativeExecutor, nativeProviderDiagnostic } from './native-executor.js';
 import type { NativeProviderDiagnostic } from './native-executor.js';
-import { createProductionNativeHost, assertNativeHost, assertNativeHostCompleted } from './native-executor-host.js';
+import { createProductionNativeHost, assertNativeHost, assertNativeHostCompleted,nativeHostCleanupEvidence } from './native-executor-host.js';
 import type { NativeHost } from './native-executor-host.js';
 import { nativeReadiness } from './native-executor-readiness.js';
 import { prepareNativeLaunchPlan, nativeConfiguration } from './native-executor-launch-contracts.js';
@@ -58,12 +61,14 @@ export async function runNativeTask(options: NativeRunOptions) {
   const remaining=task.budget.runtimeMs-state.value.counters.runtimeMs;
   if(remaining<1){state.close();throw new Error('Native runtime exhausted');}
   let phase='authentication';
+  let execution:ChatGPTExecutionLease|undefined,cleanup:ReturnType<typeof nativeCleanupEvidence>=null;
   let owner:NativeOwner|undefined,lifecycle:NativeLifecycle|undefined,host:NativeHost|undefined,executor:NativeExecutor|undefined;
   try{
     // Refresh only in the trusted owner before launch. Existing saved same-account
     // credits-off review remains mandatory; there is no native login/import path.
     await session.prepare(Math.min(remaining+5000,930000),signal,active);
-    const account=session.binding(),deadline=Math.min(Date.now()+remaining,account.expiresAt);
+    const account=session.binding(),deadline=Math.min(Date.now()+remaining,account.expiresAt-1);
+    execution=session.admitExecution({runBinding:parent.binding,deadline,signal,check:active});
     phase='owner-authority';
     owner=new NativeOwner(join(dir,'owner'),task,deadline,active);
     const project=new NativeProject(task.root,owner,(...args)=>owner!.phase(...args),()=>owner!.active());
@@ -82,7 +87,7 @@ export async function runNativeTask(options: NativeRunOptions) {
       deadlineEpochMs:deadline,maxWireBytes:task.budget.wireBytes-state.value.counters.wireBytes});
     const receipt=lifecycle.reserve(plan);
     phase='native-launch';
-    host=await createProductionNativeHost({plan,lifecycle:receipt,session,authority:owner,project,signal,
+    host=await createProductionNativeHost({plan,lifecycle:receipt,session,execution,parentBinding:parent.binding,authority:owner,project,signal,
       boundary:()=>{active();owner!.active();lifecycle!.active();},check:async(id,checkSignal)=>{
         const command=task.checks.find(c=>c.id===id);
         if(!command)throw new Error('Unapproved native check');
@@ -103,23 +108,27 @@ export async function runNativeTask(options: NativeRunOptions) {
     const native=executor.receipt;
     phase='cleanup';
     const settledHost=host;
-    await executor.close();executor=undefined;host=undefined;
+    await executor.close();cleanup=nativeHostCleanupEvidence(settledHost);executor=undefined;host=undefined;
     if(state.value.status==='indeterminate')throw new Error('Native cleanup indeterminate');
     assertNativeRunCompleted({active,account:()=>session.assertActive(),source:()=>project.assertCurrent(state.value.source),
       runtime:()=>{assertNativeHostCompleted(settledHost);lifecycle!.assertCompleted(receipt);}});
+    execution.settle('completed',cleanup);
     return {taskId:task.task,status:'completed',source:state.value.source,readiness,checks,
-      native:{...native,checkpoint:state.value},owner:owner.export(),runtime:lifecycle.export()};
+      executionLease:execution.receipt(),native:{...native,checkpoint:state.value},owner:owner.export(),runtime:lifecycle.export()};
   }catch(error){
     const diagnostic=nativeProviderDiagnostic(error) ?? executor?.receipt.nativeDiagnostic ?? null;
     if(executor){
       try{await executor.close();}catch{state.update({status:'indeterminate'});}
+      if(host)cleanup=nativeHostCleanupEvidence(host);
       executor=undefined;host=undefined;
     }else if(host){
       try{await host.stop();}catch{state.update({status:'indeterminate'});}
+      cleanup=nativeHostCleanupEvidence(host);
       host=undefined;
     }
+    if(execution){try{execution.settle('failed',cleanup??nativeCleanupEvidence(error));}catch{execution.retainIndeterminate();state.update({status:'indeterminate'});}}
     if(state.value.pending)state.update({status:'indeterminate'});
-    throw new NativeRunError(phase,state.value.status==='indeterminate'?'cleanup-or-effect-indeterminate':signal.aborted?'cancelled':state.value.pending?'pending-effect':nativeFailureCode(error,diagnostic),{checkpoint:state.value,owner:owner?.export(),runtime:lifecycle?.export(),nativeDiagnostic:diagnostic});
+    throw new NativeRunError(phase,state.value.status==='indeterminate'?'cleanup-or-effect-indeterminate':signal.aborted?'cancelled':state.value.pending?'pending-effect':nativeFailureCode(error,diagnostic),{checkpoint:state.value,executionLease:execution?.receipt(),owner:owner?.export(),runtime:lifecycle?.export(),nativeDiagnostic:diagnostic});
   }finally{
     if(executor)await executor.close().catch(()=>undefined);else if(host)await host.stop().catch(()=>undefined);
     lifecycle?.close();owner?.close();state.close();
@@ -145,6 +154,7 @@ export function nativePacketBinding(packet:{schema:string;task:NativeTask;object
   return sha256(serialize({schema:packet.schema,task,objective:packet.objective}));
 }
 export function nativeFailureCode(error:unknown,captured:Readonly<NativeProviderDiagnostic>|null=null):string{
+  if(error instanceof ChatGPTRefreshDeferred)return error.code;
   const diagnostic=nativeProviderDiagnostic(error)??captured;
   if(diagnostic){
     if(diagnostic.kind==='unauthorized'||diagnostic.httpStatusCode===401||diagnostic.httpStatusCode===403)return 'native-provider-unauthorized';

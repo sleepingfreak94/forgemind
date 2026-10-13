@@ -1,3 +1,7 @@
+import { reconcileChatGPTExecution } from '../../src/live-workflow/chatgpt-execution-leases.js';
+import { executionFixture } from './chatgpt-execution-fixture.js';
+import { ChatGPTExecutionLedger } from '../../src/live-workflow/chatgpt-execution-ledger.js';
+import { nativeCleanupEvidence,consumeNativeCleanupEvidence } from '../../src/live-workflow/native-executor-process.js';
 import { createServer as createHttpServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { JsonlRpc } from '../../src/agent-drivers/jsonl-rpc.js';
@@ -221,5 +225,39 @@ test('actual native offline ResponsesLite advertises exactly three direct host t
     rpc.close();try{process.kill(-child.pid!,'SIGKILL');}catch{child.kill('SIGKILL');}await exited;
     for(const socket of sockets)socket.destroy();await new Promise<void>(resolve=>server.close(()=>resolve()));
     rmSync(root,{recursive:true,force:true});
+  }
+});
+
+
+test('execution leases release only with genuine native reaping or prelaunch cleanup, independent of cancellation',
+  {skip:process.platform!=='darwin',timeout:20000},async()=>{
+  for(const mode of ['normal','cancel','prelaunch','reconcile','revoked-settlement'] as const){
+    const f=executionFixture(),home=f.root+'/native-home',tmp=f.root+'/native-tmp';
+    mkdirSync(home,{mode:0o700});mkdirSync(tmp,{mode:0o700});writeFileSync(home+'/config.toml',nativeConfiguration('gpt-6.1-sol'),{mode:0o600});
+    const allocator=createServer();await new Promise<void>(resolve=>allocator.listen(0,'127.0.0.1',resolve));
+    const address=allocator.address();assert.ok(address&&typeof address!=='string');const port=address.port;
+    await new Promise<void>(resolve=>allocator.close(()=>resolve()));
+    const controller=new AbortController(),session=await f.open();
+    const lease=session.admitExecution({runBinding:'a'.repeat(64),deadline:Date.now()+15000,signal:controller.signal,check:()=>{}});
+    const plan=prepareNativeLaunchPlan({taskId:'offline',grantId:'grant',fencingEpoch:1,leaseId:'lease',model:'gpt-6.1-sol',effort:'medium',grantDigest:'a'.repeat(64),authorityBinding:'c'.repeat(64),budgetBinding:'b'.repeat(64),accountBinding:'offline-no-account',reviewBinding:'offline-test',executable:realpathSync(homedir()+'/.local/bin/codex'),config:home+'/config.toml',privateHome:home,privateTmp:tmp,tunnelPort:port,deadlineEpochMs:Date.now()+12000,maxWireBytes:1048576});
+    lease.beginLaunch(plan.runtimeBinding);
+    try{
+      if(mode==='prelaunch')controller.abort();
+      try{
+        const native=await launchNativeProcess({plan,execution:lease,signal:controller.signal,accessToken:'offline-fixture-not-a-credential',lifecycle:{runtimeBinding:plan.runtimeBinding,receiptId:'execution-'+mode,checkActive:()=>lease.assertActive(),finish:()=>{}}});
+        assert.equal(nativeCleanupEvidence(native),null);
+        await assert.rejects(launchNativeProcess({plan:{...plan},execution:lease,accessToken:'offline-fixture-not-a-credential',lifecycle:{runtimeBinding:plan.runtimeBinding,receiptId:'forged',checkActive:()=>{},finish:()=>{}}}),error=>{assert.equal(nativeCleanupEvidence(error),null);return true;});
+        await assert.rejects(launchNativeProcess({plan,execution:lease,accessToken:'offline-fixture-not-a-credential',lifecycle:{runtimeBinding:plan.runtimeBinding,receiptId:'duplicate',checkActive:()=>{},finish:()=>{}}}),error=>{assert.equal(nativeCleanupEvidence(error),null);return true;});
+        if(mode==='cancel')controller.abort();
+        if(mode==='reconcile')lease.retainIndeterminate();
+        await native.stop();const proof=nativeCleanupEvidence(native);assert.ok(proof);
+        if(mode==='revoked-settlement'){const ledger=new ChatGPTExecutionLedger(f.directory);try{ledger.revoke();}finally{ledger.close();}assert.throws(()=>lease.settle('completed',proof),/revoked/);}
+        if(mode==='reconcile')reconcileChatGPTExecution(f.directory,lease.receipt().id,proof,()=>{});
+        else lease.settle(mode==='normal'?'completed':'failed',proof);
+        assert.throws(()=>consumeNativeCleanupEvidence(proof,plan.runtimeBinding,lease.receipt().id),/replayed/);
+      }catch(error){if(mode!=='prelaunch')throw error;const proof=nativeCleanupEvidence(error);assert.ok(proof);lease.settle('failed',proof);}
+      assert.equal(lease.receipt().status,mode==='normal'?'completed':mode==='reconcile'?'indeterminate':'failed');
+      const ledger=new ChatGPTExecutionLedger(f.directory);try{const intent=ledger.beginRefresh('a'.repeat(64),()=>{});ledger.finishRefresh(intent);}finally{ledger.close();}
+    }finally{f.close();}
   }
 });

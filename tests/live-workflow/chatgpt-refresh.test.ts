@@ -1,3 +1,4 @@
+import { ChatGPTExecutionLedger,ChatGPTRefreshDeferred } from '../../src/live-workflow/chatgpt-execution-ledger.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, sign } from 'node:crypto';
@@ -362,4 +363,52 @@ test('slow caller grant check cannot conceal an expired renewal window', async t
     await assert.rejects(ensure(f.directory, { minimumLifetimeMs: 5000, check: () => t.mock.timers.setTime(now + 30001) }), /deadline exhausted/);
     assert.equal(posts, 0); assert.equal(existsSync(join(f.directory, 'chatgpt-refresh-pending.json')), false);
   } finally { f.cleanup(); }
+});
+
+
+async function verifiedReconnect(directory:string,during?:()=>void):Promise<void>{
+  let nonce='';const auth=createChatGPTAuth({transport:async url=>{
+    if(url===openAIIdentity.discovery)return Response.json({issuer:openAIIdentity.issuer,authorization_endpoint:openAIIdentity.authorization,token_endpoint:openAIIdentity.token,jwks_uri:openAIIdentity.jwks});
+    if(url===openAIIdentity.jwks)return Response.json({keys:[key]});
+    assert.equal(url,openAIIdentity.token);return Response.json({...good(),access_token:'reconnected-access',refresh_token:'reconnected-refresh',id_token:jwt({nonce})});
+  }});
+  await auth.connectChatGPT({directory,timeoutMs:3000,onAuthorize:async raw=>{
+    const url=new URL(raw);nonce=url.searchParams.get('nonce')!;during?.();
+    const callback=new URL(url.searchParams.get('redirect_uri')!);callback.search=new URLSearchParams({state:url.searchParams.get('state')!,code:'synthetic-code',client_id:'oaiapp_fixture'}).toString();
+    await (await fetch(callback)).text();
+  }});
+}
+test('verified reconnect recovers post-save failure, partial invalidation and intent-only states without refresh replay',async t=>{
+  for(const mode of ['post-save','partial-invalidation','intent-only','absent-intent-only']){
+    const f=fixture();let posts=0;
+    try{
+      const save=ChatGPTStore.prototype.save,forget=ChatGPTStore.prototype.forgetBillingReview;
+      const fault=t.mock.method(ChatGPTStore.prototype,mode==='partial-invalidation'?'forgetBillingReview':'save',function(this:ChatGPTStore,value?:Parameters<typeof save>[0]){
+        if(mode==='partial-invalidation'){forget.call(this);throw new Error('Injected after connection removal');}
+        save.call(this,value!);throw new Error('Injected after credential save');
+      });
+      const ensure=createChatGPTRefresh({transport:async()=>{posts++;return mode==='partial-invalidation'?Response.json({error:'invalid_grant'},{status:400}):Response.json(good());}});
+      await assert.rejects(ensure(f.directory,{minimumLifetimeMs:5000}));fault.mock.restore();
+      assert.equal(posts,1);assert.equal(existsSync(join(f.directory,'chatgpt-refresh-pending.json')),true);
+      if(mode!=='partial-invalidation')assert.equal(saved(f.directory).accessToken,'new-access');
+      if(mode==='intent-only'||mode==='absent-intent-only'){
+        unlinkSync(join(f.directory,'chatgpt-refresh-pending.json'));
+        if(mode==='absent-intent-only')unlinkSync(join(f.directory,'chatgpt-connection.json'));
+      }
+      await verifiedReconnect(f.directory);assert.equal(posts,1);assert.equal(saved(f.directory).accessToken,'reconnected-access');
+      assert.equal(existsSync(join(f.directory,'chatgpt-refresh-pending.json')),false);
+      const ledger=new ChatGPTExecutionLedger(f.directory);try{assert.equal(ledger.refreshIntent(),null);}finally{ledger.close();}
+      const store=new ChatGPTStore(f.directory);try{store.lock();if(!store.billingReview(store.connection()!))store.confirmBillingReview(store.connection()!);}finally{store.close();}
+      const session=await openChatGPTPlanSession(f.directory,terminal),lease=session.admitExecution({runBinding:'a'.repeat(64),deadline:Date.now()+1000,signal:new AbortController().signal,check:()=>{}});lease.settle('failed',null);
+    }finally{f.cleanup();}
+  }
+});
+test('explicit reconnect preserves unresolved execution leases and old sessions remain invalid',async()=>{
+  const f=fixture(60000),old=await openChatGPTPlanSession(f.directory,terminal),lease=old.admitExecution({runBinding:'a'.repeat(64),deadline:Date.now()+10000,signal:new AbortController().signal,check:()=>{}});
+  const id=lease.receipt().id;
+  try{
+    await verifiedReconnect(f.directory);assert.throws(()=>old.assertActive(),/changed/);
+    const ledger=new ChatGPTExecutionLedger(f.directory);try{assert.equal(ledger.row(id).status,'revoked');assert.throws(()=>ledger.beginRefresh('a'.repeat(64),()=>{}),ChatGPTRefreshDeferred);}finally{ledger.close();}
+    lease.settle('failed',null);
+  }finally{f.cleanup();}
 });

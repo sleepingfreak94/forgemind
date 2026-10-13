@@ -1,3 +1,4 @@
+import { ChatGPTExecutionLedger,ChatGPTRefreshDeferred } from './chatgpt-execution-ledger.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join, resolve } from 'node:path';
@@ -47,11 +48,13 @@ export function createChatGPTRefresh(dependencies: { transport?: ChatGPTTranspor
     let release: ((() => void) & { check(): void }) | undefined, authority: RunAuthority | undefined;
     let action: ReturnType<RunAuthority['reserve']> | undefined;
     let locked = false;
+    let admission:ChatGPTExecutionLedger|undefined,intent:string|undefined,admittedGeneration:string|undefined;
     const lock = () => { store.lock(); locked = true; };
     const unlock = () => { store.unlock(); locked = false; };
     const read = () => {
       const c = store.connection(true);
       if (!c) throw authError('not connected; reconnect required');
+      if(admittedGeneration&&connectionDigest(c)!==admittedGeneration)throw authError('renewal admitted connection changed');
       if (options.expectedConnection && connectionDigest(c) !== connectionDigest(options.expectedConnection)) throw authError('selected connection changed');
       if (store.pendingRefresh()) throw authError('previous renewal is indeterminate; reconnect required');
       return c;
@@ -61,6 +64,9 @@ export function createChatGPTRefresh(dependencies: { transport?: ChatGPTTranspor
       checkLive();
       if (options.expectedConnection && connectionDigest(healthy) !== connectionDigest(options.expectedConnection)) throw authError('selected connection changed');
       if (healthy.expiresAt - Date.now() > minimum) return healthy;
+      admittedGeneration=connectionDigest(healthy);
+      admission=new ChatGPTExecutionLedger(directory);
+      intent=admission.beginRefresh(connectionDigest(healthy),()=>{checkLive();const current=store.reviewedSnapshot(true).connection;if(connectionDigest(current)!==connectionDigest(healthy))throw authError('selected connection changed');});
       lock(); let previous = read();
       if (previous.expiresAt - Date.now() > minimum) return previous;
       unlock(); release = store.lockRefresh(); lock(); previous = read();
@@ -123,12 +129,21 @@ export function createChatGPTRefresh(dependencies: { transport?: ChatGPTTranspor
       return next;
     } catch (error) {
       try { action?.finish('indeterminate'); authority?.finish('failed'); } catch { /* preserve recovery marker */ }
-      if (isAuthError(error)) throw error;
+      if (isAuthError(error)||error instanceof ChatGPTRefreshDeferred) throw error;
       throw authError('renewal failed or was cancelled; reconnect if dispatched');
     } finally {
-      // Never remove the durable pending marker on failure. A lost response must not replay the old refresh token.
-      try { if (locked) unlock(); } finally {
-        try { release?.(); } finally { try { authority?.close(); } finally { store.close(); } }
+      // Settle intent while rotation ownership is still held. Explicit reconnect
+      // must not race an old operation's final intent cleanup.
+      try {
+        if(intent&&!store.pendingRefresh())admission!.finishRefresh(intent);
+      } finally {
+        try { if(locked)unlock(); } finally {
+          try { release?.(); } finally {
+            try { authority?.close(); } finally {
+              try { admission?.close(); } finally { store.close(); }
+            }
+          }
+        }
       }
     }
   };

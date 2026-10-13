@@ -1,8 +1,11 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { ChatGPTExecutionLedger } from './chatgpt-execution-ledger.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { authError, ChatGPTStore, directScope, isAuthError, issuedClient, requestedChatGPTScopes, textField } from './chatgpt-store.js';
+import { authError, ChatGPTStore, connectionDigest, directScope, isAuthError, issuedClient, requestedChatGPTScopes, textField } from './chatgpt-store.js';
 import type { ChatGPTConnection, ChatGPTRegistration } from './chatgpt-store.js';
 import { discoverIdentity, identityJSON, openAIIdentity, verifyIdentity } from './chatgpt-oidc.js';
 import type { ChatGPTTransport } from './chatgpt-oidc.js';
@@ -113,11 +116,25 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
       options.signal?.addEventListener('abort', cancel, { once: true });
       let releaseRefresh: ((() => void) & { check(): void }) | undefined;
       let listener: ReturnType<typeof callbackListener> | undefined;
+      let admission:ChatGPTExecutionLedger|undefined;
+      let staleIntent:ReturnType<ChatGPTExecutionLedger['refreshIntent']>=null;
       try {
         releaseRefresh = store.lockRefresh();
         store.lock();
         const hostId = store.getHostId();
-        const previous = store.connection(true) ?? store.registration();
+        const captured=store.reconnectSnapshot();
+        const previousConnection=store.connection(true);
+        const previous = previousConnection ?? store.registration();
+        if(existsSync(join(store.directory,'chatgpt-execution.sqlite'))){
+          admission=new ChatGPTExecutionLedger(store.directory);staleIntent=admission.refreshIntent();
+          if(staleIntent&&captured.pending&&staleIntent.generation!==captured.pending.generation)throw authError('reconnect recovery metadata mismatch');
+        }
+        if((staleIntent||captured.pending)&&!previous)throw authError('reconnect requires retained account identity');
+        const checkIntent=()=>{
+          if(admission)admission.assertRefreshIntent(staleIntent);
+          else if(existsSync(join(store.directory,'chatgpt-execution.sqlite')))throw authError('reconnect ledger appeared');
+        };
+        const checkOwned=()=>{releaseRefresh!.check();if(controller.signal.aborted)throw authError('sign-in cancelled');};
         const state = randomBytes(32).toString('base64url');
         const nonce = randomBytes(32).toString('base64url');
         const verifier = randomBytes(64).toString('base64url');
@@ -163,9 +180,18 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
           ...(identity.email === undefined ? {} : { email: identity.email }),
         };
         if (controller.signal.aborted) throw authError('sign-in cancelled');
-        releaseRefresh.check();
+        checkOwned();store.assertReconnectSnapshot(captured);checkIntent();
         store.save(connection);
-        store.finishRefresh();
+        const fresh=store.reconnectSnapshot();
+        if(JSON.stringify(fresh.host)!==JSON.stringify(captured.host)||fresh.host.id!==hostId||fresh.connection?.generation!==connectionDigest(connection)||
+          JSON.stringify(fresh.pending)!==JSON.stringify(captured.pending)||
+          fresh.registration?.value.clientId!==connection.clientId||fresh.registration.value.subject!==connection.subject)throw authError('reconnect saved identity mismatch');
+        checkOwned();checkIntent();store.assertReconnectSnapshot(fresh);
+        store.finishRefresh(captured.pending);
+        const settled={...fresh,pending:null};
+        const checkSettled=()=>{checkOwned();store.assertReconnectSnapshot(settled);};
+        if(admission)admission.reconcileReconnect(staleIntent,checkSettled);
+        else{checkIntent();checkSettled();}
         return { clientId: connection.clientId, subject: connection.subject, expiresAt: connection.expiresAt, planUsageEnabled: true };
       } catch (error) {
         // Only module-authored messages escape. Transport/browser/provider errors can contain credentials.
@@ -180,7 +206,7 @@ export function createChatGPTAuth(dependencies: { transport?: ChatGPTTransport; 
           listener.server.closeAllConnections();
           await new Promise<void>(resolve => listener!.server.close(() => resolve()));
         }
-        try { releaseRefresh?.(); } finally { store.close(); }
+        try { releaseRefresh?.(); } finally {try{admission?.close();}finally{store.close();}}
       }
     },
   };

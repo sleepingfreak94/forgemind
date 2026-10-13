@@ -1,8 +1,13 @@
+import { DatabaseSync } from 'node:sqlite';
+import { ChatGPTStore,connectionDigest } from '../../src/live-workflow/chatgpt-store.js';
+import { ChatGPTExecutionLedger } from '../../src/live-workflow/chatgpt-execution-ledger.js';
+import { createChatGPTRefresh } from '../../src/live-workflow/chatgpt-refresh.js';
+import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { createServer, request } from 'node:http';
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -416,4 +421,61 @@ test('lost lock ownership cannot persist new credentials or remove another owner
     assert.deepEqual(readFileSync(join(f.directory, file)), original);
     assert.equal(readFileSync(lock, 'utf8'), 'new-owner');
   } finally { await f.cleanup(); }
+});
+
+
+test('lost refresh response followed by verified explicit reconnect clears only the stale intent and admits fresh execution',async()=>{
+  const f=await fixture();let lateResolve!:(response:Response)=>void;
+  try{
+    await f.connect();
+    const store=new ChatGPTStore(f.directory);try{store.lock();store.confirmBillingReview(store.connection()!);}finally{store.close();}
+    changeStored(f.directory,{expiresAt:Date.now()+1000});
+    const controller=new AbortController(),ensure=createChatGPTRefresh({transport:async()=>{
+      controller.abort();return new Promise<Response>(resolve=>{lateResolve=resolve;});
+    }});
+    await assert.rejects(ensure(f.directory,{minimumLifetimeMs:930000,signal:controller.signal}),/cancelled|renewal/);
+    const ledger=new ChatGPTExecutionLedger(f.directory);try{assert.ok(ledger.refreshIntent());}finally{ledger.close();}
+    assert.equal(existsSync(join(f.directory,'chatgpt-refresh-pending.json')),true);
+    await f.connect();
+    const after=readFileSync(join(f.directory,file),'utf8');
+    lateResolve(Response.json({access_token:'late-synthetic-access',refresh_token:'late-synthetic-refresh',token_type:'Bearer',scope,expires_in:3600}));
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(readFileSync(join(f.directory,file),'utf8'),after);
+    const refreshed=new ChatGPTExecutionLedger(f.directory);try{assert.equal(refreshed.refreshIntent(),null);}finally{refreshed.close();}
+    const session=await openChatGPTPlanSession(f.directory,{isTTY:true,confirm:async()=>{throw new Error('Unexpected review prompt');}});
+    const lease=session.admitExecution({runBinding:'a'.repeat(64),deadline:Date.now()+1000,signal:new AbortController().signal,check:()=>{}});lease.settle('failed',null);
+  }finally{await f.cleanup();}
+});
+
+
+test('reconnect rejects changed captured pending, intent, identity, ledger and rotation lock without clearing replacements',async()=>{
+  for(const mode of ['intent-id','intent-generation','intent-missing','pending-content','pending-inode','pending-missing','connection','registration','host','ledger','rotation-lock','pending-appeared','intent-appeared','connection-missing','pending-malformed','generation-disagreement','missing-identity']){
+    const f=await fixture();
+    try{
+      await f.connect();const connection=loadChatGPTConnection(f.directory),generation=connectionDigest(connection);
+      const ledger=new ChatGPTExecutionLedger(f.directory);if(mode!=='intent-appeared')ledger.beginRefresh(generation,()=>{});ledger.close();
+      const store=new ChatGPTStore(f.directory);try{store.lock();if(mode!=='pending-appeared')store.beginRefresh(connection);}finally{store.close();}
+      const pending=join(f.directory,'chatgpt-refresh-pending.json'),database=join(f.directory,'chatgpt-execution.sqlite');
+      if(mode==='pending-malformed')writeFileSync(pending,JSON.stringify({schemaVersion:1,unexpected:'unsafe'}));
+      if(mode==='generation-disagreement')writeFileSync(pending,JSON.stringify({schemaVersion:1,connectionSha256:'d'.repeat(64),startedAt:1}));
+      if(mode==='missing-identity'){unlinkSync(join(f.directory,file));unlinkSync(join(f.directory,'chatgpt-registration.json'));}
+      await rejectsSafely(f.connect(async url=>{
+        if(mode==='pending-appeared')writeFileSync(pending,JSON.stringify({schemaVersion:1,connectionSha256:generation,startedAt:Date.now()}),{mode:0o600});
+        else if(mode==='intent-appeared'){const db=new DatabaseSync(database);db.prepare('INSERT INTO refresh VALUES(1,?,?)').run('new-intent',generation);db.close();}
+        else if(mode.startsWith('intent-')){const db=new DatabaseSync(database);if(mode==='intent-missing')db.exec('DELETE FROM refresh');else db.prepare('UPDATE refresh SET '+(mode==='intent-id'?'id':'generation')+'=?').run(mode==='intent-id'?'replacement-id':'d'.repeat(64));db.close();}
+        else if(mode==='pending-content')writeFileSync(pending,JSON.stringify({...JSON.parse(readFileSync(pending,'utf8')),startedAt:1}));
+        else if(mode==='pending-inode'){renameSync(pending,pending+'.old');writeFileSync(pending,readFileSync(pending+'.old'),{mode:0o600});}
+        else if(mode==='pending-missing')unlinkSync(pending);
+        else if(mode==='connection-missing')unlinkSync(join(f.directory,file));
+        else if(mode==='connection')changeStored(f.directory,{accessToken:'changed-synthetic'});
+        else if(mode==='registration'){const path=join(f.directory,'chatgpt-registration.json');writeFileSync(path,JSON.stringify({...JSON.parse(readFileSync(path,'utf8')),subject:'changed-subject'}));}
+        else if(mode==='host'){const path=join(f.directory,'chatgpt-host.json');renameSync(path,path+'.old');writeFileSync(path,readFileSync(path+'.old'),{mode:0o600});}
+        else if(mode==='ledger'){renameSync(database,database+'.old');writeFileSync(database,readFileSync(database+'.old'),{mode:0o600});}
+        else {const path=join(f.directory,'chatgpt-refresh.lock');renameSync(path,path+'.old');writeFileSync(path,'replacement',{mode:0o600});}
+        await (await f.callback(url)).text();
+      }));
+      assert.equal(existsSync(pending),mode!=='pending-missing');
+      const db=new DatabaseSync(database,{readOnly:true});assert.equal(!!db.prepare('SELECT 1 FROM refresh').get(),mode!=='intent-missing');db.close();
+    }finally{await f.cleanup();}
+  }
 });
