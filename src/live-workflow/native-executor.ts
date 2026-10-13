@@ -116,6 +116,7 @@ export class NativeExecutor {
   #resolve: (() => void) | undefined;
   #cleanup: Promise<void> | null = null;
   #tokens: unknown = null;
+  #historicalTurns = new Set<string>();
   #runtimeStart = 0;
   #runtimeBase = 0;
   readonly #unlisten: (() => void)[] = [];
@@ -154,6 +155,11 @@ export class NativeExecutor {
     this.#runtimeBoundary();
     const p = event.params as Record<string, unknown>;
     if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Malformed native notification');
+    if (event.method === 'thread/tokenUsage/updated' && !this.#turn && this.#state.value.thread &&
+        typeof p.turnId === 'string' && this.#historicalTurns.has(p.turnId)) {
+      if (p.threadId !== this.#state.value.thread) throw new Error('Wrong notification thread');
+      return; // Resume bootstrap telemetry is not current-turn token usage.
+    }
     if (!this.#state.value.thread || (!this.#turn && event.method !== 'thread/started')) {
       if (this.#events.length >= 64) throw new Error('Preack notification limit');
       this.#events.push(event);
@@ -277,6 +283,8 @@ export class NativeExecutor {
     this.#state.charge('runtimeMs', slice);
     this.#state.update({ status: 'running' });
     this.#terminal = false;
+    this.#tokens = null;
+    this.#historicalTurns.clear();
     this.#active = true;
     const done = new Promise<void>((resolve, reject) => { this.#resolve = resolve; this.#reject = reject; });
     void done.catch(() => undefined);
@@ -308,6 +316,17 @@ export class NativeExecutor {
         ...(!existing ? { dynamicTools: nativeDynamicTools, historyMode: 'legacy' } : {}),
       });
       const threadId = effectiveThread(thread, this.#task, existing, this.#host.provider, cwd);
+      if (existing) {
+        const turns = record(record(thread).thread).turns;
+        if (!Array.isArray(turns) || turns.length > 10000) throw new Error('Invalid resumed turn history');
+        for (const raw of turns) {
+          const past = record(raw);
+          if (typeof past.id !== 'string' || !past.id || past.id.length > 256 ||
+              typeof past.status !== 'string' || !['completed', 'failed', 'interrupted'].includes(past.status) ||
+              this.#historicalTurns.has(past.id)) throw new Error('Invalid resumed turn history');
+          this.#historicalTurns.add(past.id);
+        }
+      }
       this.#state.update({ thread: threadId, status: 'running' });
       this.#flush();
       await rpc.request('turn/start', {
@@ -319,6 +338,7 @@ export class NativeExecutor {
       }, value => {
         const response = record(value), turn = record(response.turn);
         if (typeof turn.id !== 'string' || !turn.id || turn.id.length > 256) throw new Error('Invalid native turn');
+        if (this.#historicalTurns.has(turn.id)) throw new Error('Native turn reused historical ID');
         this.#turn = turn.id;
         this.#flush();
       });

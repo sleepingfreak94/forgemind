@@ -30,7 +30,7 @@ let n=100,phase=0,hash='';
 function tool(name,args){send({id:++n,method:'item/tool/call',params:{threadId:'thread',turnId:'turn',callId:'call'+n,tool:name,arguments:args,namespace:null}})}
 rl.on('line',line=>{const m=JSON.parse(line);
  if(m.method==='initialize') send({id:m.id,result:{}});
- if(m.method==='thread/start'||m.method==='thread/resume') {send({method:'thread/started',params:{thread:{id:'thread'}}}); send({id:m.id,result:{thread:{id:'thread',cliVersion:'0.162.1',cwd:m.params.cwd,ephemeral:false,modelProvider:'openai'},model:m.params.model,modelProvider:'openai',cwd:m.params.cwd,reasoningEffort:m.params.config.model_reasoning_effort,approvalPolicy:'never',approvalsReviewer:'user',serviceTier:'default',sandbox:{type:'readOnly',networkAccess:false}}});}
+ if(m.method==='thread/start'||m.method==='thread/resume') {send({method:'thread/started',params:{thread:{id:'thread'}}}); send({id:m.id,result:{thread:{id:'thread',turns:[],cliVersion:'0.162.1',cwd:m.params.cwd,ephemeral:false,modelProvider:'openai'},model:m.params.model,modelProvider:'openai',cwd:m.params.cwd,reasoningEffort:m.params.config.model_reasoning_effort,approvalPolicy:'never',approvalsReviewer:'user',serviceTier:'default',sandbox:{type:'readOnly',networkAccess:false}}});}
  if(m.method==='turn/start'){send({method:'turn/started',params:{threadId:'thread',turn:{id:'turn',status:'inProgress',items:[]}}});send({id:m.id,result:{turn:{id:'turn',status:'inProgress',items:[]}}}); setImmediate(()=>tool('host_read',{path:'file.txt'}));}
  if(m.result&&m.id>100){if(!m.result.success)return;
  if(phase++===0){hash=JSON.parse(m.result.contentItems[0].text).sha256; tool('host_apply',{summary:'fixture edit',edits:[{path:'file.txt',beforeSha256:hash,content:'after'}]});}
@@ -310,6 +310,91 @@ test('native notification and failed-turn diagnostics survive actual fixture cle
       assert.equal(state.value.status,'stopped');
       assert.deepEqual(executor.receipt.nativeDiagnostic,{kind:entry.kind,httpStatusCode:entry.http,willRetry:false});
       assert.equal(JSON.stringify(executor.receipt).includes(marker),false);
+    }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
+  }
+});
+
+function resumeFixture(history:unknown[],event:unknown,phase:'before-reply'|'bootstrap'|'active') {
+  let script=program.replace('turns:[]','turns:'+JSON.stringify(history));
+  const send=event===null?'':'send('+JSON.stringify(event)+');';
+  if(phase==='before-reply')script=script.replace("send({method:'thread/started'",send+"send({method:'thread/started'");
+  else if(phase==='bootstrap')script=script.replace("if(m.method==='turn/start')", "if(m.method==='thread/resume'){"+send+"} if(m.method==='turn/start')");
+  else script=script.replace("setImmediate(()=>tool('host_read',{path:'file.txt'}));", "setImmediate(()=>{"+send+"tool('host_read',{path:'file.txt'});});");
+  return script;
+}
+const oldUsage={method:'thread/tokenUsage/updated',params:{threadId:'thread',turnId:'old',tokenUsage:{fixtureHistoricalSecret:'discard'}}};
+
+test('resume bootstrap discards only validated terminal history usage before new acknowledgement',async()=>{
+  for(const phase of ['before-reply','bootstrap'] as const){
+    const {dir,task,state}=setup();state.update({thread:'thread'});state.charge('turns',1);state.charge('toolCalls',2);
+    const before=state.value.counters;
+    const child=spawn(process.execPath,['-e',resumeFixture([{id:'old',status:'completed'}],oldUsage,phase)]);
+    const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+    try{
+      await executor.turn('resume historical usage');
+      assert.equal(state.value.status,'ready');assert.equal(executor.receipt.observedTokenUsage,null);
+      assert.equal(state.value.counters.turns,before.turns+1);assert.equal(state.value.counters.toolCalls,before.toolCalls+3);
+      assert.ok(state.value.counters.wireBytes>before.wireBytes);assert.ok(state.value.counters.runtimeMs>before.runtimeMs);
+      assert.equal(JSON.stringify(executor.receipt).includes('fixtureHistoricalSecret'),false);
+    }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
+  }
+});
+test('resume exceptions deny wrong thread, unknown turn, late history and historical effects',async()=>{
+  const variants:[unknown,'bootstrap'|'active'][]=[
+    [{...oldUsage,params:{...oldUsage.params,threadId:'other'}},'bootstrap'],
+    [{...oldUsage,params:{...oldUsage.params,turnId:'future'}},'bootstrap'],
+    [oldUsage,'active'],
+    [{method:'item/agentMessage/delta',params:{threadId:'thread',turnId:'old',delta:'unsafe'}},'bootstrap'],
+    [{method:'turn/completed',params:{threadId:'thread',turn:{id:'old',status:'completed',items:[]}}},'bootstrap'],
+    [{method:'error',params:{threadId:'thread',turnId:'old',error:{codexErrorInfo:'unauthorized'},willRetry:false}},'bootstrap'],
+    ...(['item/started','item/completed'] as const).map(method=>[{method,params:{threadId:'thread',turnId:'old',item:{type:'agentMessage',text:'unsafe'}}},'bootstrap'] as [unknown,'bootstrap']),
+    [{id:900,method:'item/tool/call',params:{threadId:'thread',turnId:'old',callId:'old-call',tool:'host_read',arguments:{path:'file.txt'}}},'bootstrap'],
+  ];
+  for(const [event,phase] of variants){
+    const {dir,task,state}=setup();state.update({thread:'thread'});
+    const child=spawn(process.execPath,['-e',resumeFixture([{id:'old',status:'completed'}],event,phase)]);
+    const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+    try{await assert.rejects(executor.turn('deny history'));assert.equal(state.value.status,'stopped');assert.equal(state.value.counters.toolCalls,0);assert.equal(readFileSync(join(task.root,'file.txt'),'utf8'),'before');}
+    finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
+  }
+});
+test('malformed, unfinished, duplicate history and reused active ID deny resume',async()=>{
+  for(const history of [[{id:'old',status:'inProgress'}],[{id:'',status:'completed'}],[{id:'old',status:'failed'},{id:'old',status:'completed'}],[{id:'turn',status:'interrupted'}],...[['completed'],{},null,undefined].map(status=>[{id:'old',status}])]){
+    const {dir,task,state}=setup();state.update({thread:'thread'});
+    const child=spawn(process.execPath,['-e',resumeFixture(history,null,'bootstrap')]);
+    const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+    try{await assert.rejects(executor.turn('invalid history'),history[0]?.id==='turn'?/Native turn reused historical ID/:/Invalid resumed turn history/);assert.equal(state.value.status,'stopped');assert.equal(state.value.counters.toolCalls,0);}
+    finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
+  }
+});
+
+test('historical allowset and observed tokens reset on each host-started turn',async()=>{
+  const {dir,task,state}=setup();state.update({thread:'thread'});
+  const current={method:'thread/tokenUsage/updated',params:{threadId:'thread',turnId:'turn',tokenUsage:{currentFixtureTokens:7}}};
+  const script=resumeFixture([],oldUsage,'bootstrap').replace("let n=100,phase=0,hash='';","let n=100,phase=0,hash='',resumes=0;")
+    .replace('turns:[]',"turns:(++resumes===1?[{id:'old',status:'completed'}]:[])")
+    .replace(terminalStatement,'else {'+writeBatch([current,terminal])+'}');
+  const child=spawn(process.execPath,['-e',script]);const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+  try{
+    await executor.turn('first turn');assert.deepEqual(executor.receipt.observedTokenUsage,{currentFixtureTokens:7});
+    const tools=state.value.counters.toolCalls;
+    await assert.rejects(executor.turn('second turn'));
+    assert.equal(executor.receipt.observedTokenUsage,null);assert.equal(state.value.counters.toolCalls,tools);
+    assert.equal(state.value.status,'stopped');
+  }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+
+test('delayed bootstrap snapshot is discarded before delayed acknowledgement; fresh threads have no exception',async()=>{
+  for(const resumed of [true,false]){
+    const {dir,task,state}=setup();if(resumed)state.update({thread:'thread'});
+    const script=resumeFixture([{id:'old',status:'completed'}],null,'bootstrap')
+      .replace("if(m.method==='turn/start'){", "if(m.method==='turn/start'){setTimeout(()=>send("+JSON.stringify(oldUsage)+"),5);setTimeout(()=>{")
+      .replace("setImmediate(()=>tool('host_read',{path:'file.txt'}));}","setImmediate(()=>tool('host_read',{path:'file.txt'}));},30);}");
+    const child=spawn(process.execPath,['-e',script]);const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+    try{
+      if(resumed){await executor.turn('delayed resume');assert.equal(state.value.status,'ready');assert.equal(executor.receipt.observedTokenUsage,null);}
+      else{await assert.rejects(executor.turn('fresh thread old usage'),/Wrong notification turn/);assert.equal(state.value.counters.toolCalls,0);}
     }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
   }
 });

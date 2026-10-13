@@ -103,3 +103,11 @@ Actual provider inference remains gated on frozen reviewed production code and
 current account authority. Offline fixtures and native initialize/deny probes do
 not prove live entitlement, billing settings, successful inference or completion
 of the later project-memory/weekly-summary feature work.
+
+Resume accepts bootstrap token-usage snapshots only for the exact validated resumed
+thread and terminal historical IDs supplied in its reply. Snapshots arriving before
+the new turn acknowledgement are discarded rather than attributed to the new turn;
+wire, runtime and authority enforcement still apply. Newly arriving historical
+usage after acknowledgement and all historical effects are denied. The history
+metadata validator accepts at most 10,000 unique terminal IDs per resume, bounded
+also by the RPC wire limits; this is a history-validation limit, not a turn quota.
