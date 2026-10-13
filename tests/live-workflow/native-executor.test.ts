@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, realpathSync, symlink
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
-import { NativeExecutor } from '../../src/live-workflow/native-executor.js';
+import { NativeExecutor, NativeProviderError } from '../../src/live-workflow/native-executor.js';
 import { NativeState } from '../../src/live-workflow/native-executor-state.js';
 import { FixtureNativeHost, fixtureStdioRpc } from '../../src/live-workflow/native-executor-host.js';
 import { nativeReadiness } from '../../src/live-workflow/native-executor-readiness.js';
@@ -20,7 +20,7 @@ function setup() {
   writeFileSync(join(root, 'file.txt'), 'before');
   const task: NativeTask = { project: 'fixture', task: 'task', model:'gpt-6.1-sol',effort:'medium',source: sha256('before'), root,
     readPaths: ['file.txt'], writePaths: ['file.txt'], checks: [{ id: 'check', executable: process.execPath, args: [], timeoutMs: 1000 }],
-    budget: { runtimeMs: 2000, turns: 4, toolCalls: 12, inputBytes: 10000, resultBytes: 10000, wireBytes: 50000, outputBytes: 1000 } };
+    budget: { retries:0,runtimeMs: 2000, turns: 4, toolCalls: 12, inputBytes: 10000, resultBytes: 10000, wireBytes: 50000, outputBytes: 1000 } };
   return { dir, task, state: new NativeState(join(dir, 'state'), task) };
 }
 const program = `
@@ -281,5 +281,35 @@ test('transport disconnect observed during the terminal receive batch rejects se
     assert.equal(state.value.status, 'stopped');
   } finally {
     await executor.close(); state.close(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('native notification and failed-turn diagnostics survive actual fixture cleanup without remote text',async()=>{
+  const marker='DO_NOT_EXPOSE_TOKEN_OR_PROMPT';
+  const cases=[{info:'unauthorized',kind:'unauthorized',http:null},
+    {info:{httpConnectionFailed:{httpStatusCode:401}},kind:'httpConnectionFailed',http:401},
+    {info:'rateLimitExceeded',kind:'rateLimitExceeded',http:null},
+    {info:{responseStreamDisconnected:{httpStatusCode:502}},kind:'responseStreamDisconnected',http:502},
+    {info:{unknownRemoteKind:marker},kind:'unknown',http:null}];
+  for(const mode of ['notification','failed-turn'])for(const entry of cases){
+    const {dir,task,state}=setup();
+    const rawError={message:marker,additionalDetails:marker,misalignment:{explanation:marker},codexErrorInfo:entry.info};
+    const notification=mode==='notification'
+      ? {method:'error',params:{threadId:'thread',turnId:'turn',error:rawError,willRetry:false}}
+      : {method:'turn/completed',params:{threadId:'thread',turn:{id:'turn',status:'failed',items:[],error:rawError}}};
+    const completion="else send({method:'turn/completed',params:{threadId:'thread',turn:{id:'turn',status:'completed',items:[]}}});";
+    const child=spawn(process.execPath,['-e',program.replace(completion,'else send('+JSON.stringify(notification)+');')]);
+    const {host}=hostFor(task,child),executor=new NativeExecutor(task,state,host);
+    try{
+      await assert.rejects(executor.turn('safe fixture error'),error=>{
+        assert.ok(error instanceof NativeProviderError);
+        assert.deepEqual(error.diagnostic,{kind:entry.kind,httpStatusCode:entry.http,willRetry:false});
+        assert.equal((error as Error & {cause?:unknown}).cause,undefined);
+        assert.equal(String(error).includes(marker),false);return true;
+      });
+      assert.equal(state.value.status,'stopped');
+      assert.deepEqual(executor.receipt.nativeDiagnostic,{kind:entry.kind,httpStatusCode:entry.http,willRetry:false});
+      assert.equal(JSON.stringify(executor.receipt).includes(marker),false);
+    }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
   }
 });

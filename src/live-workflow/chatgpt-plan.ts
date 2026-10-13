@@ -90,6 +90,20 @@ export class ChatGPTPlanSession {
     return { clientId: state.connection.clientId, accountSha256: identity(state.connection),
       billingReview: 'owner-confirmed-server-credit-control-off', confirmedAt: state.review.confirmedAt, expiresAt: state.expiresAt };
   }
+  /** Token-sharing native launch seam. Token stays in the trusted owner's callback,
+   * never a task/config return value, CLI argument, receipt or persisted native home. */
+  async withNativeAccess<T>(launch: (accessToken: string, assertLease: () => void) => Promise<T>, signal: AbortSignal): Promise<T> {
+    this.assertActive(); signal.throwIfAborted();
+    const state = sessions.get(this)!;
+    const expected = record(state.connection);
+    const assertLease = () => {
+      this.assertActive(); signal.throwIfAborted();
+      if (record(state.connection) !== expected) throw new Error('Native account token renewed; stop and restart between completed turns');
+    };
+    const result = await launch(state.connection.accessToken, assertLease);
+    assertLease();
+    return result;
+  }
   async request(payload: string, signal: AbortSignal): Promise<Response> {
     this.assertActive(); signal.throwIfAborted();
     const state = sessions.get(this)!;

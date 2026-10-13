@@ -1,8 +1,11 @@
-import type { CheckCommand } from './contracts.js';
-export const nativeSchema = 'native-session-v1';
-export const budgetKeys = ['runtimeMs', 'turns', 'toolCalls', 'inputBytes', 'resultBytes', 'wireBytes', 'outputBytes'] as const;
+import type { CheckCommand, CodingResult } from './contracts.js';
+export const nativeSchema = 'native-session-v2';
+export const budgetKeys = ['runtimeMs', 'turns', 'toolCalls', 'inputBytes', 'resultBytes', 'wireBytes', 'outputBytes', 'retries'] as const;
 export type BudgetKey = typeof budgetKeys[number];
-export type NativeBudget = Record<BudgetKey, number>;
+export type NativeCounters = Record<BudgetKey, number>;
+export type NativeBudget = Omit<NativeCounters, 'turns' | 'toolCalls' | 'retries'> & {
+  turns: number | null; toolCalls: number | null; retries: 0 | 1 | 2;
+};
 export interface NativeTask {
   project: string; task: string; source: string; root: string;
   model: 'gpt-6.1-sol'; effort: 'medium' | 'high';
@@ -10,10 +13,20 @@ export interface NativeTask {
 }
 export interface NativeCheckpoint {
   schema: string; binding: string; source: string; thread: string | null;
-  stage: string; pending: string | null; seen: string[]; counters: NativeBudget;
+  stage: string; pending: string | null; seen: string[]; counters: NativeCounters;
   status: 'ready' | 'running' | 'completed' | 'stopped' | 'indeterminate';
+}
+export interface NativeProjectBoundary {
+  source(): string;
+  assertCurrent(expected: string): void;
+  commitAppliedSource(before: string, applied: CodingResult): { source: string; transitionReceiptId: string };
 }
 export const unavailableNativeMetrics = ['hardProviderRequestCount', 'fullNativePromptBytes', 'rawProviderResponseBytes'] as const;
 export function validateBudget(budget: NativeBudget): void {
-  for (const key of budgetKeys) if (!Number.isSafeInteger(budget[key]) || budget[key] < 1) throw new Error('Invalid native budget');
+  if (!budget || typeof budget !== 'object' || Object.keys(budget).sort().join() !== [...budgetKeys].sort().join()) throw new Error('Invalid native budget');
+  for (const key of budgetKeys) {
+    const value = budget[key];
+    if ((key === 'turns' || key === 'toolCalls') && value === null) continue;
+    if (!Number.isSafeInteger(value) || value === null || (key === 'retries' ? value < 0 || value > 2 : value < 1)) throw new Error('Invalid native budget');
+  }
 }

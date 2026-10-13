@@ -3,14 +3,14 @@ import { safePath, sha256 } from './validation.js';
 import { applyEdits } from './edits.js';
 import type { NativeTask } from './native-executor-contracts.js';
 import type { NativeState } from './native-executor-state.js';
-import type { FixtureNativeHost } from './native-executor-host.js';
+import type { NativeHost } from './native-executor-host.js';
 export const nativeDynamicTools = ['host_read', 'host_apply', 'host_check'].map(name => ({
   type: 'function', name, description: 'Owner bounded ' + name,
   inputSchema: { type: 'object', additionalProperties: false, properties: name === 'host_read' ? { path: { type: 'string' } } : name === 'host_check' ? { id: { type: 'string' } } : { summary: { type: 'string' }, edits: { type: 'array', items: { type: 'object' } } },
 } }));
-export async function nativeTool(task: NativeTask, state: NativeState, host: FixtureNativeHost, tool: string, args: unknown, signal: AbortSignal): Promise<string> {
+export async function nativeTool(task: NativeTask, state: NativeState, host: NativeHost, tool: string, args: unknown, signal: AbortSignal): Promise<string> {
   host.boundary(); signal.throwIfAborted();
-  if (host.source() !== state.value.source) throw new Error('Stale native source');
+  host.project.assertCurrent(state.value.source);
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Malformed tool arguments');
   const a = args as Record<string, unknown>;
   let result: unknown;
@@ -22,8 +22,12 @@ export async function nativeTool(task: NativeTask, state: NativeState, host: Fix
     try { receipt.check(); host.boundary(); const content = readFileSync(path); result = { path: a.path, sha256: sha256(content), content: content.toString('utf8') }; receipt.finish('completed',sha256(content)); } catch(e) { receipt.finish('indeterminate'); throw e; }
   } else if (tool === 'host_apply') {
     state.update({ pending: 'files.apply' });
-    result = applyEdits(task.root, state.value.source, task.writePaths, args, host.authority, () => { host.boundary(); signal.throwIfAborted(); });
-    state.update({ source: host.source() });
+    const before = state.value.source;
+    result = applyEdits(task.root, before, task.writePaths, args, host.authority, () => {
+      host.boundary(); signal.throwIfAborted(); host.project.assertCurrent(before);
+    });
+    const transition = host.project.commitAppliedSource(before, result as import('./contracts.js').CodingResult);
+    state.update({ source: transition.source });
   } else if (tool === 'host_check') {
     if (Object.keys(a).join() !== 'id' || typeof a.id !== 'string' || !task.checks.some(c => c.id === a.id)) throw new Error('Check outside exact grant');
     state.update({ pending: 'check' });

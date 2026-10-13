@@ -6,8 +6,8 @@ import { sha256 } from './validation.js';
 import { budgetKeys, nativeSchema, validateBudget } from './native-executor-contracts.js';
 import type { NativeTask, NativeCheckpoint, BudgetKey } from './native-executor-contracts.js';
 
-function bindingFor(task: NativeTask): string {
-  return sha256(JSON.stringify({ ...task, source: undefined }));
+function bindingFor(task: NativeTask, authorityBinding?: string): string {
+  return sha256(JSON.stringify({ ...task, source: undefined, ...(authorityBinding ? {authorityBinding} : {}) }));
 }
 
 /** Validate the real workspace before creating any owner state. */
@@ -35,12 +35,12 @@ function validateCheckpoint(raw: unknown, task: NativeTask): asserts raw is Nati
   }
   for (const key of budgetKeys) {
     const count = value.counters[key];
-    if (!Number.isSafeInteger(count) || count < 0 || count > task.budget[key]) {
+    if (!Number.isSafeInteger(count) || count < 0 || (task.budget[key] !== null && count > task.budget[key]!)) {
       throw new Error('Invalid checkpoint counters');
     }
   }
   const seen = value.seen;
-  if (!Array.isArray(seen) || seen.length > task.budget.toolCalls ||
+  if (!Array.isArray(seen) || (task.budget.toolCalls !== null && seen.length > task.budget.toolCalls) ||
       seen.some(call => typeof call !== 'string' || !call || call.length > 128) ||
       new Set(seen).size !== seen.length ||
       !['ready', 'running', 'completed', 'stopped', 'indeterminate'].includes(value.status)) {
@@ -52,10 +52,14 @@ function validateCheckpoint(raw: unknown, task: NativeTask): asserts raw is Nati
 export class NativeState {
   readonly #db: DatabaseSync;
   readonly #task: NativeTask;
+  readonly #authorityBinding: string | undefined;
   #value: NativeCheckpoint;
   #saved: string | null = null;
+  #closed = false;
 
-  constructor(directory: string, task: NativeTask) {
+  constructor(directory: string, task: NativeTask, authorityBinding?: string) {
+    if (authorityBinding !== undefined && !/^[a-f0-9]{64}$/.test(authorityBinding)) throw new Error('Invalid checkpoint authority binding');
+    this.#authorityBinding = authorityBinding;
     validateBudget(task.budget);
     const root = canonicalWorkspace(task.root);
     this.#task = structuredClone(task);
@@ -79,7 +83,7 @@ export class NativeState {
     try {
       this.#db.exec('PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS checkpoint(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)');
       const row = this.#db.prepare('SELECT value FROM checkpoint WHERE id=1').get();
-      const binding = bindingFor(task);
+      const binding = bindingFor(task, this.#authorityBinding);
       const raw: unknown = row ? JSON.parse(String(row.value)) : {
         schema: nativeSchema, binding, source: task.source, thread: null,
         stage: 'new', pending: null, seen: [], status: 'ready',
@@ -102,7 +106,7 @@ export class NativeState {
   }
 
   matches(task: NativeTask): boolean {
-    return this.#value.binding === bindingFor(task) && this.#value.source === task.source;
+    return this.#value.binding === bindingFor(task, this.#authorityBinding) && this.#value.source === task.source;
   }
   get value(): NativeCheckpoint { return structuredClone(this.#value); }
 
@@ -117,7 +121,8 @@ export class NativeState {
 
   charge(key: BudgetKey, count: number): void {
     if (!Number.isSafeInteger(count) || count < 0 ||
-        this.#value.counters[key] + count > this.#task.budget[key]) {
+        !Number.isSafeInteger(this.#value.counters[key] + count) ||
+        (this.#task.budget[key] !== null && this.#value.counters[key] + count > this.#task.budget[key]!)) {
       throw new Error('Native budget exhausted: ' + key);
     }
     this.#value.counters[key] += count;
@@ -129,11 +134,11 @@ export class NativeState {
   }
   claim(call: string): void {
     if (this.#value.seen.includes(call)) throw new Error('Replayed callback');
-    if (this.#value.counters.toolCalls >= this.#task.budget.toolCalls) throw new Error('Native budget exhausted: toolCalls');
+    if ((this.#task.budget.toolCalls !== null && this.#value.counters.toolCalls >= this.#task.budget.toolCalls) || !Number.isSafeInteger(this.#value.counters.toolCalls + 1)) throw new Error('Native budget exhausted: toolCalls');
     if (!call || call.length > 128) throw new Error('Invalid callback identity');
     this.#value.counters.toolCalls++;
     this.#value.seen.push(call);
     this.#save();
   }
-  close(): void { this.#db.close(); }
+  close(): void { if (!this.#closed) { this.#closed = true; this.#db.close(); } }
 }

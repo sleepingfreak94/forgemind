@@ -1,106 +1,98 @@
-# Native executor offline foundation
+# Native executor production route
 
-This adapter exercises the native AppServer reasoning/tool loop with an actual
-local Node fixture process. It is not a qualified production executor. The old
-LiveTask, provider broker, native driver and OfflineSeatbeltHost remain unchanged.
-`nativeReadiness(..., 'live', ...)` always fails closed: no production host exists
-in this change, and approval alone cannot make it launch ready.
+The native adapter keeps the old LiveTask/provider broker unchanged. Native owns
+reasoning and tool sequencing; ForgeMind owns authentication, permissions, source
+transitions, supervised execution, checkpoints and receipts. The production route
+uses the existing reviewed ForgeMind ChatGPT account through the documented Codex
+AppServer token-sharing provider, not ambient native login or an API-key fallback.
+No token is copied into project files, native history/configuration, argv or logs.
 
-## Implemented contract
+## Owner invocation
 
-`NativeTask` binds project, task, immutable source, exact read/write paths,
-predefined checks, model/effort and cumulative budget. `NativeState` stores that
-binding with schema, thread, completed stage, callback identities, pending actions
-and counters in an owner-private SQLite directory outside the worker checkout.
-The workspace must be a canonical real directory, validated before state creation.
-Persisted updates use synchronous SQLite durability and compare-and-swap updates;
-a stale second handle cannot overwrite counters or claims. A restarted executor
-must present the same binding/current source and obtain a fresh owner authority
-and boundary. Pending actions, interrupted running state and indeterminate cleanup
-require explicit owner reconciliation; none can automatically replay a write.
+After independent qualification, the owner can invoke:
 
-The fixture uses pinned 0.162.1 AppServer schema shapes: experimental initialize,
-thread/start with persistent history and function dynamic tools, thread/resume,
-turn/start, nullable callback namespace, before-ack thread/turn notifications, and
-turn/interrupt. Thread results must echo Sol model/provider/effort, standard service
-tier, read-only/no-network sandbox configuration and pinned CLI version. These
-configuration echoes are protocol checks, not proof of filesystem isolation.
+```sh
+node dist/src/local-runtime/native-cli.js \
+  --packet /private/native-owner-packet.json \
+  --connection /private/forgemind-account \
+  --codex /absolute/pinned-codex \
+  --state /private/native-task-state
+```
 
-Only host_read, host_apply and host_check are supported. Host reads use exact
-paths, safe-path validation, current source and action receipts. Apply reuses
-`applyEdits`, including preimage digest checks and RunAuthority-compatible action
-receipts. Checks resolve an exact predefined ID and record a command receipt.
-The fixture check callback is synthetic; it does not certify a production command
-sandbox. A production callback must reuse `runChecks` or an equally qualified
-supervisor. Unknown tools, native approval requests, builtin operation items,
-malformed/replayed callbacks and exhausted budgets stop the session.
+The packet has schema `native-owner-packet-v1`, a `task` matching NativeTask and an
+`objective`. The immutable packet digest binds objective, budget and permissions; only the
+observed source is excluded so verified checkpoint source transitions can resume.
+The packet must be owner-private, outside the worker checkout, and unchanged
+during each active invocation. A
+changed packet, source drift, cancellation, expired account/lease/fence or changed
+runtime pin denies further work. Source and owner state must be separate canonical
+paths. Only host_read, host_apply and predefined host_check are available. A task
+cannot select executable plugins or broaden its path/check permissions.
 
-## Budget semantics
+NativeTask v2 supports explicit `turns:null` and `toolCalls:null`: these counters
+remain numeric and cumulative but impose no fixed quota. Runtime, UTF-8 host
+input/result bytes, bidirectional raw AppServer wire and accepted output remain
+bounded. Retries are persisted with an allowance of zero through two; the current
+runner performs **zero automatic retries**. Neither an unknown native effect nor a
+pending source transition can replay. Token usage is observed. Hard upstream
+provider request count, full native prompt bytes and raw provider response bytes
+are unavailable, and no equivalent bound is claimed.
 
-Enforced cumulatively across resumed processes:
+The private native runtime sees no project files. TLS uses the binary-pinned
+embedded roots plus the fixed `/private/etc/ssl/cert.pem` CA bundle. The latter is
+required to be canonical, root-owned, bounded, nonempty and parseable PEM; its
+exact file identity/bytes join the launch dependency pins and runtime digest.
+Only fixed SSL_CERT_FILE is added to the child's allowlisted environment; no
+ambient SSL_CERT_DIR or CODEX_CA_CERTIFICATE is inherited. Invalid bundles fail
+before launch, without granting SecurityServer or expanding network destinations.
+Native plugins and unbounded connection retries are explicitly disabled alongside
+zero request/stream retries. These are protocol configuration inputs, with the
+existing independent OS boundary and receipts still enforcing authority. Its private working directory
+and immutable native-runtime-v1 receipt bind the CLI/config/profile pins, fixed
+provider, model/effort, account/review, parent grant digest, exact permission digest,
+budget digest, lease, fencing epoch and deadline. Host file/check actions use the
+separate current project-source authority. The process can stay alive through an
+authorized source edit because runtime identity is not project inventory.
 
-- Active runtime in milliseconds, host-started turns, host tool callbacks.
-- UTF-8 host turn input and callback arguments; serialized host result bytes.
-- Both directions of raw AppServer JSONL stdio, counted before transport acceptance.
-- Accepted agent output bytes, conservatively including repeated delta/final text.
-- Exact file and predefined check grants.
+## Source transitions and durable recovery
 
-Runtime uses monotonic elapsed time, prepaid minimum slices and a watchdog.
-Interrupted running state cannot resume, so a crash cannot reset active usage.
-Completion notifications latch one terminal frame without immediately marking
-state ready. Settlement rechecks already dispatched fatal/duplicate/conflicting
-traffic, cancellation, current authority, runtime and pending callbacks before
-committing ready. This boundary covers the current receive batch and drained
-preack notifications; it does not wait for EOF or claim absence of future faults.
-A later observed disconnect/fault stops the persistent session and invalidates its
-checkpoint. Stop requests attempt a bounded turn/interrupt, then mandatory supervisor stop.
-Unavailable or failed cleanup remains indeterminate. Token usage notifications are
-observations only. **Hard upstream provider request count, full native prompt bytes,
-and raw upstream provider response bytes are unavailable.** These limits do not
-replicate the old broker's request/prompt/raw-provider limits.
+Host application captures S0 inventory, reuses validated digest-bound applyEdits,
+derives the expected complete S1 inventory solely from the validated proposal and
+rejects unrelated changes. It then durably records the S0-to-S1 owner phase before
+updating NativeState.source. The write remains pending until both ledgers and the
+bounded result are settled. A failed partial transition or interrupted running
+checkpoint requires owner reconciliation and never automatically replays a write.
+Old S0 reservations are denied after the verified transition; S1 checks use fresh
+source-bound authority. Lifecycle reservation stays bound to immutable runtime.
 
-The sole constructible host is `FixtureNativeHost`, clearly marked offline.
-Serialized task configuration cannot create a live-qualified host. Its raw stdio
-meter reuses `JsonlRpc` with bounded lines, aggregate transport size and timeouts.
-Fixtures are trusted test seams, not security boundaries or credentials providers.
+Completion latches one terminal frame. Ready is committed only after checking
+already dispatched fatal/duplicate/conflicting traffic, cancellation, authority,
+runtime and pending callbacks. This acceptance boundary covers the current receive
+batch and drained preack notifications; it does not await EOF or assert that future
+faults cannot occur. Later faults stop the persistent session. Shutdown attempts a
+bounded turn/interrupt followed by mandatory supervisor reaping. Uncertain cleanup
+is indeterminate.
 
-## Validation
+Authentication is prepared/refreshed by the owner before launch. The existing
+same-account credits-off acknowledgement is reused. A missing/reset review remains
+an owner interaction; it is never synthesized. Token renewal invalidates an active
+native token lease: stop/reap, then restart and thread/resume only between completed
+turns. Tokens/history are separate from ForgeMind's private refresh credential
+store. No worker receives refresh credentials or account network authority.
 
-Build/typecheck and `node --test dist/tests/live-workflow/native-executor.test.js`
-exercise actual fixture processes, digest-bound read/apply/check, before-ack
-notifications, process restart with thread/resume and fresh receipts, cumulative
-budgets, exact paths, stale digests, callback denials, concurrent stale state,
-cancellation, revocation, expiry, disconnect and failed cleanup. No authenticated
-inference, native account login, production sandbox or live model was tested.
+## Canary packet, not an inference observation
 
-## Proposed canary activation contract — not accepted or executed
+Use a disposable Git checkout containing `src/canary-counter.js` and
+`tests/canary-counter.test.mjs`, whose fixed direct-import check exposes an increment
+bug. Exact reads are those two files; the only write is the counter source. The
+fixed check is the owner-pinned Node executable with
+`--test --test-isolation=none tests/canary-counter.test.mjs`, timeout 30,000 ms.
+Model is gpt-6.1-sol, medium effort, default service tier. Runtime is 900,000 ms;
+turns/toolCalls are null; retries are zero; host input/result limits are
+262,144/1,048,576 bytes; wire/output limits are 33,554,432/2,097,152 bytes.
 
-A future independently reviewed production host must enforce filesystem/network
-and executable boundaries independently of native configuration, supervise the
-native process and descendants, bind source/fencing authority and current auth,
-provide owner-private persistent CODEX_HOME/state, meter raw stdio, and demonstrate
-restart/cancel/expiry/revocation cleanup. Existing OfflineSeatbeltHost cannot supply
-these guarantees unchanged. Direct authenticated provider network access and
-native account authentication require separately approved production implementation;
-ambient credentials must not be copied into worker files or fixture processes.
-Model catalog presence does not prove personal ChatGPT plan access or entitlement.
-
-After that implementation and independent qualification, request explicit owner
-acceptance of this distinct native budget contract for one disposable canary:
-
-| Setting | Proposed value |
-| --- | --- |
-| Model/access | gpt-6.1-sol, medium effort, default service tier, personal ChatGPT access |
-| Runtime / host turns / host callbacks | 900,000 ms / 3 / 30 |
-| Host input / result bytes | 32,768 / 262,144 |
-| Raw AppServer wire / accepted output bytes | 33,554,432 / 2,097,152 |
-| Exact read paths | src/canary-counter.js, tests/canary-counter.test.mjs |
-| Exact write path | src/canary-counter.js |
-| Predefined check | check-canary: owner-pinned Node executable, --test --test-isolation=none tests/canary-counter.test.mjs, 30,000 ms |
-
-The disposable project/check inputs must be prepared and source-bound by the
-owner before the pilot. The scenario is a counter increment bug with a fixed
-failing assertion, repaired via host_apply and verified by the fixed check. This
-proposal authorizes nothing: production host implementation, independent review,
-current action/auth fences and explicit acceptance remain required. The unavailable
-upstream metrics above must appear in the eventual pilot request and receipt.
+The existing user authorization covers implementing and qualifying this route.
+Actual provider inference remains gated on frozen reviewed production code and
+current account authority. Offline fixtures and native initialize/deny probes do
+not prove live entitlement, billing settings, successful inference or completion
+of the later project-memory/weekly-summary feature work.
