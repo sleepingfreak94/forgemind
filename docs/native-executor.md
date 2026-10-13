@@ -42,6 +42,13 @@ The private native runtime sees no project files. TLS uses the binary-pinned
 embedded roots plus the fixed `/private/etc/ssl/cert.pem` CA bundle. The latter is
 required to be canonical, root-owned, bounded, nonempty and parseable PEM; its
 exact file identity/bytes join the launch dependency pins and runtime digest.
+The fixed [Sol catalog](native-model-catalog.md) presents exactly the three owner
+host functions directly, without the code-mode helper. Launch pins its bytes and
+canonical file identity outside native writable directories. Auxiliary plugins,
+unbounded connection retries, agents, goals, view_image, sleep_tool and experimental
+request_user_input are disabled. The no-fork and network boundaries remain enforced
+by the supervisor profile.
+
 Only fixed SSL_CERT_FILE is added to the child's allowlisted environment; no
 ambient SSL_CERT_DIR or CODEX_CA_CERTIFICATE is inherited. Invalid bundles fail
 before launch, without granting SecurityServer or expanding network destinations.

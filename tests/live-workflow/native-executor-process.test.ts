@@ -1,3 +1,9 @@
+import { createServer as createHttpServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { JsonlRpc } from '../../src/agent-drivers/jsonl-rpc.js';
+import { nativeInferenceProfile } from '../../src/live-workflow/native-executor-profile.js';
+import { runtimeFiles } from '../../src/live-workflow/process.js';
+import { NATIVE_CATALOG_PATH,NATIVE_CATALOG_SHA256 } from '../../src/live-workflow/native-executor-catalog.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import net, { createServer } from 'node:net';
@@ -39,6 +45,7 @@ test('real pinned 0.162.1 starts a read-only native thread offline and reaps bef
     assert.ok(plan.dependencies.some(pin=>pin.path===NATIVE_CA_FILE));
     assert.ok(plan.profile.includes(JSON.stringify(NATIVE_CA_FILE)));
     assert.equal(plan.dependencies.filter(pin=>pin.path===NATIVE_CA_FILE).length,1);
+    assert.equal(plan.dependencies.find(pin=>pin.path===NATIVE_CATALOG_PATH)?.digest,NATIVE_CATALOG_SHA256);
     const native = await launchNativeProcess({ plan, lifecycle: { runtimeBinding: plan.runtimeBinding, receiptId: 'offline-receipt',
       checkActive() {}, finish(status) { finish = status; } }, accessToken: 'offline-fixture-not-a-credential' });
     try {
@@ -153,4 +160,66 @@ test('fixed configuration disables auxiliary plugins and unbounded connection re
   assert.match(config,/\[features\][\s\S]*\nplugins = false\n/);
   assert.match(config,/\nunbounded_connection_retries = false\n/);
   assert.match(config,/\nrequest_max_retries = 0\n/);assert.match(config,/\nstream_max_retries = 0\n/);
+});
+
+test('actual native offline ResponsesLite advertises exactly three direct host tools under the same no-fork profile',
+  {skip:process.platform!=='darwin',timeout:15000},async()=>{
+  const root=realpathSync(mkdtempSync(tmpdir()+'/fm-native-direct-')),home=root+'/home',tmp=root+'/tmp';
+  mkdirSync(home,{mode:0o700});mkdirSync(tmp,{mode:0o700});
+  let capturedResolve!:(names:string[])=>void,capturedReject!:(error:Error)=>void;
+  const captured=new Promise<string[]>((resolve,reject)=>{capturedResolve=resolve;capturedReject=reject;});
+  const sockets=new Set<import('node:net').Socket>();let posts=0;
+  const server=createHttpServer((request,response)=>{
+    let bytes=0;const chunks:Buffer[]=[];
+    request.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes>131072){request.destroy();capturedReject(new Error('Fixture request limit'));}else chunks.push(chunk);});
+    request.on('end',()=>{
+      try{
+        posts++;const body=JSON.parse(Buffer.concat(chunks).toString());
+        const additional=(body.input??[]).filter((item:{type?:string})=>item.type==='additional_tools').flatMap((item:{tools?:unknown[]})=>item.tools??[]);
+        const defs=[...(body.tools??[]),...additional];
+        assert.equal(body.model,'gpt-6.1-sol');
+        assert.equal(defs.length,1);
+        assert.equal(defs[0].type,'namespace');
+        assert.equal(defs[0].name,'functions');
+        assert.ok(Array.isArray(defs[0].tools));
+        assert.equal(defs[0].tools.length,3);
+        const names:string[]=defs[0].tools.map((tool:{type?:string;name?:string})=>{
+          assert.equal(tool.type,'function');
+          assert.equal(typeof tool.name,'string');
+          return tool.name!;
+        }).sort();
+        capturedResolve(names);
+        response.writeHead(401,{'content-type':'application/json'});response.end(JSON.stringify({error:{code:'invalid_key',message:'offline fixture only'}}));
+      }catch(error){capturedReject(error as Error);response.writeHead(500);response.end();}
+    });
+  });
+  server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});
+  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const address=server.address();assert.ok(address&&typeof address!=='string');const port=address.port;
+  const endpoint='http://127.0.0.1:'+port;
+  // ONLY the fixed production endpoint is substituted for an offline local HTTP
+  // fixture. No real account, external network, model response or qualification.
+  writeFileSync(home+'/config.toml',nativeConfiguration('gpt-6.1-sol').replace('https://api.openai.com/v1',endpoint+'/v1'),{mode:0o600});
+  const exe=realpathSync(homedir()+'/.local/bin/codex');
+  const dependencies=[...runtimeFiles(exe).filter(path=>path!==exe),NATIVE_CA_FILE,NATIVE_CATALOG_PATH];
+  const profile=nativeInferenceProfile(exe,home,tmp,port,dependencies);
+  assert.equal(profile.includes('(allow process-fork'),false);
+  const child=spawn('/usr/bin/sandbox-exec',['-p',profile,exe,'app-server','--listen','stdio://'],{
+    cwd:home,detached:true,stdio:['pipe','pipe','pipe'],env:{HOME:home,CODEX_HOME:home,TMPDIR:tmp,LANG:'C',LC_ALL:'C',OPENSSL_CONF:'/dev/null',SSL_CERT_FILE:NATIVE_CA_FILE,ACCESS_TOKEN:'offline-fixture-not-a-credential',HTTP_PROXY:endpoint,HTTPS_PROXY:endpoint,NO_PROXY:''}});
+  child.stderr!.resume();const exited=new Promise<void>(resolve=>child.once('close',()=>resolve()));
+  const rpc=new JsonlRpc(child.stdout!,child.stdin!,{timeoutMs:3000,maxLineBytes:1048576,maxTotalBytes:2097152});
+  let doneResolve!:()=>void;const done=new Promise<void>(resolve=>{doneResolve=resolve;});
+  rpc.onNotification(event=>{if(event.method==='turn/completed')doneResolve();});
+  try{
+    await rpc.request('initialize',{clientInfo:{name:'forgemind_direct_offline',version:'1'},capabilities:{experimentalApi:true}});await rpc.notify('initialized',{});
+    const start=await rpc.request('thread/start',{model:'gpt-6.1-sol',modelProvider:'openai_chatgpt_plan',cwd:home,sandbox:'read-only',approvalPolicy:'never',serviceTier:'default',dynamicTools:nativeDynamicTools,config:{model_reasoning_effort:'medium',project_doc_max_bytes:0},ephemeral:true}) as {thread:{id:string}};
+    await rpc.request('turn/start',{threadId:start.thread.id,input:[{type:'text',text:'Use only the owner host tools to inspect the fixture.'}],model:'gpt-6.1-sol',effort:'medium',approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}});
+    assert.deepEqual(await Promise.race([captured,new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Offline tool advertisement not received')),3000))]),['host_apply','host_check','host_read']);
+    await Promise.race([done,new Promise<never>((_,reject)=>setTimeout(()=>reject(new Error('Offline turn did not finish')),3000))]);
+    assert.equal(posts,1);
+  }finally{
+    rpc.close();try{process.kill(-child.pid!,'SIGKILL');}catch{child.kill('SIGKILL');}await exited;
+    for(const socket of sockets)socket.destroy();await new Promise<void>(resolve=>server.close(()=>resolve()));
+    rmSync(root,{recursive:true,force:true});
+  }
 });

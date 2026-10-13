@@ -1,3 +1,4 @@
+import { NATIVE_CATALOG_PATH, pinNativeSolCatalog } from './native-executor-catalog.js';
 import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
@@ -55,6 +56,7 @@ export function nativeConfiguration(model: string, effort: NativeLaunchPlan['eff
   if (!['low', 'medium', 'high', 'xhigh'].includes(effort)) throw new Error('Invalid native effort');
   return `model = ${JSON.stringify(model)}
 model_reasoning_effort = ${JSON.stringify(effort)}
+model_catalog_json = ${JSON.stringify(NATIVE_CATALOG_PATH)}
 model_provider = "openai_chatgpt_plan"
 approval_policy = "never"
 sandbox_mode = "read-only"
@@ -75,12 +77,20 @@ shell_tool = false
 unified_exec = false
 shell_snapshot = false
 multi_agent = false
+multi_agent_v2 = false
+goals = false
+view_image = false
+sleep_tool = false
 apps = false
 plugins = false
 unbounded_connection_retries = false
 hooks = false
 tool_search = false
 enable_request_compression = false
+[agents]
+enabled = false
+[tools.experimental_request_user_input]
+enabled = false
 [analytics]
 enabled = false
 [feedback]
@@ -134,7 +144,7 @@ export function prepareNativeLaunchPlan(options: NativePlanOptions): NativeLaunc
   const config = pinFile(options.config);
   if (config.path !== privateHome + '/config.toml') throw new Error('Private native configuration required');
   if (readFileSync(config.path, 'utf8') !== nativeConfiguration(options.model, options.effort)) throw new Error('Fixed native configuration required');
-  const dependencies = Object.freeze([...runtimeFiles(executable.path).filter(p => p !== executable.path && p !== NATIVE_CA_FILE).map(pinFile),pinNativeCaBundle()]);
+  const dependencies = Object.freeze([...runtimeFiles(executable.path).filter(p => p !== executable.path && p !== NATIVE_CA_FILE).map(pinFile),pinNativeCaBundle(),pinNativeSolCatalog(options.model,privateHome,privateTmp)]);
   const supervisor = pinFile(fileURLToPath(new URL('./native-executor-supervisor.js', import.meta.url)));
   const node = pinFile(process.execPath);
   const profile = nativeInferenceProfile(executable.path, privateHome, privateTmp, options.tunnelPort, dependencies.map(p => p.path));
