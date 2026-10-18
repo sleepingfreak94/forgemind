@@ -1,6 +1,8 @@
 import type { RpcRequest, RpcReply, RpcNotification } from '../agent-drivers/jsonl-rpc.js';
 import type { NativeTask } from './native-executor-contracts.js';
 import { unavailableNativeMetrics } from './native-executor-contracts.js';
+import { NativeResultCollector } from './native-result.js';
+import type { NativeFinalResult } from './native-result.js';
 import { NativeState } from './native-executor-state.js';
 import { assertNativeHost } from './native-executor-host.js';
 import type { NativeHost } from './native-executor-host.js';
@@ -104,6 +106,8 @@ export class NativeExecutor {
   readonly #task: NativeTask;
   readonly #state: NativeState;
   readonly #host: NativeHost;
+  readonly #resultCollector = new NativeResultCollector();
+  #finalResult: NativeFinalResult | null = null;
   #turn: string | null = null;
   #active = false;
   #initialized = false;
@@ -182,7 +186,7 @@ export class NativeExecutor {
             this.#state.value.pending || this.#toolBusy) {
           throw new Error('Invalid turn completion');
         }
-        turn.items.forEach(item => this.#item(item));
+        turn.items.forEach(item => this.#item(item, true));
         this.#resolve?.();
       }
       return;
@@ -195,18 +199,19 @@ export class NativeExecutor {
     } else if (event.method === 'thread/tokenUsage/updated') {
       this.#tokens = p.tokenUsage;
     } else if (event.method === 'item/started' || event.method === 'item/completed') {
-      this.#item(p.item);
+      this.#item(p.item, event.method === 'item/completed');
     } else {
       throw new NativeProviderError(p.error, p.willRetry);
     }
   }
-  #item(raw: unknown): void {
+  #item(raw: unknown, completed: boolean): void {
     const item = record(raw);
     const supported = ['userMessage', 'agentMessage', 'reasoning', 'dynamicToolCall'];
     if (!supported.includes(String(item.type))) throw new Error('Unsupported native operation');
     if (item.type === 'agentMessage' && typeof item.text === 'string') {
       this.#state.charge('outputBytes', Buffer.byteLength(item.text));
     }
+    if (completed) this.#resultCollector.completed(item);
   }
   #flush(): void {
     const queued = this.#events;
@@ -245,6 +250,8 @@ export class NativeExecutor {
     }
   }
   async #stop(error: Error): Promise<void> {
+    this.#finalResult = null;
+    this.#resultCollector.clear();
     this.#fatal ??= error;
     if (this.#closed) return this.#cleanup ?? Promise.resolve();
     this.#controller.abort(error);
@@ -270,7 +277,13 @@ export class NativeExecutor {
     return this.#cleanup;
   }
   async turn(input: string, signal?: AbortSignal): Promise<void> {
-    if (this.#active || this.#closed || this.#state.value.pending) throw new Error('Inactive native session');
+    if (this.#active) throw new Error('Inactive native session');
+    // A failed next attempt must never expose the previous accepted result.
+    this.#finalResult = null;
+    this.#resultCollector.clear();
+    this.#tokens = null;
+    this.#historicalTurns.clear();
+    if (this.#closed || this.#state.value.pending) throw new Error('Inactive native session');
     this.#host.boundary();
     signal?.throwIfAborted();
     this.#state.charge('inputBytes', Buffer.byteLength(input));
@@ -283,8 +296,6 @@ export class NativeExecutor {
     this.#state.charge('runtimeMs', slice);
     this.#state.update({ status: 'running' });
     this.#terminal = false;
-    this.#tokens = null;
-    this.#historicalTurns.clear();
     this.#active = true;
     const done = new Promise<void>((resolve, reject) => { this.#resolve = resolve; this.#reject = reject; });
     void done.catch(() => undefined);
@@ -354,6 +365,8 @@ export class NativeExecutor {
         throw this.#fatal ?? new Error('Native turn has unsettled operations');
       }
       this.#state.update({ status: 'ready' });
+      this.#finalResult = this.#resultCollector.snapshot(this.#state.value.source, this.#turn!);
+      this.#resultCollector.clear();
     } catch (error) {
       await this.#stop(error as Error);
       throw error;
@@ -369,7 +382,8 @@ export class NativeExecutor {
   }
   get receipt() {
     return {
-      checkpoint: this.#state.value, observedTokenUsage: this.#tokens, nativeDiagnostic:nativeProviderDiagnostic(this.#fatal),
+      checkpoint: this.#state.value, finalResult: this.#finalResult,
+      observedTokenUsage: this.#tokens, nativeDiagnostic:nativeProviderDiagnostic(this.#fatal),
       unavailable: [...unavailableNativeMetrics], qualification: this.#host.qualification,
     };
   }

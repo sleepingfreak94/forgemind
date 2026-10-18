@@ -1,6 +1,7 @@
 import type { NativeCheck } from './native-checks-contracts.js';
 import type { CodingResult } from './contracts.js';
 export const nativeSchema = 'native-session-v2';
+export const NATIVE_MAX_WIRE_BYTES = 33554432;
 export const budgetKeys = ['runtimeMs', 'turns', 'toolCalls', 'inputBytes', 'resultBytes', 'wireBytes', 'outputBytes', 'retries'] as const;
 export type BudgetKey = typeof budgetKeys[number];
 export type NativeCounters = Record<BudgetKey, number>;
@@ -30,4 +31,5 @@ export function validateBudget(budget: NativeBudget): void {
     if ((key === 'turns' || key === 'toolCalls') && value === null) continue;
     if (!Number.isSafeInteger(value) || value === null || (key === 'retries' ? value < 0 || value > 2 : value < 1)) throw new Error('Invalid native budget');
   }
+  if (budget.wireBytes > NATIVE_MAX_WIRE_BYTES) throw new Error('Invalid native budget: wireBytes');
 }

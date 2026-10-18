@@ -1,3 +1,4 @@
+import { NATIVE_MAX_WIRE_BYTES } from './native-executor-contracts.js';
 import { NATIVE_CATALOG_PATH, pinNativeSolCatalog } from './native-executor-catalog.js';
 import { createHash, X509Certificate } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -133,7 +134,7 @@ export function prepareNativeLaunchPlan(options: NativePlanOptions): NativeLaunc
     if (typeof text !== 'string' || !text.length || text.length > 4096) throw new Error('Invalid native binding');
   if (!Number.isSafeInteger(options.fencingEpoch) || options.fencingEpoch < 1 ||
       !Number.isSafeInteger(options.deadlineEpochMs) || options.deadlineEpochMs <= Date.now() ||
-      !Number.isSafeInteger(options.maxWireBytes) || options.maxWireBytes < 1 || options.maxWireBytes > 33554432)
+      !Number.isSafeInteger(options.maxWireBytes) || options.maxWireBytes < 1 || options.maxWireBytes > NATIVE_MAX_WIRE_BYTES)
     throw new Error('Invalid native limits');
   const privateHome = directory(options.privateHome), privateTmp = directory(options.privateTmp);
   if (privateHome === privateTmp || privateHome.startsWith(privateTmp + '/') || privateTmp.startsWith(privateHome + '/'))
