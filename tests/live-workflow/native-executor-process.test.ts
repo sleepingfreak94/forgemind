@@ -1,3 +1,4 @@
+import { reviewedCodexFixture } from './reviewed-codex-fixture.js';
 import { reconcileChatGPTExecution } from '../../src/live-workflow/chatgpt-execution-leases.js';
 import { executionFixture } from './chatgpt-execution-fixture.js';
 import { ChatGPTExecutionLedger } from '../../src/live-workflow/chatgpt-execution-ledger.js';
@@ -13,7 +14,7 @@ import assert from 'node:assert/strict';
 import net, { createServer } from 'node:net';
 import { syncBuiltinESMExports } from 'node:module';
 import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync, readFileSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { fork } from 'node:child_process';
 import { prepareNativeLaunchPlan, nativeConfiguration, validateNativeCaBundle, NATIVE_CA_FILE } from '../../src/live-workflow/native-executor-launch-contracts.js';
 import { assertNativeProcess, launchNativeProcess, assertNativeProcessCompleted } from '../../src/live-workflow/native-executor-process.js';
@@ -44,7 +45,7 @@ test('real pinned 0.162.1 starts a read-only native thread offline and reaps bef
   try {
     const plan = prepareNativeLaunchPlan({ taskId: 'offline', grantId: 'grant', fencingEpoch: 1,
       leaseId: 'lease', model: 'gpt-6.1-sol', effort: 'medium', grantDigest: 'a'.repeat(64), authorityBinding: 'c'.repeat(64), budgetBinding: 'b'.repeat(64), accountBinding: 'offline-no-account', reviewBinding: 'offline-test',
-      executable: realpathSync(homedir() + '/.local/bin/codex'), config: home + '/config.toml',
+      executable: reviewedCodexFixture('0.162.1'), config: home + '/config.toml',
       privateHome: home, privateTmp: tmp, tunnelPort: port, deadlineEpochMs: Date.now() + 12000, maxWireBytes: 1048576 });
     assert.ok(plan.dependencies.some(pin=>pin.path===NATIVE_CA_FILE));
     assert.ok(plan.profile.includes(JSON.stringify(NATIVE_CA_FILE)));
@@ -136,7 +137,7 @@ test('prelaunch revocation, bind collision and post-bind pre-fork failure each t
     if(mode!=='occupied')await new Promise<void>(resolve=>allocator.close(()=>resolve()));
     const statuses:string[]=[];let checks=0;
     try{
-      const plan=prepareNativeLaunchPlan({taskId:'offline',grantId:'grant',fencingEpoch:1,leaseId:'lease',model:'gpt-6.1-sol',effort:'medium',grantDigest:'a'.repeat(64),authorityBinding:'c'.repeat(64),budgetBinding:'b'.repeat(64),accountBinding:'offline-no-account',reviewBinding:'offline-test',executable:realpathSync(homedir()+'/.local/bin/codex'),config:home+'/config.toml',privateHome:home,privateTmp:tmp,tunnelPort:port,deadlineEpochMs:Date.now()+12000,maxWireBytes:1048576});
+      const plan=prepareNativeLaunchPlan({taskId:'offline',grantId:'grant',fencingEpoch:1,leaseId:'lease',model:'gpt-6.1-sol',effort:'medium',grantDigest:'a'.repeat(64),authorityBinding:'c'.repeat(64),budgetBinding:'b'.repeat(64),accountBinding:'offline-no-account',reviewBinding:'offline-test',executable:reviewedCodexFixture('0.162.1'),config:home+'/config.toml',privateHome:home,privateTmp:tmp,tunnelPort:port,deadlineEpochMs:Date.now()+12000,maxWireBytes:1048576});
       await assert.rejects(launchNativeProcess({plan,accessToken:'offline-fixture-not-a-credential',lifecycle:{runtimeBinding:plan.runtimeBinding,receiptId:'receipt-'+mode,
         checkActive(){checks++;if(mode==='revoked')throw new Error('Revoked before launch');if(mode==='pre-fork'&&checks===3)rmSync(tmp,{recursive:true});},
         finish(status){statuses.push(status);}}}));
@@ -204,7 +205,7 @@ test('actual native offline ResponsesLite advertises exactly three direct host t
   // ONLY the fixed production endpoint is substituted for an offline local HTTP
   // fixture. No real account, external network, model response or qualification.
   writeFileSync(home+'/config.toml',nativeConfiguration('gpt-6.1-sol').replace('https://api.openai.com/v1',endpoint+'/v1'),{mode:0o600});
-  const exe=realpathSync(homedir()+'/.local/bin/codex');
+  const exe=reviewedCodexFixture('0.162.1');
   const dependencies=[...runtimeFiles(exe).filter(path=>path!==exe),NATIVE_CA_FILE,NATIVE_CATALOG_PATH];
   const profile=nativeInferenceProfile(exe,home,tmp,port,dependencies);
   assert.equal(profile.includes('(allow process-fork'),false);
@@ -239,7 +240,7 @@ test('execution leases release only with genuine native reaping or prelaunch cle
     await new Promise<void>(resolve=>allocator.close(()=>resolve()));
     const controller=new AbortController(),session=await f.open();
     const lease=session.admitExecution({runBinding:'a'.repeat(64),deadline:Date.now()+15000,signal:controller.signal,check:()=>{}});
-    const plan=prepareNativeLaunchPlan({taskId:'offline',grantId:'grant',fencingEpoch:1,leaseId:'lease',model:'gpt-6.1-sol',effort:'medium',grantDigest:'a'.repeat(64),authorityBinding:'c'.repeat(64),budgetBinding:'b'.repeat(64),accountBinding:'offline-no-account',reviewBinding:'offline-test',executable:realpathSync(homedir()+'/.local/bin/codex'),config:home+'/config.toml',privateHome:home,privateTmp:tmp,tunnelPort:port,deadlineEpochMs:Date.now()+12000,maxWireBytes:1048576});
+    const plan=prepareNativeLaunchPlan({taskId:'offline',grantId:'grant',fencingEpoch:1,leaseId:'lease',model:'gpt-6.1-sol',effort:'medium',grantDigest:'a'.repeat(64),authorityBinding:'c'.repeat(64),budgetBinding:'b'.repeat(64),accountBinding:'offline-no-account',reviewBinding:'offline-test',executable:reviewedCodexFixture('0.162.1'),config:home+'/config.toml',privateHome:home,privateTmp:tmp,tunnelPort:port,deadlineEpochMs:Date.now()+12000,maxWireBytes:1048576});
     lease.beginLaunch(plan.runtimeBinding);
     try{
       if(mode==='prelaunch')controller.abort();

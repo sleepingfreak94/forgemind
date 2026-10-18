@@ -1,3 +1,5 @@
+import { assertCompiledStage } from './native-compiled-check.js';
+import { isCompiledTestCheck } from './native-checks-contracts.js';
 import { serialize } from '../context-engine/validation.js';
 import { randomUUID } from 'node:crypto';
 import { lstatSync, writeFileSync } from 'node:fs';
@@ -51,7 +53,7 @@ export class NativeOwner implements ActionAuthority {
     if (this.#closed || Date.now() >= this.#deadline) throw new Error('Native owner expired or closed');
   }
   get source(): string { return this.#source; }
-  #allowed(envelope: ActionEnvelope): void {
+  #allowed(envelope: ActionEnvelope, original: unknown): void {
     const detail = envelope.detail as Record<string, unknown>;
     if (!detail || typeof detail !== 'object') throw new Error('Invalid native owner action');
     if (envelope.kind === 'files.apply') {
@@ -66,6 +68,11 @@ export class NativeOwner implements ActionAuthority {
       const expected = this.#task.checks.find(check => check.id === id);
       if (!expected) throw new Error('Native command outside exact grant');
       if (detail.command && JSON.stringify(detail.command) !== JSON.stringify(expected)) throw new Error('Changed predefined native check');
+      if (isCompiledTestCheck(expected)) {
+        if (detail.operation === 'native.predefined-check' && Object.keys(detail).sort().join() === 'command,operation') return;
+        assertCompiledStage(original, expected, this.#task.root, detail);
+        return;
+      }
       if (detail.executable && (detail.executable !== expected.executable || JSON.stringify(detail.args) !== JSON.stringify(expected.args) || detail.cwd !== this.#task.root)) throw new Error('Changed native command');
     } else throw new Error('Unsupported native owner action');
   }
@@ -73,7 +80,7 @@ export class NativeOwner implements ActionAuthority {
     this.active();
     const envelope = structuredClone(raw);
     if (envelope.source !== this.#source) throw new Error('Stale native action source');
-    this.#allowed(envelope);
+    this.#allowed(envelope, raw.detail);
     const source = this.#source, resource = 'host:' + sha256(serialize(envelope)), invocationId = randomUUID();
     const grant = this.#runtime.issueGrant({ taskId: this.#task.task, invocationId, role: 'lead',
       capabilities: [{action:'command.run',resource}], expiresAt:this.#deadline, remainingDepth:0, maxActions:1, maxChildren:0 });

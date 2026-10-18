@@ -1,3 +1,4 @@
+import { reviewedCodexFixture } from './reviewed-codex-fixture.js';
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -5,24 +6,22 @@ import {
   realpathSync,
   mkdirSync,
   rmSync,
-  existsSync,
 } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RunAuthority } from "../../src/live-workflow/authority.js";
 import { NativeCodexModel } from "../../src/live-workflow/provider.js";
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
 import { fixtureResponse } from './native-fixture.js';
-const binary = join(homedir(), ".local/bin/codex");
 test(
   "native 0.161.0 worker completes JSON through loopback fixture under no-fork Seatbelt",
   {
     skip:
-      process.platform !== "darwin" ||
-      !existsSync(binary),
+      process.platform !== "darwin",
     timeout: 65000,
   },
   async () => {
+    const binary = reviewedCodexFixture('0.161.0');
     const root = realpathSync(
         mkdtempSync(join(tmpdir(), "fm-native-fixture-")),
       ),

@@ -30,6 +30,16 @@ Read [the repository workflow](../AGENTS.md) and [the architecture](architecture
 
 Run checks appropriate to the change. `npm run verify:portable` covers the portable slice. Runtime and policy changes also need relevant focused tests and `npm test` on macOS; `npm run test:host` checks native host enforcement. Native suites require their documented prerequisites and must not fall back to unsandboxed execution. See [host enforcement](host-enforcement.md) and [execution limits](live-workflow.md).
 
+On macOS, the full native fixture suite requires two separately installed reviewed Codex binaries. Set explicit absolute paths before `npm test`:
+
+```bash
+export FORGEMIND_TEST_CODEX_0161=/absolute/path/to/codex-0.161.0
+export FORGEMIND_TEST_CODEX_0162=/absolute/path/to/codex-0.162.1
+npm test
+```
+
+The legacy adapter fixtures use 0.161.0; native executor fixtures use 0.162.1. The selector validates each exact version and fails on missing or mismatched paths. It never replaces the shared Codex installation or skips a required macOS fixture when a binary is missing. Linux/Windows portable checks do not require these executables. Subprocess-based native/CLI fixtures run on the owner host, outside the no-fork compiled-test sandbox.
+
 Include the exact source identity, checks actually run, results and remaining gaps in your PR. Independent review is required by the repository workflow. Documentation changes should preserve the distinction between implemented features, fixture results, supervised observations and future goals. Do not add secrets or local runtime artifacts to Git.
 
 ## License

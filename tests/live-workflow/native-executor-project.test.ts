@@ -14,11 +14,11 @@ import { sourceIdentity } from '../../src/live-workflow/repository.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
 import type { NativeTask } from '../../src/live-workflow/native-executor-contracts.js';
 
-export function projectFixture() {
+export function projectFixture(runtimeMs = 10000) {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'fm-project-native-'))),root=join(dir,'repo');mkdirSync(root);
   execFileSync('/usr/bin/git',['init','-q',root]);writeFileSync(join(root,'value.txt'),'before');
-  const task:NativeTask={project:'fixture',task:'change',root,source:sourceIdentity(root),model:'gpt-6.1-sol',effort:'medium',readPaths:['value.txt'],writePaths:['value.txt'],checks:[{id:'check',executable:realpathSync(process.execPath),args:[],timeoutMs:1000}],budget:{runtimeMs:10000,turns:null,toolCalls:null,retries:0,inputBytes:100000,resultBytes:100000,wireBytes:100000,outputBytes:10000}};
-  const owner=new NativeOwner(join(dir,'owner'),task,Date.now()+10000,()=>undefined);
+  const task:NativeTask={project:'fixture',task:'change',root,source:sourceIdentity(root),model:'gpt-6.1-sol',effort:'medium',readPaths:['value.txt'],writePaths:['value.txt'],checks:[{id:'check',executable:realpathSync(process.execPath),args:[],timeoutMs:1000}],budget:{runtimeMs,turns:null,toolCalls:null,retries:0,inputBytes:100000,resultBytes:100000,wireBytes:100000,outputBytes:10000}};
+  const owner=new NativeOwner(join(dir,'owner'),task,Date.now()+runtimeMs,()=>undefined);
   const project=new NativeProject(root,owner,(...args)=>owner.phase(...args),()=>owner.active());
   const state=new NativeState(join(dir,'state'),task);
   const host=new FixtureNativeHost(fixtureStdioRpc(new PassThrough(),new PassThrough()),owner,()=>owner.active(),async()=>undefined,()=>project.source(),async()=>({passed:readFileSync(join(root,'value.txt'),'utf8')==='after'}),project);
