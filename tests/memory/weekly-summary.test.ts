@@ -412,7 +412,7 @@ test('mixed execution groups cannot compensate; omitted and partial evidence rem
   let redistributed: Accumulator = partial;
   for (const execution of ['authenticated', 'fixture'] as const) {
     const c = redistributed[execution];
-    redistributed = { ...redistributed, [execution]: { ...c, outcomes: { ...c.outcomes, completed: 0, blocked: 4 },
+    redistributed = { ...redistributed, [execution]: { ...c, outcomes: { completed: 0, failed: 0, blocked: c.runs, indeterminate: 0 },
       phases: { ...c.phases, terminal: 0, setup: 4 },
       checks: { baselinePassed: 0, baselineFailed: 0, baselineIndeterminate: 4, candidatePassed: 0, candidateFailed: 0, candidateIndeterminate: 4 },
       reviews: { pass: 0, revise: 2, blocked: 0, absent: 2 } } };
