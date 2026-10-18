@@ -54,17 +54,20 @@ if(m.method==='thread/start'||m.method==='thread/resume')send({id:m.id,result:{t
 if(m.method==='turn/start'){send({id:m.id,result:{turn:{id:turn}}});setImmediate(()=>tool('host_read',{path:'value.txt'}));}
 if(m.result&&m.id>100){if(!m.result.success)return;if(phase++===0)tool('host_apply',{summary:'repair',edits:[{path:'value.txt',beforeSha256:JSON.parse(m.result.contentItems[0].text).sha256,content:'after'}]});else if(phase===2)tool('host_check',{id:'check'});else send({method:'turn/completed',params:{threadId:'thread',turn:{id:turn,status:'completed',items:[]}}});}
 });`;
-test('actual callable runner restarts process and thread/resume using immutable owner packet and cumulative counters',async()=>{
-  const f=projectFixture(),runDirectory=join(f.dir,'run');mkdirSync(runDirectory,{mode:0o700});
+test('actual callable runner restarts process and thread/resume using immutable owner packet and cumulative counters',{timeout:90000},async()=>{
+  // Two real processes and durable Git/policy work share one bounded success budget.
+  const f=projectFixture(60000),runDirectory=join(f.dir,'run');mkdirSync(runDirectory,{mode:0o700});
   const packetPath=join(f.dir,'packet.json');writeFileSync(packetPath,JSON.stringify({schema:'native-owner-packet-v1',task:f.task,objective:'repair'}),{mode:0o600});
   let owner=f.owner;
   try{
-    let firstBinding='',firstWire=0,priorTurn='';
+    let firstBinding='',firstWire=0,firstRuntime=0,priorTurn='';
     for(let pass=0;pass<2;pass++){
       const invocation=loadNativePacket(packetPath,runDirectory);
       if(pass===0)firstBinding=invocation.parentBinding;else{
         assert.equal(invocation.parentBinding,firstBinding);
-        owner.close();owner=new NativeOwner(join(f.dir,'owner'),invocation.packet.task,Date.now()+10000,()=>undefined);
+        owner.close();
+        const remaining=invocation.packet.task.budget.runtimeMs-firstRuntime;assert.ok(remaining>0);
+        owner=new NativeOwner(join(f.dir,'owner'),invocation.packet.task,Date.now()+remaining,()=>undefined);
       }
       const project=new NativeProject(f.root,owner,(...args)=>owner.phase(...args),()=>owner.active());
       const child=spawn(process.execPath,['-e',restartProgram,priorTurn]);
@@ -72,6 +75,9 @@ test('actual callable runner restarts process and thread/resume using immutable 
       const receipt=await runOfflineNativeTask({task:invocation.packet.task,objective:invocation.packet.objective,runDirectory,parent:{binding:invocation.parentBinding,check:()=>owner.active()},signal:new AbortController().signal,host});
       assert.equal(receipt.checkpoint.counters.turns,pass+1);assert.equal(receipt.checkpoint.counters.toolCalls,(pass+1)*3);
       assert.equal(receipt.checkpoint.source,owner.source);assert.equal(receipt.checkpoint.thread,'thread');
+      assert.ok(receipt.checkpoint.counters.runtimeMs>firstRuntime);
+      assert.ok(receipt.checkpoint.counters.runtimeMs<f.task.budget.runtimeMs);
+      assert.equal(receipt.checkpoint.counters.retries,0);firstRuntime=receipt.checkpoint.counters.runtimeMs;
       assert.ok(receipt.checkpoint.counters.wireBytes>firstWire);firstWire=receipt.checkpoint.counters.wireBytes;priorTurn='turn'+child.pid;
     }
   }finally{owner.close();f.close();}
