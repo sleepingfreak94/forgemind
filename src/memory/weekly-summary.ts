@@ -165,14 +165,27 @@ function validateState(raw: unknown, final = false): Accumulator {
       state.dependencyCount === 0 && state.dependencySha256 !== SEED) fail();
   list(v.examples, 8);
   let previous = state.lowerExclusive; const ids = new Set<string>();
-  let authenticatedExamples = 0, fixtureExamples = 0;
+  const evidenceKeys = ['runs', 'baseline', 'candidate', 'reviewed', 'absent'] as const;
+  const retained = { authenticated: blank(evidenceKeys), fixture: blank(evidenceKeys) };
   for (const rawExample of v.examples) {
     const e = validateExample(rawExample, state);
     if (e.sequence <= previous || ids.has(e.id)) fail(); previous = e.sequence; ids.add(e.id);
-    if (e.execution === 'authenticated') authenticatedExamples++; else fixtureExamples++;
+    const counts = retained[e.execution];
+    counts.runs = add(counts.runs, 1);
+    for (const check of e.checks) counts[check.phase] = add(counts[check.phase], 1);
+    const review = Object.hasOwn(e, 'review') ? 'reviewed' : 'absent';
+    counts[review] = add(counts[review], 1);
   }
-  if (authenticatedExamples > a.runs || fixtureExamples > f.runs ||
-      add(state.examples.length, state.omittedExamples) !== state.selectedRuns ||
+  // Retained evidence gives lower bounds only; examples omit outcomes and verdicts.
+  for (const execution of ['authenticated', 'fixture'] as const) {
+    const c = state[execution], counts = retained[execution];
+    if (counts.runs > c.runs ||
+        add(add(c.checks.baselinePassed, c.checks.baselineFailed), c.checks.baselineIndeterminate) < counts.baseline ||
+        add(add(c.checks.candidatePassed, c.checks.candidateFailed), c.checks.candidateIndeterminate) < counts.candidate ||
+        add(add(c.reviews.pass, c.reviews.revise), c.reviews.blocked) < counts.reviewed ||
+        c.reviews.absent < counts.absent) fail();
+  }
+  if (add(state.examples.length, state.omittedExamples) !== state.selectedRuns ||
       reservation(state) + exampleBytes(state.examples) > state.maxBytes) fail();
   if (final) {
     if (state.cursor !== state.upperInclusive) fail();
