@@ -20,7 +20,8 @@ import { createProductionNativeHost, assertNativeHost, assertNativeHostCompleted
 import type { NativeHost } from './native-executor-host.js';
 import { nativeReadiness } from './native-executor-readiness.js';
 import { prepareNativeLaunchPlan, nativeConfiguration } from './native-executor-launch-contracts.js';
-import { runChecks } from './checks.js';
+import { runNativeChecks, nativeCheckSummary } from './native-checks.js';
+import { validateNativeCheck } from './native-checks-contracts.js';
 import { validateBudget } from './native-executor-contracts.js';
 import type { NativeTask } from './native-executor-contracts.js';
 
@@ -42,9 +43,7 @@ export function validateNativeTask(task: NativeTask): void {
     paths.forEach(sourcePath);
   }
   if(!Array.isArray(task.checks)||!task.checks.length||new Set(task.checks.map(c=>c.id)).size!==task.checks.length)throw new Error('Predefined native checks required');
-  for(const check of task.checks){
-    if(!check.id||check.executable!==realpathSync(check.executable)||!Array.isArray(check.args)||check.args.some(a=>typeof a!=='string'||a.includes('\0'))||!Number.isSafeInteger(check.timeoutMs)||check.timeoutMs<1||check.timeoutMs>30000)throw new Error('Invalid native check');
-  }
+  task.checks.forEach(check => validateNativeCheck(task.root, check));
 }
 /** Callable owner pipeline. Each invocation runs one owner-requested turn, with
  * persisted uncapped turn counters and no automatic inference/tool replay. */
@@ -92,8 +91,8 @@ export async function runNativeTask(options: NativeRunOptions) {
         const command=task.checks.find(c=>c.id===id);
         if(!command)throw new Error('Unapproved native check');
         project.assertCurrent(state.value.source);
-        const result=await runChecks(task.root,state.value.source,[command],scratch,owner!,checkSignal);
-        project.assertCurrent(state.value.source);return result[0];
+        const result=await runNativeChecks(task.root,state.value.source,[command],scratch,owner!,checkSignal);
+        project.assertCurrent(state.value.source);return nativeCheckSummary(result[0]!);
       }});
     const readiness=nativeReadiness(host,'live',true);
     if(!readiness.ready)throw new Error('Native production host not ready');
@@ -102,7 +101,7 @@ export async function runNativeTask(options: NativeRunOptions) {
     await executor.turn(nativeTaskContext(task,options.objective),signal);
     project.assertCurrent(state.value.source);active();
     phase='verification';
-    const checks=await runChecks(task.root,state.value.source,task.checks,scratch,owner,signal);
+    const checks=await runNativeChecks(task.root,state.value.source,task.checks,scratch,owner,signal);
     project.assertCurrent(state.value.source);active();
     if(checks.some(check=>!check.passed))throw new Error('Native task verification failed');
     const native=executor.receipt;

@@ -1,4 +1,5 @@
-import type { CheckCommand, CodingResult } from './contracts.js';
+import type { NativeCheck } from './native-checks-contracts.js';
+import type { CodingResult } from './contracts.js';
 export const nativeSchema = 'native-session-v2';
 export const budgetKeys = ['runtimeMs', 'turns', 'toolCalls', 'inputBytes', 'resultBytes', 'wireBytes', 'outputBytes', 'retries'] as const;
 export type BudgetKey = typeof budgetKeys[number];
@@ -9,7 +10,7 @@ export type NativeBudget = Omit<NativeCounters, 'turns' | 'toolCalls' | 'retries
 export interface NativeTask {
   project: string; task: string; source: string; root: string;
   model: 'gpt-6.1-sol'; effort: 'medium' | 'high';
-  readPaths: string[]; writePaths: string[]; checks: CheckCommand[]; budget: NativeBudget;
+  readPaths: string[]; writePaths: string[]; checks: NativeCheck[]; budget: NativeBudget;
 }
 export interface NativeCheckpoint {
   schema: string; binding: string; source: string; thread: string | null;
