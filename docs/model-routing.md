@@ -37,18 +37,22 @@ This command expresses the intended Cursor parent selection; it was not executed
 
 ## Personal Codex reference
 
-The following is a proposed Codex profile with high-effort architect and QA settings. No native Codex model configuration has been installed by this task.
+The native owner profile is implemented as an offline policy helper in
+`src/live-workflow/routing-profile.ts`. It does not establish model availability.
 
 | Role | Model | Reasoning |
 | --- | --- | --- |
-| Parent / lead | GPT-6.1 Sol | High |
-| Researcher | GPT-6 Luna | High |
-| Architect | GPT-6 Astra | High |
-| Coder | GPT-6.1 Sol | High |
-| Debugger / performance | GPT-6.1 Sol | High |
-| QA | GPT-6.1 Sol | High |
-| Independent reviewer | GPT-6 Astra | Medium |
+| Routine coder, debugger, tests, independent reviewer | GPT-6.1 Sol | Medium |
+| Hard problem before escalation | GPT-6.1 Sol | High |
+| Explicit architecture or decision consultation | GPT-6 Astra | High, after Sol high assessment |
+| Narrow classification or extraction | GPT-6 Luna | Medium, only after host qualification |
+| Weekly summary | Deterministic | No model |
 
+Astra requires an explicit architecture purpose; routine work and independent
+review remain on Sol. `NativeTask` binds Sol and medium/high effort into durable
+state, thread configuration and turn configuration. The offline executor verifies
+the effective thread model/provider/effort/service tier and fails on mismatch.
+The production host and live qualification are still unavailable.
 Codex model availability and usage depend on the personal ChatGPT/Codex plan or API credentials; Cursor allowances are separate. A cached Codex catalog advertises these IDs but does not prove live entitlement. See [Codex pricing/access](https://learn.chatgpt.com/docs/pricing) and [Codex custom model settings](https://learn.chatgpt.com/docs/agent-configuration/subagents).
 
 ## Validation and limitations
