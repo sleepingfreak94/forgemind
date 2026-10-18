@@ -355,7 +355,7 @@ function contradict(state: Accumulator, execution: 'authenticated' | 'fixture', 
 }
 function evidenceInput(n: number, execution: 'authenticated' | 'fixture', reviewed: boolean): TerminalRunInput {
   const { review, ...facts } = input(n, execution);
-  return { ...facts, checks: reviewed ? facts.checks.flatMap(c => [c, { ...c, id: `${c.id}-extra` }]) : [],
+  return { ...facts, outcome: reviewed ? facts.outcome : 'failed', checks: reviewed ? facts.checks.flatMap(c => [c, { ...c, id: `${c.id}-extra` }]) : [],
     ...(reviewed ? { review: present(review) } : {}) };
 }
 
