@@ -1,0 +1,265 @@
+{
+  "schema": "forgemind-public-smoke-evidence-v1",
+  "authority": "none",
+  "description": "Sanitized owner-derived projection of actual private harness observations; hashes bind originals for local audit but do not authenticate imported evidence.",
+  "baselineCommit": "4679a01be4ada0d7e1b0ec4228a3aa208f9b5701",
+  "retrieval": {
+    "status": "passed",
+    "evaluationSource": "479788b884dc60bf7688facaef07f16b924642bcace6431286367d9be680e234",
+    "lexicalBaselineSource": "7ef75aa5ad2aed7778913555aa5e1cbfa2080dbb606276de591d68051a001b4c",
+    "semanticFiles": [
+      {
+        "path": "src/memory/semantic.ts",
+        "sha256": "ba2797fd7764ca36b1173ff27fab1af6e4d8c293393ed14fe95937832544e21c"
+      },
+      {
+        "path": "src/memory/semantic-contracts.ts",
+        "sha256": "92eb8253a04389537ebd14bf77a7d9c5fbfc15dc51f042decbb4b50405b1bdb0"
+      }
+    ],
+    "runtime": "@huggingface/transformers@4.3.1",
+    "model": "Xenova/all-MiniLM-L6-v2",
+    "revision": "cb3d680149bf9a3209564e1b27ab3bb355b65707",
+    "modelManifestSha256": "584ac2c6b6a81cfa101a5c0804db2edd225c5a27cb98fd987c04098467805328",
+    "modelFiles": [
+      {
+        "path": "config.json",
+        "bytes": 650,
+        "sha256": "7135149f7cffa1a573466c6e4d8423ed73b62fd2332c575bf738a0d033f70df7"
+      },
+      {
+        "path": "tokenizer.json",
+        "bytes": 711661,
+        "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "bytes": 366,
+        "sha256": "9261e7d79b44c8195c1cada2b453e55b00aeb81e907a6664974b4d7776172ab3"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "bytes": 125,
+        "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+      },
+      {
+        "path": "onnx/model_quantized.onnx",
+        "bytes": 22972370,
+        "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1"
+      }
+    ],
+    "datasetSha256": "b7face2aec78fdeffb2628c44b28f0881b5849a837323206717f2a5375982ba3",
+    "dataset": [
+      {
+        "title": "Durability",
+        "text": "Commit task checkpoints to SQLite transactions so saved state persists after a machine loses electricity.",
+        "query": "Survive sudden power outages"
+      },
+      {
+        "title": "Command authority",
+        "text": "Shell commands require current task grants and fencing epochs. Recheck revoked permissions before every operation.",
+        "query": "Block unauthorized terminal execution"
+      },
+      {
+        "title": "Project isolation",
+        "text": "Project memory retrieval filters project identity and canonical repository root. A separate workspace cannot reuse another repository knowledge.",
+        "query": "Separate workspace access to unrelated repositories"
+      }
+    ],
+    "configuration": {
+      "device": "cpu",
+      "dtype": "q8",
+      "pooling": "mean",
+      "normalize": true,
+      "intraOpNumThreads": 1,
+      "interOpNumThreads": 1,
+      "remoteModels": false,
+      "localFilesOnly": true
+    },
+    "networkAttempts": 0,
+    "enforcement": [
+      "deny-default",
+      "no process-fork grant",
+      "no network grants",
+      "candidate and baseline source read-only",
+      "CPU q8 local_files_only",
+      "fetch trap"
+    ],
+    "metrics": {
+      "keywordRecallAt1": 0.3333333333333333,
+      "keywordRecallAt3": 0.3333333333333333,
+      "semanticRecallAt1": 1,
+      "semanticRecallAt3": 1,
+      "hybridRecallAt1": 1,
+      "hybridRecallAt3": 1
+    },
+    "results": [
+      {
+        "query": "Survive sudden power outages",
+        "expectedTitle": "Durability",
+        "keywordRank": 0,
+        "semanticRank": 1,
+        "hybridRank": 1,
+        "keywordMs": 1.5936669999998685,
+        "semanticMs": 29.66216600000007,
+        "hybridMs": 23.890749999999798
+      },
+      {
+        "query": "Block unauthorized terminal execution",
+        "expectedTitle": "Command authority",
+        "keywordRank": 0,
+        "semanticRank": 1,
+        "hybridRank": 1,
+        "keywordMs": 0.6010420000000067,
+        "semanticMs": 23.439333000000033,
+        "hybridMs": 23.219084000000066
+      },
+      {
+        "query": "Separate workspace access to unrelated repositories",
+        "expectedTitle": "Project isolation",
+        "keywordRank": 1,
+        "semanticRank": 1,
+        "hybridRank": 1,
+        "keywordMs": 0.7804580000001806,
+        "semanticMs": 23.02495799999997,
+        "hybridMs": 22.719499999999925
+      }
+    ],
+    "originalReportSha256": "42a71c7546770ecee5b4ac044d00ffc80ddf1fbaebb48c2863bc75dfa47c1377",
+    "sandboxProfileSha256": "31adc030d1f88de901fded2be9e6f8facca9bcb09de8fc621aa838c629c37551",
+    "evaluatorSha256": "cf8c37aced40b54a3785ca5e1b15246be55e41784141bb70695086e2d59a1926",
+    "limitations": [
+      "Three fixed hand-labeled public synthetic queries; not general retrieval-quality certification",
+      "Optional privately provisioned CPU model; no repository dependency or default production model change",
+      "Evaluation source predates the isolated session insertion fix; evaluated semantic file hashes remain identical"
+    ]
+  },
+  "sessionRace": {
+    "before": {
+      "source": "479788b884dc60bf7688facaef07f16b924642bcace6431286367d9be680e234",
+      "status": "reproduced",
+      "interleaved": true,
+      "connections": 2,
+      "scenario": "A commits tick1000, B commits high-water3000, then A inserts TTL1second",
+      "createdAt": 1000,
+      "expiresAt": 2000,
+      "highWater": 3000,
+      "bodyRetained": true,
+      "activeAlreadyExpired": true
+    },
+    "after": {
+      "source": "09b17c6716874a4de7f1dc3f72ed9ed3523f30dd593b1a1599511bf7e24ce994",
+      "status": "fixed",
+      "interleaved": true,
+      "connections": 2,
+      "scenario": "A commits tick1000, B commits high-water3000, then A inserts TTL1second",
+      "createdAt": 3000,
+      "expiresAt": 4000,
+      "highWater": 3000,
+      "bodyRetained": true,
+      "activeAlreadyExpired": false
+    }
+  },
+  "limitations": [
+    "Module smoke evidence, not final combined regression",
+    "No organization sharing, Cursor integration, native Windows/Linux enforcement, hard billing cap, merge or release authority"
+  ],
+  "weeklyNullExit": {
+    "status": "passed",
+    "scenario": "Same actual supervised null-exit check and failed terminal receipt imported first with preserved baseline recorder, then candidate recorder; replay after restart",
+    "baselineSource": "0eadf63750cecfd55fbe6c34c0706a79c4a77f97bc40c6b4f8e799b0f554bb02",
+    "candidateSource": "b2540714d7db91221aeef3a5192a2bd38d720416afba7f1300b62646f9461486",
+    "baselineCompiledRecorderSha256": "b401d919bc7476df1055e32a0bdf5ea9a24ef6329e563f598a9962910dbed551",
+    "producer": {
+      "exitCode": null,
+      "passed": false,
+      "terminalOutcome": "failed",
+      "outputDigest": "619702e5c759524f5023265c39399e294060816c91f13861fb90ba96beff2bee"
+    },
+    "before": {
+      "result": "rejected",
+      "error": "missing, ambiguous or contradictory check action binding"
+    },
+    "after": {
+      "outcome": "failed",
+      "checkOutcome": "indeterminate",
+      "exitCode": null,
+      "restartReplay": "idempotent"
+    },
+    "manifestSha256": "d534ac18e06322f3062462f6bacbe2770b4d3a6bdf5ba1a3e7677b7794b8ebcc",
+    "execution": "fixture",
+    "providerRequests": 0,
+    "notes": [
+      "Actual supervised process/RunAuthority receipts in an isolated registered fixture repository",
+      "Reservation allocated before this new check execution",
+      "No authenticated provider run, account change or ordinary user-history write"
+    ]
+  },
+  "weeklyRepeatedIdenticalChecks": {
+    "before": {
+      "source": "2b72acf970033c04d373cfdef3ca41ee54c08ac1fe7d9c4a66d7c586867a6606",
+      "importResult": "rejected"
+    },
+    "after": {
+      "source": "e906eb936345563b0b01efb032d38189071c2784424303a71f369cfa54bb57ab",
+      "importResult": "accepted",
+      "compiledRecorderSha256": "8f3f3a119bbd1fdc18f7fe7d11606bc4467d9c58083b7408a7f4e985cd6795b5"
+    },
+    "actualCheckExecutions": 2,
+    "beforeAfterCheckBytesIdentical": true,
+    "checkDigest": "8ea529a0b2e103f839007e0c9cdff41e17d4cb7c7f0d8ccd1b2640a2dad018ed",
+    "limitations": [
+      "Review is simulated fixture metadata, not an actual independent provider run",
+      "RunAuthority action/check receipts and guarded same-content file operation are real",
+      "Only isolated fixture project history is used"
+    ]
+  },
+  "weeklyCliPrivacy": {
+    "scenario": "Owner CLI imports a correctly hash-pinned malformed private manifest containing only a synthetic secret marker",
+    "before": {
+      "source": "e906eb936345563b0b01efb032d38189071c2784424303a71f369cfa54bb57ab",
+      "syntheticMarkerLeaked": true,
+      "compiledCliSha256": "a92b914326ddfa664ba61d05cf82117ae9b49d1eec6d1d35085cb0f9a4ef92c2"
+    },
+    "after": {
+      "source": "b2540714d7db91221aeef3a5192a2bd38d720416afba7f1300b62646f9461486",
+      "syntheticMarkerLeaked": false,
+      "code": 2,
+      "stdout": "",
+      "stderr": "Weekly command failed: invalid owner input. Use --help.\n",
+      "compiledCliSha256": "5b69d17653e91b1f6fdc40e046a84ba1b8088591a857b837b2f266f94c7a6b91"
+    },
+    "providerRequests": 0,
+    "scope": "Synthetic malformed private input in isolated fixture history; no ordinary user history or credential data"
+  },
+  "moduleReviews": [
+    {
+      "module": "native-final-text",
+      "verdict": "PASS",
+      "source": "7ef75aa5ad2aed7778913555aa5e1cbfa2080dbb606276de591d68051a001b4c",
+      "originalVerdictSha256": "f4351c20e03ea8d9ca9620835d52f0ea5151b134ba8dac89d27484f46cf0f5e0",
+      "scope": "Individual module; aggregate source review and regression are separately required"
+    },
+    {
+      "module": "memory",
+      "verdict": "PASS",
+      "source": "09b17c6716874a4de7f1dc3f72ed9ed3523f30dd593b1a1599511bf7e24ce994",
+      "originalVerdictSha256": "7c560435195ff85ffc759044e3686ae9e3e099372773b583ceabc2e839a252ea",
+      "scope": "Individual module; aggregate source review and regression are separately required"
+    },
+    {
+      "module": "weekly",
+      "verdict": "PASS",
+      "source": "b2540714d7db91221aeef3a5192a2bd38d720416afba7f1300b62646f9461486",
+      "originalVerdictSha256": "ada1bce2495a7c899b072cf3d50c38f7d1b36326910a489c9335e7ae97553d3b",
+      "scope": "Individual module; aggregate source review and regression are separately required"
+    },
+    {
+      "module": "continuation-qualification",
+      "verdict": "PASS",
+      "source": "7f5dd353b4ad65e8937db082354ff86104df39dc3f486ec8bab3dcd94478a84d",
+      "originalVerdictSha256": "de2e50bd02f7de2205025abcef11d8d00127d9762674bdb8a0b00af2e67d7345",
+      "scope": "Individual module; aggregate source review and regression are separately required"
+    }
+  ]
+}

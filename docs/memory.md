@@ -5,7 +5,7 @@ Last updated: 2026-08-23
 
 ## Purpose and invariant
 
-Implementation status: local-owner durable project memory, registered-document ingestion, FTS5/exact retrieval, lifecycle controls and supplied-plan context integration are implemented; see [project memory](./project-memory.md). Session/organization memory, semantic retrieval and broader architecture controls below remain pending. Policy persistence, ephemeral original evidence and Ruflo development memory are separate. [Project onboarding](./project-workflow.md) now persists non-secret per-project preferences and registers PRD/SRS/ADR sources, without turning them into validated memory or permissions.
+Implementation status: local-owner durable project memory, registered-document ingestion, FTS5/exact retrieval, lifecycle controls and supplied-plan context integration are implemented; see [project memory](./project-memory.md). Independently implemented candidate modules add SQLite SessionMemory structured facts with explicit TTL at most seven days, immutable scoped packets, redaction, reserved tombstone IDs and optimistic checkpoints. Durable high-water allocation is monotonic, handles two-connection creation races and checks overflow inside the insert transaction. SemanticMemory accepts a replaceable real vector provider, validates finite dense nonzero vectors, normalizes them, and supports cosine and deterministic hybrid RRF over current validated scoped ProjectMemory. Retrieval rechecks stale/deleted entries and provider drift, with bounded whole-entry omission. No transcripts or automatic promotion are implemented. OrganizationMemory has versioned contracts that deny all read/write/share/promote operations until trusted identity, ACLs and governance are selected. Broader architecture controls below remain design goals; see [memory capabilities](./memory-capabilities.md). Canonical checkpoint owner APIs provide bounded continuation with fresh policy checks; see [continuation](./continuation.md). Policy persistence, ephemeral original evidence and Ruflo development memory are separate. [Weekly summaries](./weekly-summary.md) use actual run-history records, and [qualification](./qualification.md) reports historical consistency without granting authority. Module evidence and pending combined validation are recorded in [backlog status](./backlog-status.md). [Project onboarding](./project-workflow.md) now persists non-secret per-project preferences and registers PRD/SRS/ADR sources, without turning them into validated memory or permissions.
 
 ForgeMind memory preserves durable engineering knowledge and task continuity across agents without turning complete conversations into a permanent surveillance or prompt-injection corpus.
 
@@ -169,6 +169,6 @@ ForgeMind reuses thread/long-term separation and semantic/episodic/procedural di
 ## Open questions
 
 - Which storage engine combination best supports local mode without constraining cloud scale?
-- What default TTLs apply to raw session events, checkpoints, and rejected candidates?
+- Beyond the implemented explicit SessionMemory TTL of at most seven days and checkpoint expiry, what retention defaults apply to raw session events and rejected candidates?
 - Which validation evidence is sufficient for deterministic project promotion?
 - Can private local memory sync across devices without creating a new organization scope?
