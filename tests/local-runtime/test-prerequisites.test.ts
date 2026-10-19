@@ -10,8 +10,9 @@ import { reviewedCodexFixture } from '../../src/local-runtime/reviewed-codex.js'
 import { reviewedCodexFixture as legacyFixture } from '../live-workflow/reviewed-codex-fixture.js';
 import { testSuite } from '../../src/local-runtime/test-suites.js';
 
-const runnerPath = fileURLToPath(new URL('../../../scripts/run-tests.mjs', import.meta.url));
-const { runTests } = await import(runnerPath);
+const runnerUrl = new URL('../../../scripts/run-tests.mjs', import.meta.url);
+const runnerPath = fileURLToPath(runnerUrl);
+const { runTests } = await import(runnerUrl.href);
 const first = 'FORGEMIND_TEST_CODEX_0161', second = 'FORGEMIND_TEST_CODEX_0162';
 
 function temporary(t: TestContext): string {

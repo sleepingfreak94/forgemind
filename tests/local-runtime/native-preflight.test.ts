@@ -14,14 +14,18 @@ import { preflightNativeTask } from '../../src/live-workflow/native-preflight.js
 import { verifyNativeLaunchPlan } from '../../src/live-workflow/native-executor-launch-contracts.js';
 
 const posix=process.platform!=='win32'&&typeof process.getuid==='function';
-function setup() {
+function setup(sourceBound=true) {
   const directory=mkdtempSync(join(realpathSync(tmpdir()),'native-preflight-'));
-  const root=join(directory,'repo');
-  mkdirSync(root,{mode:0o700});
-  const git=spawnSync('git',['init','--quiet',root],{encoding:'utf8'});
-  assert.equal(git.status,0,git.stderr);
+  const repository=join(directory,'repo');
+  mkdirSync(repository,{mode:0o700});
+  const root=realpathSync(repository);
+  if(sourceBound){
+    assert.ok(posix,'Repository source identity requires POSIX owner checks');
+    const git=spawnSync('git',['init','--quiet',root],{encoding:'utf8'});
+    assert.equal(git.status,0,git.stderr);
+  }
   writeFileSync(join(root,'file.txt'),'before');
-  const task: NativeTask={project:'fixture',task:'input-check',root,source:sourceIdentity(root),
+  const task: NativeTask={project:'fixture',task:'input-check',root,source:sourceBound?sourceIdentity(root):'a'.repeat(64),
     model:'gpt-6.1-sol',effort:'medium',readPaths:['file.txt'],writePaths:['file.txt'],
     checks:[{id:'unit',executable:realpathSync(process.execPath),args:['--version'],timeoutMs:30000}],
     budget:{runtimeMs:30000,turns:null,toolCalls:null,retries:0,inputBytes:1048576,
@@ -42,7 +46,7 @@ function executable(directory:string,output='codex-cli 0.162.1') {
 }
 
 test('packet encoder counts actual pretty JSON UTF8 bytes and final newline at 65536/65537',()=>{
-  const f=setup();
+  const f=setup(false); // Pure encoding uses a synthetic source; no native repository process.
   try {
     for(const seed of ['a','é界🙂']){
       const base=encodeNativePacket(f.task,seed);
@@ -109,7 +113,7 @@ test('packet checkpoint source override preserves initial binding and original f
   } finally {f.clean();}
 });
 test('shared validation preserves strict 30sec checks, model/effort, 32MiB wire and retry enum',()=>{
-  const f=setup();
+  const f=setup(false); // Pure task validation runs on every portable platform.
   try {
     validateNativeTask(f.task);
     for(const retries of [0,1,2])validateNativeTask({...f.task,budget:{...f.task.budget,retries:retries as 0|1|2}});
@@ -150,7 +154,8 @@ test('programmatic objective has its own budget independent of packet-file cap',
     assert.equal(report.checks.find(c=>c.id==='codex-version')?.status,'skipped');
   } finally {f.clean();}
 });
-test('source drift, bad task and empty objective fail before any executable probe',async()=>{
+test('source drift fails before any executable probe',
+  {skip:!posix&&'Native repository identity requires POSIX owner checks'},async()=>{
   const f=setup();
   try {
     // Node would return the wrong version if probed. These failures must skip it.
@@ -159,6 +164,12 @@ test('source drift, bad task and empty objective fail before any executable prob
     const drift=await preflightNativeTask({task:f.task,objective:'x',codexExecutable});
     assert.equal(drift.ready,false);assert.deepEqual(drift.issues,[{code:'source-drift'}]);
     assert.notEqual(drift.source,f.task.source);assert.equal(drift.checks.at(-1)?.status,'skipped');
+  } finally {f.clean();}
+});
+test('bad task, empty objective and invalid budget fail before any executable probe',async()=>{
+  const f=setup(false);
+  try {
+    const codexExecutable=realpathSync(process.execPath);
     const invalid=await preflightNativeTask({task:{...f.task,checks:[]},objective:'',codexExecutable});
     assert.deepEqual(invalid.issues,[{code:'task-invalid'},{code:'objective-invalid'}]);assert.equal(invalid.source,null);
     const budget=await preflightNativeTask({task:{...f.task,budget:{...f.task.budget,wireBytes:33554433}},objective:'x',codexExecutable});

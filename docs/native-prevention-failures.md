@@ -66,3 +66,10 @@ inference, repair an account or promote the changed runtime.
 - Keep the real-child scenario, permitting zero or one observed late frame. Add a separate deterministic owner-fixture wire injection after fatal stop and before the real interrupt request/acknowledgement; that case requires exactly one observed frame. The injected bytes traverse the actual wire meter, JSONL parser and executor listener.
 - Both cases retain all failed-check facts, receipt/source/pending/final-result, one-interrupt, one-stop, actual subprocess reaping and no-continuation assertions. Injection is labelled as fixture injection, not child-emitted evidence. Production code, timers and budgets are unchanged; no sleeps or retries are added.
 - Independent scope assessment accepts this coverage split. Fresh focused checks, full integration and final exact-source review remain required.
+
+## CI1 — Portable Windows fixtures crossed a native boundary
+
+- PR23 at Git `d470dd17ae2ee28fcebe4ca2b046547f10064129` passed local macOS checks and independent review, then the Windows portable job failed: 338 tests, 322 passed, 4 failed, 12 skipped. Original job logs and policy receipts were retained before repair.
+- Three failures came from a shared test setup invoking POSIX-protected repository source identity on Windows, including two otherwise pure encoder/task validators. A fourth file failed at import because its dynamic ESM specifier was a drive-letter filesystem path instead of a file URL.
+- Repair scope is tests only: pure encoder/task validation uses an explicitly synthetic source without Git; repository-source drift coverage keeps its POSIX requirement with a stated Windows skip reason. The runner import uses a file URL, retaining a native filesystem path for subprocess arguments. No production owner checks, suite selectors, native limits or retry policy change.
+- Fresh focused/type/portable checks, independent exact-source review and actual Ubuntu/Windows portable CI must validate the repair. Local macOS passing evidence cannot substitute for the Windows result. Native Windows/Linux enforcement remains deferred.
