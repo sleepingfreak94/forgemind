@@ -14,7 +14,9 @@ import { sourceIdentity } from '../../src/live-workflow/repository.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
 import type { NativeTask } from '../../src/live-workflow/native-executor-contracts.js';
 
-export function projectFixture(runtimeMs = 10000) {
+// Functional fixtures include real Git/SQLite work under parallel suite load.
+// This test-only allowance does not alter production budgets; expiry is tested below.
+export function projectFixture(runtimeMs = 30000) {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'fm-project-native-'))),root=join(dir,'repo');mkdirSync(root);
   execFileSync('/usr/bin/git',['init','-q',root]);writeFileSync(join(root,'value.txt'),'before');
   const task:NativeTask={project:'fixture',task:'change',root,source:sourceIdentity(root),model:'gpt-6.1-sol',effort:'medium',readPaths:['value.txt'],writePaths:['value.txt'],checks:[{id:'check',executable:realpathSync(process.execPath),args:[],timeoutMs:1000}],budget:{runtimeMs,turns:null,toolCalls:null,retries:0,inputBytes:100000,resultBytes:100000,wireBytes:100000,outputBytes:10000}};
@@ -51,5 +53,18 @@ test('durable owner phase followed by failed NativeState update leaves mutation 
     await assert.rejects(nativeTool(f.task,f.state,f.host,'host_apply',{summary:'repair',edits:[{path:'value.txt',beforeSha256:sha256('before'),content:'after'}]},new AbortController().signal),/checkpoint fault/);
     assert.notEqual(f.owner.source,f.task.source);assert.equal(f.state.value.pending,'files.apply');
     assert.throws(()=>new NativeState(join(f.dir,'state'),f.task),/reconciliation/);
+  }finally{f.close();}
+});
+
+test('native owner expires at the exact requested deadline before admitting any action',t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
+  const f=projectFixture(1000);
+  try{
+    const before=f.owner.export().receipts.length;
+    t.mock.timers.tick(999);f.owner.active();
+    t.mock.timers.tick(1);
+    assert.throws(()=>f.owner.active(),/Native owner expired or closed/);
+    assert.throws(()=>f.owner.reserve({kind:'artifact',source:f.task.source,detail:{operation:'native.read',path:'value.txt'}}),/Native owner expired or closed/);
+    assert.equal(f.owner.export().receipts.length,before);
   }finally{f.close();}
 });

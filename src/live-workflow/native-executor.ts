@@ -1,3 +1,7 @@
+import { NativeProviderError, nativeProviderDiagnostic, nativeProviderFailureContext, createNativeFailureContext } from './native-failure-context.js';
+import type { NativeFailureContext } from './native-failure-context.js';
+export { NativeProviderError, nativeProviderDiagnostic, nativeProviderFailureContext } from './native-failure-context.js';
+export type { NativeErrorKind, NativeProviderDiagnostic, NativeFailureContext } from './native-failure-context.js';
 import type { RpcRequest, RpcReply, RpcNotification } from '../agent-drivers/jsonl-rpc.js';
 import type { NativeTask } from './native-executor-contracts.js';
 import { unavailableNativeMetrics } from './native-executor-contracts.js';
@@ -10,56 +14,6 @@ import { nativeDynamicTools, nativeTool } from './native-executor-tools.js';
 function record(raw: unknown): Record<string, unknown> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Malformed native object');
   return raw as Record<string, unknown>;
-}
-
-const nativeErrorKinds = [
-  'contextWindowExceeded','sessionBudgetExceeded','usageLimitExceeded','rateLimitExceeded',
-  'flexUnavailable','serverOverloaded','cyberPolicy','misalignmentPolicyViolation','tooManyDenials',
-  'internalServerError','unauthorized','badRequest','threadRollbackFailed','sandboxError','other',
-] as const;
-const nativeHttpErrorKinds = [
-  'httpConnectionFailed','responseStreamConnectionFailed','responseStreamDisconnected','responseTooManyFailedAttempts',
-] as const;
-export type NativeErrorKind = typeof nativeErrorKinds[number] | typeof nativeHttpErrorKinds[number] | 'activeTurnNotSteerable' | 'unknown';
-export interface NativeProviderDiagnostic {
-  readonly kind: NativeErrorKind;
-  readonly httpStatusCode: number | null;
-  readonly willRetry: boolean | null;
-}
-/** Remote text is deliberately never assigned to Error.message, cause or receipts. */
-export class NativeProviderError extends Error {
-  readonly diagnostic: Readonly<NativeProviderDiagnostic>;
-  constructor(rawError: unknown, willRetry: unknown) {
-    let kind: NativeErrorKind='unknown',httpStatusCode:number|null=null;
-    const error=rawError && typeof rawError==='object' && !Array.isArray(rawError) ? rawError as Record<string,unknown> : null;
-    const info=error?.codexErrorInfo;
-    if(typeof info==='string' && (nativeErrorKinds as readonly string[]).includes(info))kind=info as NativeErrorKind;
-    else if(info && typeof info==='object' && !Array.isArray(info)){
-      const keys=Object.keys(info);
-      if(keys.length===1){
-        const key=keys[0]!;
-        if((nativeHttpErrorKinds as readonly string[]).includes(key)){
-          const detail=(info as Record<string,unknown>)[key];
-          if(detail && typeof detail==='object' && !Array.isArray(detail)){
-            const status=(detail as Record<string,unknown>).httpStatusCode;
-            if(status===null||status===undefined){kind=key as NativeErrorKind;}
-            else if(Number.isSafeInteger(status) && (status as number)>=0 && (status as number)<=65535){
-              kind=key as NativeErrorKind;httpStatusCode=status as number;
-            }
-          }
-        }else if(key==='activeTurnNotSteerable'){
-          const detail=(info as Record<string,unknown>)[key];
-          if(detail && typeof detail==='object' && !Array.isArray(detail))kind=key;
-        }
-      }
-    }
-    super('Native provider failure: '+kind);
-    this.name='NativeProviderError';
-    this.diagnostic=Object.freeze({kind,httpStatusCode,willRetry:typeof willRetry==='boolean'?willRetry:null});
-  }
-}
-export function nativeProviderDiagnostic(error:unknown):Readonly<NativeProviderDiagnostic>|null{
-  return error instanceof NativeProviderError ? error.diagnostic : null;
 }
 
 function callbackParams(raw: unknown, thread: string | null, turn: string | null) {
@@ -115,10 +69,13 @@ export class NativeExecutor {
   #closed = false;
   #terminal = false;
   #fatal: Error | null = null;
+  #failureContext: Readonly<NativeFailureContext> | null = null;
+  #lastTool: NativeFailureContext['lastTool'] = null;
   #controller = new AbortController();
   #reject: ((error: Error) => void) | undefined;
   #resolve: (() => void) | undefined;
   #cleanup: Promise<void> | null = null;
+  #checkpointUncertain = false;
   #tokens: unknown = null;
   #historicalTurns = new Set<string>();
   #runtimeStart = 0;
@@ -181,7 +138,7 @@ export class NativeExecutor {
       if (event.method === 'turn/completed') {
         if (this.#terminal) throw new Error('Duplicate native terminal frame');
         this.#terminal = true;
-        if (turn.status === 'failed') throw new NativeProviderError(turn.error, false);
+        if (turn.status === 'failed') throw new NativeProviderError(turn.error, false, {origin: 'turn-completed', lastTool: this.#lastTool});
         if (turn.status !== 'completed' || !Array.isArray(turn.items) ||
             this.#state.value.pending || this.#toolBusy) {
           throw new Error('Invalid turn completion');
@@ -201,7 +158,7 @@ export class NativeExecutor {
     } else if (event.method === 'item/started' || event.method === 'item/completed') {
       this.#item(p.item, event.method === 'item/completed');
     } else {
-      throw new NativeProviderError(p.error, p.willRetry);
+      throw new NativeProviderError(p.error, p.willRetry, {origin: 'error-notification', lastTool: this.#lastTool});
     }
   }
   #item(raw: unknown, completed: boolean): void {
@@ -241,6 +198,8 @@ export class NativeExecutor {
       this.#state.claim(p.callId);
       this.#state.charge('inputBytes', Buffer.byteLength(JSON.stringify(p.arguments)));
       const text = await nativeTool(this.#task, this.#state, this.#host, p.tool, p.arguments, this.#controller.signal);
+      // The awaited host operation has settled; attempted or denied tools never advance this fact.
+      if (p.tool === 'host_read' || p.tool === 'host_apply' || p.tool === 'host_check') this.#lastTool = p.tool;
       return { result: { success: true, contentItems: [{ type: 'inputText', text }] } };
     } catch (e) {
       void this.#stop(e as Error);
@@ -253,6 +212,8 @@ export class NativeExecutor {
     this.#finalResult = null;
     this.#resultCollector.clear();
     this.#fatal ??= error;
+    this.#failureContext ??= nativeProviderFailureContext(this.#fatal) ??
+      createNativeFailureContext('missing', {lastTool: this.#lastTool});
     if (this.#closed) return this.#cleanup ?? Promise.resolve();
     this.#controller.abort(error);
     this.#closed = true;
@@ -271,7 +232,13 @@ export class NativeExecutor {
       } catch {
         status = 'indeterminate';
       }
-      this.#state.update({ status });
+      try { this.#state.update({ status }); }
+      catch {
+        this.#checkpointUncertain = true;
+        // Retain pending effects; only mark uncertainty best effort. A failed
+        // checkpoint write must never prevent rejection with the primary error.
+        try { this.#state.update({status:'indeterminate'}); } catch {}
+      }
       this.#reject?.(error);
     })();
     return this.#cleanup;
@@ -283,6 +250,7 @@ export class NativeExecutor {
     this.#resultCollector.clear();
     this.#tokens = null;
     this.#historicalTurns.clear();
+    if (!this.#closed) { this.#lastTool = null; this.#failureContext = null; }
     if (this.#closed || this.#state.value.pending) throw new Error('Inactive native session');
     this.#host.boundary();
     signal?.throwIfAborted();
@@ -380,9 +348,10 @@ export class NativeExecutor {
       this.#reject = undefined;
     }
   }
+  get failureContext(): Readonly<NativeFailureContext> | null { return this.#failureContext; }
   get receipt() {
     return {
-      checkpoint: this.#state.value, finalResult: this.#finalResult,
+      checkpoint: this.#state.value, checkpointUncertain:this.#checkpointUncertain, finalResult: this.#finalResult,
       observedTokenUsage: this.#tokens, nativeDiagnostic:nativeProviderDiagnostic(this.#fatal),
       unavailable: [...unavailableNativeMetrics], qualification: this.#host.qualification,
     };

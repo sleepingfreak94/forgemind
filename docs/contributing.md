@@ -38,7 +38,7 @@ export FORGEMIND_TEST_CODEX_0162=/absolute/path/to/codex-0.162.1
 npm test
 ```
 
-The legacy adapter fixtures use 0.161.0; native executor fixtures use 0.162.1. The selector validates each exact version and fails on missing or mismatched paths. It never replaces the shared Codex installation or skips a required macOS fixture when a binary is missing. Linux/Windows portable checks do not require these executables. Subprocess-based native/CLI fixtures run on the owner host, outside the no-fork compiled-test sandbox.
+The legacy adapter fixtures use 0.161.0; native executor fixtures use 0.162.1. The selector validates each exact version and fails on missing or mismatched paths. It never replaces the shared Codex installation or skips a required macOS fixture when a binary is missing. Only the full `all` suite requires both selectors; portable, host, doctor and typecheck require neither. The suite runner validates required selectors before test discovery or worker dispatch. Linux/Windows portable checks do not require these executables. Subprocess-based native/CLI fixtures run on the owner host, outside the no-fork compiled-test sandbox.
 
 Include the exact source identity, checks actually run, results and remaining gaps in your PR. Independent review is required by the repository workflow. Documentation changes should preserve the distinction between implemented features, fixture results, supervised observations and future goals. Do not add secrets or local runtime artifacts to Git.
 

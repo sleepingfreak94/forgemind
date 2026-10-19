@@ -97,14 +97,17 @@ export function qualifyNative(raw: unknown): QualificationEvidence {
     exact(result, ['phase', 'code', 'receipts']);
     if (typeof result.phase !== 'string' || result.phase.length > 128 || typeof result.code !== 'string' || result.code.length > 128) qualificationError();
   } else {
-    record(result, ['taskId', 'status', 'source', 'readiness', 'checks', 'executionLease', 'native', 'owner', 'runtime', 'checkpoint', 'observedTokenUsage', 'nativeDiagnostic', 'unavailable', 'qualification']);
+    record(result, ['taskId', 'status', 'source', 'readiness', 'checks', 'executionLease', 'native', 'owner', 'runtime', 'checkpoint', 'observedTokenUsage', 'nativeDiagnostic', 'unavailable', 'qualification', 'capture', 'checkpointUncertain', 'finalResult']);
     if (result.status !== undefined) choice(result.status, ['completed', 'failed', 'running', 'blocked']);
   }
   if (!failed && result.taskId !== undefined && result.taskId !== taskId) qualificationError();
   if (result.source !== undefined) sameSource(result.source, source);
   if (!failed && result.taskId === undefined && result.checkpoint === undefined) qualificationError();
-  const bundle = failed ? record(result.receipts, ['checkpoint', 'executionLease', 'owner', 'runtime', 'nativeDiagnostic']) : result;
-  const native = !failed && result.native !== undefined ? record(result.native, ['checkpoint', 'observedTokenUsage', 'nativeDiagnostic', 'unavailable', 'qualification', 'finalResult']) : bundle;
+  const bundle = failed ? record(result.receipts, ['checkpoint', 'executionLease', 'owner', 'runtime', 'nativeDiagnostic', 'checkpointUncertain', 'checks', 'verificationChecks', 'failureContext', 'capture']) : result;
+  const native = !failed && result.native !== undefined ? record(result.native, ['checkpoint', 'observedTokenUsage', 'nativeDiagnostic', 'unavailable', 'qualification', 'finalResult', 'checkpointUncertain']) : bundle;
+  const nativeUncertain=native.checkpointUncertain===undefined?false:boolean(native.checkpointUncertain);
+  const bundleUncertain=bundle.checkpointUncertain===undefined?false:boolean(bundle.checkpointUncertain);
+  const checkpointUncertain=nativeUncertain||bundleUncertain;
   finalResultMetadata(native.finalResult);
   const readiness = result.readiness === undefined ? null : record(result.readiness, ['ready', 'qualification', 'acceptedBudget', 'evidence', 'reasons', 'observed', 'unavailable']);
   if (readiness) {
@@ -148,7 +151,7 @@ export function qualifyNative(raw: unknown): QualificationEvidence {
       runtimeRows.length === 1 && runtimeRows.every(r => r.status === 'completed' && r.binding === runtimeBinding.digest) &&
       runtimeSettled(terminals, runtimeRows[0]!.id, runtime.leaseId, runtimeBinding.digest, taskId);
   }
-  const cleanup = settled && c !== null && c.pending === null && ['stopped', 'completed', 'ready'].includes(c.status as string) ? 'reported-settled' as const : 'unavailable' as const;
+  const cleanup = !checkpointUncertain && settled && c !== null && c.pending === null && ['stopped', 'completed', 'ready'].includes(c.status as string) ? 'reported-settled' as const : 'unavailable' as const;
   const completed = !failed && result.status === 'completed' && result.taskId === taskId && result.source === source && sourceBound && allDeclaredChecks && qualification !== undefined &&
     cleanup === 'reported-settled' && c !== null && c.pending === null && readiness?.ready === true && readiness.acceptedBudget === true &&
     runtimeBinding.classification !== 'unavailable' && executable.classification !== 'unavailable' && profile.classification !== 'unavailable';

@@ -1,3 +1,4 @@
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
@@ -9,7 +10,7 @@ import { NativeExecutor, NativeProviderError } from '../../src/live-workflow/nat
 import { NativeState } from '../../src/live-workflow/native-executor-state.js';
 import { FixtureNativeHost, fixtureStdioRpc } from '../../src/live-workflow/native-executor-host.js';
 import { nativeReadiness } from '../../src/live-workflow/native-executor-readiness.js';
-import { nativeTool } from '../../src/live-workflow/native-executor-tools.js';
+import { nativeTool, nativeCheckFailure } from '../../src/live-workflow/native-executor-tools.js';
 import { ownerRouting } from '../../src/live-workflow/routing-profile.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
 import type { NativeTask } from '../../src/live-workflow/native-executor-contracts.js';
@@ -384,6 +385,45 @@ test('historical allowset and observed tokens reset on each host-started turn',a
   }finally{await executor.close();state.close();rmSync(dir,{recursive:true,force:true});}
 });
 
+
+async function failedCheckProcess(injectLateFrame:boolean){
+  const {dir,task,state}=setup(), summary={id:'check',passed:false,exitCode:1,stdout:'actual failed check',stderr:''};
+  const late={method:'turn/completed',params:{threadId:'thread',turn:{id:'turn',status:'completed',items:[{type:'agentMessage',text:'late final result'}]}}};
+  const lateOutput=injectLateFrame?'':'send('+JSON.stringify(late)+');';
+  const script=program.replace("setImmediate(()=>tool('host_read',{path:'file.txt'}));","setImmediate(()=>tool('host_check',{id:'check'}));")
+    .replace("if(m.method==='initialize')","if(m.method==='turn/interrupt'){send({id:m.id,result:{}});"+lateOutput+"} if(m.method==='initialize')");
+  const child=spawn(process.execPath,['-e',script]), incoming=new PassThrough();
+  child.stdout!.pipe(incoming);const rpc=fixtureStdioRpc(incoming,child.stdin!);
+  let checks=0,stops=0,interrupts=0,lateFrames=0;
+  const terminals:{status:string;digest:string|undefined}[]=[], sources:string[]=[];
+  const request=rpc.request.bind(rpc);
+  rpc.request=(method,params,onResult)=>{
+    if(method==='turn/interrupt'){
+      interrupts++;
+      // Trusted fixture wire injection after fatal stop, before the real request
+      // and its cleanup timer. It traverses the meter, JSONL parser and receiver.
+      if(injectLateFrame)incoming.write(JSON.stringify(late)+'\n');
+    }
+    return request(method,params,onResult);
+  };
+  rpc.onNotification(event=>{if(event.method==='turn/completed')lateFrames++;});
+  const host=new FixtureNativeHost(rpc,{reserve(envelope){sources.push(envelope.source);return{check:()=>{},finish(status,digest){terminals.push({status,digest});}};}},
+    ()=>{},async()=>{stops++;child.kill();await new Promise<void>(done=>child.once('close',()=>done()));},()=>task.source,async()=>{checks++;return summary;});
+  const executor=new NativeExecutor(task,state,host);
+  try{
+    await assert.rejects(executor.turn('failed check'),error=>{assert.deepEqual(nativeCheckFailure(error),{source:task.source,digest:sha256(JSON.stringify(summary)),summary,receiptCompleted:true});return true;});
+    assert.equal(checks,1);assert.equal(interrupts,1);assert.equal(stops,1);
+    if(injectLateFrame)assert.equal(lateFrames,1);
+    else assert.ok(lateFrames===0||lateFrames===1); // RPC may close before the child's later write.
+    assert.deepEqual(sources,[task.source]);assert.deepEqual(terminals,[{status:'completed',digest:sha256(JSON.stringify(summary))}]);
+    assert.equal(state.value.pending,null);assert.equal(state.value.status,'stopped');assert.equal(state.value.source,task.source);
+    assert.equal(executor.receipt.finalResult,null);assert.ok(child.exitCode!==null||child.signalCode!==null);
+    await assert.rejects(executor.turn('late continuation'));assert.equal(checks,1);assert.equal(executor.receipt.finalResult,null);
+  }finally{await executor.close();state.close();incoming.destroy();rmSync(dir,{recursive:true,force:true});}
+}
+
+test('[B010] failed host_check interrupts and reaps the subprocess without accepting its late final result',()=>failedCheckProcess(false));
+test('[B010] observed injected late completion is rejected before interrupt acknowledgement and subprocess reaping',()=>failedCheckProcess(true));
 
 test('delayed bootstrap snapshot is discarded before delayed acknowledgement; fresh threads have no exception',async()=>{
   for(const resumed of [true,false]){

@@ -1,0 +1,380 @@
+{
+  "schema": "followup-bugfixes-sanitized-validation-v1",
+  "status": "COMPONENTS-ACCEPTED-IN-ISOLATION-INTEGRATION-PENDING",
+  "preparedAt": "2026-10-19T09:16:32.789Z",
+  "baseline": {
+    "commit": "cd3d7cbc57f63e17ed4d999042d6e073ca45769e",
+    "source": "c9f439f9571f044c79b0f0e22a1ff3dacb0d66dce6ae1895938f2fe6924b4049",
+    "storageFoundationAbsent": true,
+    "absenceVerification": {
+      "method": "git ls-tree -r --name-only baseline commit with the three exact foundation paths",
+      "exitCode": 0,
+      "stdout": "",
+      "paths": [
+        "src/live-workflow/owner-artifact-contracts.ts",
+        "src/live-workflow/owner-artifact-io.ts",
+        "tests/live-workflow/owner-artifact-io.test.ts"
+      ]
+    },
+    "cleanBaselineB010Reproduction": false
+  },
+  "components": {
+    "B010": {
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "sourceFiles": 7,
+      "runtimeFiles": 209,
+      "runtimeManifestSha256": "b0745cabde29aad921be7d486d2c59c5279a553bfcaa3788cad2cab95b671a59",
+      "leadDecisionSha256": "0bb8a99e0aefaabc30398e0bf5a6f98ceb1e07477eeaa224bfb435af3efe9dcc",
+      "leadStatus": "ACCEPTED-IN-ISOLATED-CANDIDATE",
+      "independentReviewSha256": "1fcf1a478ade42922e1cae4750c9b2689fcb38265f4bb2c238b301ff12c57e4d",
+      "independentQualificationSha256": "86da6e2e85d64f04bd26240661cd03f0e35b07abd5a614c8206625ff43c8a5e8",
+      "leadVerifiedEvidencePins": 341
+    },
+    "storage": {
+      "source": "31a27cde15539ed5d833c075dde016d881d277727c6fb0b6bcda75e74d78bc30",
+      "sourceFiles": 3,
+      "leadDecisionSha256": "15fe18b1b5e9671e2057172546e420142a421b6b76cdb1161348536cf0b382c3",
+      "leadStatus": "ACCEPTED-IN-ISOLATED-CANDIDATE",
+      "independentReviewSha256": "80aac9065bf779819b5081df98a9d71753a16100596283b1eb907446e8f3bdfa",
+      "leadVerifiedObservedPins": 648,
+      "acceptedBugs": [
+        "B005",
+        "B006",
+        "B007",
+        "B008",
+        "B009",
+        "B011"
+      ]
+    }
+  },
+  "sourcePins": {
+    "B010": [
+      {
+        "path": "src/live-workflow/native-executor-tools.ts",
+        "sha256": "010c894d1698e68a375557af55f141966b05e205a1d88b2ce438245a3af1d353",
+        "bytes": 7688
+      },
+      {
+        "path": "src/live-workflow/native-checks.ts",
+        "sha256": "eea6ad1d579ca1859e5359a4cbec98ad975353930e0e52cf42ea2976f60074e5",
+        "bytes": 2929
+      },
+      {
+        "path": "src/live-workflow/native-executor-run.ts",
+        "sha256": "b1603ae56aab8b5c0f334302892283eb144eb5cba539fb71f4b438dc2c0201ff",
+        "bytes": 20302
+      },
+      {
+        "path": "tests/live-workflow/native-check-stop.test.ts",
+        "sha256": "a6edfb05522cd4f61666a3908b0446ffa022317d4036623f52e96c7fa1a8a873",
+        "bytes": 22372
+      },
+      {
+        "path": "tests/live-workflow/native-checks.test.ts",
+        "sha256": "2dae69d07536b5f1a4d0f3a47f460ba7da6576923c9ccc9cdd5f0a341e9e5134",
+        "bytes": 27182
+      },
+      {
+        "path": "tests/live-workflow/native-executor.test.ts",
+        "sha256": "ed45ef51887cf17635fa56290d40be607a595e18e2d95322d7acc52d8bbccbc8",
+        "bytes": 30974
+      },
+      {
+        "path": "src/live-workflow/native-executor.ts",
+        "sha256": "a4b226c8c879fc9445f4ee99780ff09815cc3fc9411d5121a4bceb87ab0dcf1e",
+        "bytes": 19688
+      }
+    ],
+    "storage": [
+      {
+        "path": "src/live-workflow/owner-artifact-contracts.ts",
+        "sha256": "4e384ae07463ddc5294a21ab5f50a3ff3891fe59a68a2cc614bb4edb5a02777a",
+        "bytes": 9349
+      },
+      {
+        "path": "src/live-workflow/owner-artifact-io.ts",
+        "sha256": "35379bfe490cb05945f3ef28e810e9f089da46b18626a2afda9e9c02997d2865",
+        "bytes": 22957
+      },
+      {
+        "path": "tests/live-workflow/owner-artifact-io.test.ts",
+        "sha256": "2a293db8a1c3a12bd7a43199fd2d08205aa645e61190c71c0e451430508e0eaa",
+        "bytes": 27345
+      }
+    ]
+  },
+  "historicalBefore": {
+    "source": "0f110ae249ff39e1252cf47a1fca09c29f937029264502e0783ee298eda38e24",
+    "executingRuntimeSource": "7ef75aa5ad2aed7778913555aa5e1cbfa2080dbb606276de591d68051a001b4c",
+    "description": "Same failed approved group executed twice in one historical S0a repair run, not a clean-baseline execution or model retry.",
+    "modelRetryCounter": 0,
+    "groupExecutions": [
+      {
+        "execution": 1,
+        "id": "S0a-repair-2-pure-and-finaltext",
+        "counts": {
+          "tests": 29,
+          "pass": 28,
+          "fail": 1,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0
+        },
+        "fileSha256": "511d64eaef34c296e3a4567d01d02fb088f9926669037201e4acf20dc135af2a",
+        "producerResultDigest": "eec7e1eb40f5eb74e9692dd6693a32efb4c3c03e8602bd29b3b0ced814df63eb",
+        "summary": "ℹ tests 29\nℹ pass 28\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+      },
+      {
+        "execution": 2,
+        "id": "S0a-repair-2-pure-and-finaltext",
+        "counts": {
+          "tests": 29,
+          "pass": 28,
+          "fail": 1,
+          "cancelled": 0,
+          "skipped": 0,
+          "todo": 0
+        },
+        "fileSha256": "ec327fc38cb0a818a06a65f1238284d36288f52ee8bfd3ede587f5de52662c6f",
+        "producerResultDigest": "659467bdc5be2bb33ad4b340a640477c41ed8f41cdbfbe72e7758bc67241ce25",
+        "summary": "ℹ tests 29\nℹ pass 28\nℹ fail 1\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+      }
+    ],
+    "fullFailedTaskExportSha256": "af78c3f2b37bfb72e51f0f3713e7664d1d773398b4b2f4b0a27eca4429a4930b",
+    "strictLimitation": "Old failed-task export did not retain a full strict result; no historical overall strict PASS is claimed."
+  },
+  "proxyBeforeAfter": {
+    "before": {
+      "source": "5f9aaa49a8448997c99664bbe6eae67bd040e246eae73184e7c6529e77dd59d0",
+      "scope": "Helper-only observation; not a full owner/lease reproduction",
+      "hostileProxyTrapCalls": 1,
+      "revokedProxyLookupThrew": true,
+      "evidenceSha256": "ce989a64c50e80067346bdd19f5f48fd7d9b3966e03cd2a466eee5040faa2a97"
+    },
+    "after": {
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "scope": "Full NativeExecutor receipt in the pure typed-host fixture, not a live hostile-provider probe",
+      "hostileProxyTrapCalls": 0,
+      "diagnosticGetterReads": 0,
+      "regressions": [
+        "✔ [B010] raw fatal proxies never trigger traps when the owner reads the full executor receipt (16.099875ms)",
+        "✔ [B010] provider receipts use constructor-owned diagnostic identity without reading mutable properties (0.131208ms)"
+      ]
+    }
+  },
+  "validationGroups": [
+    {
+      "name": "B010 pure plus existing final-result tests",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "counts": {
+        "tests": 32,
+        "pass": 32,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "strictSeparate": true,
+      "evidenceSha256": "ba2e79d9220f31f9f4aa3dfcdd612d305bf02feb7b63098e1f4ac84784125144",
+      "summary": "ℹ tests 32\nℹ pass 32\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+    },
+    {
+      "name": "B010 build",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "counts": null,
+      "exitCode": 0,
+      "evidenceSha256": "110e0883b31a40c39b68f65043c2ab5649256f1c62622c970df69f42b8a28947",
+      "summary": "> forgemind@0.1.0 build\n> tsc -p config/tsconfig.json"
+    },
+    {
+      "name": "B010 focused HOST",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "counts": {
+        "tests": 9,
+        "pass": 9,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "exitCode": 0,
+      "evidenceSha256": "97f441a9cea6683757106d0e06f458aa4214cebfb26033baf6177ff70afd66e1",
+      "summary": "ℹ tests 9\nℹ pass 9\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+    },
+    {
+      "name": "Executor regressions",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "counts": {
+        "tests": 38,
+        "pass": 38,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "exitCode": 0,
+      "evidenceSha256": "c917c5f873b50c74ca8a217457f0f0811e22598bf1e102ef928ef72e989c285b",
+      "summary": "ℹ tests 38\nℹ pass 38\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+    },
+    {
+      "name": "Storage plus existing final-result tests",
+      "source": "31a27cde15539ed5d833c075dde016d881d277727c6fb0b6bcda75e74d78bc30",
+      "counts": {
+        "tests": 29,
+        "pass": 29,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "strictSeparate": true,
+      "evidenceSha256": "46724fa0476b216bd4d830a14812c706d08648bfc6831a8c1e0a902292337a65",
+      "summary": "ℹ tests 29\nℹ pass 29\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0"
+    }
+  ],
+  "counting": "Overlapping groups; no summation, unique-test total, full-suite or combined-source test claim.",
+  "probes": {
+    "A": {
+      "verdict": "PASS-EXPECTED-NEGATIVE",
+      "phase": "native-turn",
+      "code": "verification-failed",
+      "innerExecutions": 1,
+      "callbackInvocations": 1,
+      "tools": 1,
+      "turns": 1,
+      "retries": 0,
+      "laterReservations": 0,
+      "pending": null,
+      "checkpointUncertain": false,
+      "executionLease": "failed",
+      "runtime": "completed/executor-terminal",
+      "summary": {
+        "id": "B010-512f-A-fail23",
+        "passed": false,
+        "exitCode": 23,
+        "stdout": "B010_512f_A_fail23_stdout\n",
+        "stderr": "B010_512f_A_fail23_stderr\n"
+      },
+      "summaryAndReceiptDigest": "16b6beb9ca057d47af6a4558e58d5897ed4ebef78549a2301819c93393ab49a4",
+      "rawResultFileSha256": "171f738e8231b9f146b55f231f0de7f241ed3e6076039eb1c51dbbf99d2eaeab"
+    },
+    "B": {
+      "verdict": "PASS-EXPECTED-NEGATIVE",
+      "phase": "verification",
+      "code": "verification-failed",
+      "innerExecutions": 2,
+      "orderedOutcomes": [
+        true,
+        false
+      ],
+      "callbackInvocations": 0,
+      "tools": 0,
+      "turns": 1,
+      "retries": 0,
+      "sentinelReservations": 0,
+      "pending": null,
+      "checkpointUncertain": false,
+      "executionLease": "failed",
+      "runtime": "completed/executor-terminal",
+      "actualChecks": [
+        {
+          "summary": {
+            "id": "B010-512f-B-pass1",
+            "passed": true,
+            "exitCode": 0,
+            "stdout": "B010_512f_B_pass1_stdout\n",
+            "stderr": "B010_512f_B_pass1_stderr\n"
+          },
+          "summaryDigest": "5d112003e43b01fa835f6b684dbde7040c8e9243cbbcb2583d3a97a963b767ad",
+          "receiptDigest": "5d112003e43b01fa835f6b684dbde7040c8e9243cbbcb2583d3a97a963b767ad"
+        },
+        {
+          "summary": {
+            "id": "B010-512f-B-fail23",
+            "passed": false,
+            "exitCode": 23,
+            "stdout": "B010_512f_B_fail23_stdout\n",
+            "stderr": "B010_512f_B_fail23_stderr\n"
+          },
+          "summaryDigest": "fa01fe9636308eb0f97ab0e99cbb410498cf73ff417bb4cc0dcba5aa00d338ae",
+          "receiptDigest": "fa01fe9636308eb0f97ab0e99cbb410498cf73ff417bb4cc0dcba5aa00d338ae"
+        }
+      ],
+      "rawResultFileSha256": "0132fec6ccd7b49110b282dbc979c3a862c89cec284347a1394330b2998e88d4"
+    }
+  },
+  "reviews": [
+    {
+      "component": "B010 code",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "verdict": "PASS",
+      "sha256": "1fcf1a478ade42922e1cae4750c9b2689fcb38265f4bb2c238b301ff12c57e4d"
+    },
+    {
+      "component": "B010 actual A/B qualification",
+      "source": "512f1244ac76bc7cf02a3daef1ad8669c1fd62fcab17bb6494c5c304d1c61210",
+      "verdict": "PASS",
+      "sha256": "86da6e2e85d64f04bd26240661cd03f0e35b07abd5a614c8206625ff43c8a5e8"
+    },
+    {
+      "component": "Storage six fixes",
+      "source": "31a27cde15539ed5d833c075dde016d881d277727c6fb0b6bcda75e74d78bc30",
+      "verdict": "PASS",
+      "sha256": "80aac9065bf779819b5081df98a9d71753a16100596283b1eb907446e8f3bdfa"
+    }
+  ],
+  "storageFindings": [
+    {
+      "bug": "B005",
+      "decision": "pass"
+    },
+    {
+      "bug": "B006",
+      "decision": "pass"
+    },
+    {
+      "bug": "B007",
+      "decision": "pass"
+    },
+    {
+      "bug": "B008",
+      "decision": "pass"
+    },
+    {
+      "bug": "B009",
+      "decision": "pass"
+    },
+    {
+      "bug": "B011",
+      "decision": "pass"
+    }
+  ],
+  "privateEvidenceHandling": "Full policy databases, original captures, runtime/account identifiers and private provenance stay private. Only allowlisted source/review digests, counts, fixed test names and marker stdout/stderr are published here.",
+  "integration": {
+    "status": "PENDING",
+    "source": null,
+    "checks": "PENDING",
+    "finalIndependentReview": "PENDING",
+    "commit": "PENDING",
+    "draftPrUrl": null
+  },
+  "limitations": [
+    "Accepted local components are not a validated integrated candidate or release.",
+    "Focused groups overlap and include fixtures; no full suite, benchmark, billing hard cap, cross-platform, deployment or production-readiness claim.",
+    "The hostile diagnostic baseline is helper-only; its after evidence is a full receipt fixture. Actual A/B probes exercise direct checks, not live hostile provider injection.",
+    "Logical probe tasks and leases intentionally fail while native runtime cleanup completes cleanly. Negative qualification PASS does not mean a successful task.",
+    "Artifact tests do not establish physical power-loss/crash durability, F_FULLFSYNC, hostile same-UID/openat safety, unsupported remote filesystems or caller delivery.",
+    "Historical receipts and review PASS grant no current execution, runtime promotion, merge or release authority.",
+    "Generic owner wrappers retain projections; omitted full spawn metadata is not reconstructed. Original raw records remain private."
+  ],
+  "preparation": {
+    "repositoryWrites": 0,
+    "inference": 0,
+    "newTests": 0,
+    "builds": 0,
+    "commits": 0,
+    "pushes": 0,
+    "controlsMutated": false,
+    "olderDraftsModified": false
+  }
+}
