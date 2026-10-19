@@ -50,7 +50,7 @@ export class NativeProject implements NativeProjectBoundary {
     if (observed.source !== expected) throw new Error('Stale native project source');
     this.#before = observed;
   }
-  commitAppliedSource(before: string, applied: CodingResult): { source: string; transitionReceiptId: string } {
+  commitAppliedSource(before: string, applied: CodingResult): { source: string; transitionReceiptId: string | null } {
     this.active();
     const snapshot = this.#before;
     if (!snapshot || snapshot.source !== before) throw new Error('Missing preimage inventory');
@@ -64,6 +64,14 @@ export class NativeProject implements NativeProjectBoundary {
     const source = identity(expected);
     const actual = inventory(this.root);
     if (actual.source !== source) throw new Error('Unrelated source drift during native edit');
+    if (source === before) {
+      // The completed files.apply receipt already records this idempotent write.
+      // A source transition must describe a real change, never a fabricated phase.
+      this.active();
+      if (this.source() !== source) throw new Error('Source drift before no-op confirmation');
+      this.#before = null;
+      return { source, transitionReceiptId: null };
+    }
     const transitionReceiptId = randomUUID();
     const receipt = this.authority.reserve({ kind: 'artifact', source: before,
       detail: { operation: 'native.source-transition', transitionReceiptId, before, source,

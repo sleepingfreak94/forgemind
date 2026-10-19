@@ -21,7 +21,7 @@ export interface NativeCheckpoint {
 export interface NativeProjectBoundary {
   source(): string;
   assertCurrent(expected: string): void;
-  commitAppliedSource(before: string, applied: CodingResult): { source: string; transitionReceiptId: string };
+  commitAppliedSource(before: string, applied: CodingResult): { source: string; transitionReceiptId: string | null };
 }
 export const unavailableNativeMetrics = ['hardProviderRequestCount', 'fullNativePromptBytes', 'rawProviderResponseBytes'] as const;
 export function validateBudget(budget: NativeBudget): void {

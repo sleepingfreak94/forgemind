@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readdirSync, readFileSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { decodeNativeCapture } from '../../src/live-workflow/native-capture-codec.js';
 import { beginNativeRunCapture, captureJson, NativeCaptureError } from '../../src/live-workflow/native-run-capture.js';
 import { projectFixture } from './native-executor-project.test.js';
 import { readOwnerArtifactBundle } from '../../src/live-workflow/owner-artifact-io.js';
@@ -43,14 +44,14 @@ test('capture overflow rejects acceptance and keeps incomplete evidence without 
  const f=projectFixture(),run=join(f.dir,'overflow-run');mkdirSync(run,{mode:0o700});
  try{
   const capture=beginNativeRunCapture(f.task,run,'c'.repeat(64),10000);
-  assert.throws(()=>capture.finish({body:'x'.repeat(2*1024*1024)}),NativeCaptureError);capture.close();
+  assert.throws(()=>capture.finish({body:'x'.repeat(16*1024*1024)}),NativeCaptureError);capture.close();
   assert(!existsSync(join(capture.directory,'accepted.json')));assert(existsSync(join(capture.directory,'failure.json')));
   const next=beginNativeRunCapture(f.task,run,'c'.repeat(64),10000);assert.notEqual(next.directory,capture.directory);next.close();
  }finally{f.close();}
 });
 
 test('oversized or refused failure terminal still retains primary phase/code in one Markdown resume record',native,()=>{
- for(const envelope of [{body:'x'.repeat(2*1024*1024)},Object.defineProperty({},'body',{enumerable:true,get(){throw new Error('must not execute');}})]){
+ for(const envelope of [{body:'x'.repeat(16*1024*1024)},Object.defineProperty({},'body',{enumerable:true,get(){throw new Error('must not execute');}})]){
   const f=projectFixture(),run=join(f.dir,'fallback-run');mkdirSync(run,{mode:0o700});
   try{
    const capture=beginNativeRunCapture(f.task,run,'d'.repeat(64),10000);
@@ -85,4 +86,36 @@ test('callable runner preserves primary failure and Markdown when terminal publi
   const files=readdirSync(join(run,'failures'));assert.equal(files.length,1);
   const md=readFileSync(join(run,'failures',files[0]!),'utf8');assert.match(md,/Phase: authentication/);assert.match(md,/Code: account-or-authority/);
  }finally{account.close();f.close();}
+});
+
+
+test('large selected check logs recover losslessly with unchanged result fields and one terminal settlement',native,()=>{
+ const f=projectFixture(),run=join(f.dir,'chunked-run');mkdirSync(run,{mode:0o700});
+ try{
+  const capture=beginNativeRunCapture(f.task,run,'f'.repeat(64),10000);
+  const envelope={status:'completed',checks:[{stdout:'é'.repeat(600000),stderr:'界'.repeat(400000)}],native:{result:'selected'}};
+  const original=Buffer.from(JSON.stringify(envelope));capture.finish(envelope);capture.close();
+  const options={root:join(run,'capture'),project:f.root,scope:{taskId:'capture-'+sha256(f.task.task).slice(0,32),sourceSha256:f.task.source,requestSha256:'f'.repeat(64)}};
+  const id=capture.directory.split('/').at(-1)!,bundle=readOwnerArtifactBundle(options,id);
+  assert.deepEqual(decodeNativeCapture(bundle),original);assert.deepEqual(JSON.parse(decodeNativeCapture(bundle).toString()),envelope);
+  const manifest=readFileSync(join(capture.directory,'accepted.json'),'utf8');
+  assert.throws(()=>capture.finish({status:'stopped'}),NativeCaptureError);capture.close();
+  assert.equal(readFileSync(join(capture.directory,'accepted.json'),'utf8'),manifest);
+  assert(!existsSync(join(run,'failures')));
+ }finally{f.close();}
+});
+
+test('large failure logs retain one accepted terminal and one primary Markdown note without resettlement',native,()=>{
+ const f=projectFixture(),run=join(f.dir,'chunked-failure');mkdirSync(run,{mode:0o700});
+ try{
+  const capture=beginNativeRunCapture(f.task,run,'a'.repeat(64),10000);
+  const envelope={status:'stopped',phase:'checks',code:'check-failed',checks:[{stdout:'界'.repeat(800000),stderr:'é'.repeat(100)}]};
+  capture.finish(envelope,{phase:'checks',code:'check-failed'});
+  const files=readdirSync(join(run,'failures'));assert.equal(files.length,1);
+  const path=join(run,'failures',files[0]!),note=readFileSync(path,'utf8');assert.match(note,/Phase: checks/);assert.match(note,/Code: check-failed/);
+  const options={root:join(run,'capture'),project:f.root,scope:{taskId:'capture-'+sha256(f.task.task).slice(0,32),sourceSha256:f.task.source,requestSha256:'a'.repeat(64)}};
+  assert.deepEqual(decodeNativeCapture(readOwnerArtifactBundle(options,capture.directory.split('/').at(-1)!)),Buffer.from(JSON.stringify(envelope)));
+  assert.throws(()=>capture.finish(envelope,{phase:'capture',code:'changed'}),NativeCaptureError);capture.close();
+  assert.equal(readdirSync(join(run,'failures')).length,1);assert.equal(readFileSync(path,'utf8'),note);
+ }finally{f.close();}
 });

@@ -1,3 +1,4 @@
+import { validateTransitionHistory } from './native-transition-evidence.js';
 import type { NativeProjection, QualificationEvidence, ImportedPin, UnavailableEvidence } from './qualification-contracts.js';
 import { budgetKeys } from './native-executor-contracts.js';
 import { assertJson, exact, record, identifier, digest, integer, list, boolean, choice, checkIds, sameSource, textHash, receipts, parseQualificationJson, projectChecks, unavailable, diagnostic, tokens, failureCodes, failurePhases, qualificationError } from './qualification-validation.js';
@@ -41,8 +42,9 @@ function checkpoint(raw: unknown, task: Record<string, unknown>, parent: string,
   }
   return c;
 }
-/** NativeOwner exports transition UUIDs, not policy decision or terminal UUIDs. */
-function nativeSourceChain(owner: Record<string, unknown> | null, initial: string, final: string): boolean {
+/** Legacy phase-only histories cannot establish a policy receipt association. */
+function nativeSourceChain(owner: Record<string, unknown> | null, task: Record<string, unknown>, final: string, rows: Record<string, unknown>[]): boolean {
+  const initial = digest(task.source);
   if (!owner) return initial === final;
   sameSource(owner.source, final);
   const history = list(owner.phases, 4096), seen = new Set<string>();
@@ -57,8 +59,11 @@ function nativeSourceChain(owner: Record<string, unknown> | null, initial: strin
     current = after;
   }
   if (history.length && current !== final) qualificationError();
-  // The export omits the transition envelope/UUID-to-policy-receipt association.
-  // Even matching output/source digests cannot supply that missing binding.
+  if (owner.transitionEvidence !== undefined) {
+    validateTransitionHistory(owner.transitionEvidence, history.map(p => record(p)), rows,
+      task as Record<string, unknown> & { task: string; writePaths: string[] });
+    return current === final;
+  }
   return history.length === 0 && initial === final;
 }
 function finalResultMetadata(raw: unknown): void {
@@ -122,9 +127,9 @@ export function qualifyNative(raw: unknown): QualificationEvidence {
   const captured = diagnostic(native.nativeDiagnostic);
   if (!failed && result.status === 'completed' && captured !== null) qualificationError();
   const c = checkpoint(native.checkpoint ?? bundle.checkpoint, task, parent, source);
-  const owner = bundle.owner === undefined || bundle.owner === null ? null : exact(bundle.owner, ['source', 'phases', 'receipts']);
+  const owner = bundle.owner === undefined || bundle.owner === null ? null : record(bundle.owner, ['source', 'phases', 'receipts', 'transitionEvidence']);
   const rows = owner ? receipts(owner.receipts) : [];
-  const sourceBound = nativeSourceChain(owner, digest(task.source), source);
+  const sourceBound = nativeSourceChain(owner, task, source, rows);
   const checks = projectChecks(result.checks ?? [], source, taskId, classification, rows);
   const declared = list(task.checks).map(c => identifier(record(c).id));
   if (checks.some(c => !declared.includes(c.id))) qualificationError();

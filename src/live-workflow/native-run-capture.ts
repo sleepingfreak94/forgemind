@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RunAuthority, privateDirectory } from './authority.js';
 import { createOwnerArtifactAttempt } from './owner-artifact-io.js';
+import { writeNativeCapture } from './native-capture-codec.js';
 import type { OwnerArtifactWriter, OwnerJson } from './owner-artifact-contracts.js';
 import type { NativeTask } from './native-executor-contracts.js';
 import { sha256 } from './validation.js';
@@ -110,12 +111,13 @@ export function beginNativeRunCapture(task: NativeTask, runDirectory: string, re
       if (terminal || closed) throw new NativeCaptureError(); terminal = true;
       try {
         artifact('terminal', () => {
-          writer.writeJson('terminal.json', captureJson(envelope));
+          writeNativeCapture(writer, captureJson(envelope));
           writer.accept();
         });
         if(failure)resume(failure);
         authority.finish('completed');
       } catch {
+        try { artifact('incomplete', () => writer.incomplete()); } catch { /* Preserve the existing veto or publication uncertainty. */ }
         try{resume(failure??{phase:'capture',code:'capture-unavailable'});}catch{/* Independent note unavailable; no retry. */}
         authority.finish('failed');throw new NativeCaptureError();
       }
