@@ -152,3 +152,11 @@ test('captured safe native diagnostic classifies generic RPC closure while unann
   assert.equal(nativeFailureCode(new Error('disconnected'),diagnostic),'native-provider-unauthorized');
   assert.equal(nativeFailureCode(new Error('Native configuration mismatch'),null),'runtime-unqualified');
 });
+
+test('runner classification uses constructor facts after public diagnostic replacement',()=>{
+ const error=new NativeProviderError({codexErrorInfo:'unauthorized'},false);
+ Object.defineProperty(error,'diagnostic',{value:{kind:'other',httpStatusCode:null,willRetry:true}});
+ assert.equal(nativeFailureCode(error),'native-provider-unauthorized');
+ Object.defineProperty(error,'diagnostic',{get(){throw new Error('public getter must not run');}});
+ assert.equal(nativeFailureCode(error),'native-provider-unauthorized');
+});

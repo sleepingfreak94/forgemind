@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createQualificationReport, verifyQualificationReport, qualificationHash } from '../../src/live-workflow/qualification.js';
 import { textHash, canonical, assertJson, parseQualificationJson } from '../../src/live-workflow/qualification-validation.js';
 import type { QualificationOptions, QualificationArtifact, QualificationReport } from '../../src/live-workflow/qualification-contracts.js';
+import type { NativeExecutor } from '../../src/live-workflow/native-executor.js';
 import { NativeProviderError } from '../../src/live-workflow/native-executor.js';
 import { nativeFailureCode } from '../../src/live-workflow/native-executor-run.js';
 import { runtimeReceiptFixture, ownerTransitionFixture } from './qualification-native-fixtures.js';
@@ -30,10 +31,11 @@ function nativeFixture() {
   const checkpoint = { schema: 'native-session-v2', binding: textHash(JSON.stringify({ ...task, source: undefined, authorityBinding: parent })), source,
     thread: marker, stage: 'host_check', pending: null, seen: ['call-1'],
     counters: { runtimeMs: 10, turns: 1, toolCalls: 1, inputBytes: 1, resultBytes: 1, wireBytes: 1, outputBytes: 1, retries: 0 }, status: 'stopped' } as const;
+  const receiptAdditions:Pick<NativeExecutor['receipt'],'checkpointUncertain'|'finalResult'>={checkpointUncertain:false,finalResult:null};
   const result = { taskId: 'task', status: 'completed', source,
     readiness: { ready: true, qualification: 'native-seatbelt', acceptedBudget: true, evidence: { runtimeBinding: runtime, executableDigest: textHash('executable'), profileDigest: textHash('profile') }, reasons: [], observed: ['tokenUsage'], unavailable: [] },
     checks: [check], executionLease: { id: 'execution', deadline: 1500, runtime, status: 'completed' },
-    native: { checkpoint, qualification: 'native-seatbelt', observedTokenUsage: { total: { inputTokens: 12, outputTokens: 4, totalTokens: 16, prompt: marker }, transcript: marker }, nativeDiagnostic: null, unavailable: [] },
+    native: { ...receiptAdditions, checkpoint, qualification: 'native-seatbelt', observedTokenUsage: { total: { inputTokens: 12, outputTokens: 4, totalTokens: 16, prompt: marker }, transcript: marker }, nativeDiagnostic: null, unavailable: [] },
     owner: { source, phases: [], receipts: [terminal(check)] },
     runtime: { fencingEpoch: 1, leaseId: 'lease', runtimes: [{ id: 'runtime-receipt', binding: runtime, status: 'completed' }], receipts: runtimeReceiptFixture(runtime) } } as const;
   return { schema: 'qualification-input-v1', taskId: 'task', projectId: 'project', source, fixture: false, requiredChecks: ['strict'], nativeTask: task, parentBinding: parent, result } as const;
@@ -364,4 +366,47 @@ test('canonical digest ignores object insertion order while full check output di
   assert.notEqual(textHash(JSON.stringify(reordered)), textHash(JSON.stringify(check)));
   const report = createQualificationReport(options({ ...f, result: { ...f.result, checks: [reordered] } }));
   assert.equal(report.outcome, 'partial');
+});
+
+test('private capture and failure context additions do not change public qualification projection',()=>{
+ const f=nativeFixture();
+ const base=createQualificationReport(options(f));
+ const success=createQualificationReport(options({...f,result:{...f.result,capture:{directory:marker,status:'accepted'}}}));
+ const projection=(report:typeof base)=>{const {input,digest,...visible}=report;return visible;};
+ assert.notEqual(success.input.digest,base.input.digest);assert.notEqual(success.digest,base.digest);
+ assert.deepEqual(projection(success),projection(base));assert(!JSON.stringify(success).includes(marker));
+ const error=new NativeProviderError({codexErrorInfo:'other'},false);
+ const result={phase:'native-turn',code:'native-provider-error',receipts:{checkpoint:f.result.native.checkpoint,nativeDiagnostic:error.diagnostic,owner:f.result.owner}};
+ const prior=createQualificationReport(options({...f,result}));
+ const candidate=createQualificationReport(options({...f,result:{...result,receipts:{...result.receipts,
+  checkpointUncertain:false,checks:null,verificationChecks:null,
+  failureContext:{schemaVersion:1,origin:'turn-completed',parseStatus:'provider-other',nativeCliVersion:'0.162.1',lastTool:'host_read'},
+  capture:{directory:marker,status:'incomplete'}}}}));
+ assert.notEqual(candidate.input.digest,prior.input.digest);assert.notEqual(candidate.digest,prior.digest);
+ assert.deepEqual(projection(candidate),projection(prior));assert(!JSON.stringify(candidate).includes(marker));
+ assert.deepEqual(Object.keys(error.diagnostic).sort(),['httpStatusCode','kind','willRetry']);
+});
+
+test('producer checkpoint uncertainty imports false, retains legacy omission, and prevents settled completion when true',()=>{
+ const f=nativeFixture();
+ for(const flag of [undefined,false,true]){
+  const {checkpointUncertain:omitted,...legacy}=f.result.native;
+  const native=flag===undefined?legacy:{...legacy,checkpointUncertain:flag};
+  for(const result of [{...f.result,native},{...f.result,...native,native:undefined}]){
+   // JSON matches the actual exported envelope: omitted optional fields disappear.
+   const input=JSON.parse(JSON.stringify({...f,result}));
+   const report=createQualificationReport(options(input));
+   assert.equal(report.outcome,flag===true?'partial':'completed-scoped');
+   assert.equal(report.execution.cleanup,flag===true?'unavailable':'reported-settled');
+   if(report.native.classification!=='unavailable')assert.equal(report.native.completed,flag!==true);
+  }
+ }
+ for(const flag of [null,0,1,'false',{}]){
+  invalid(()=>createQualificationReport(options({...f,result:{...f.result,native:{...f.result.native,checkpointUncertain:flag}}})));
+  invalid(()=>createQualificationReport(options({...f,result:{...f.result,checkpointUncertain:flag}})));
+ }
+ invalid(()=>createQualificationReport(options({...f,result:{...f.result,native:{...f.result.native,UNKNOWN:true}}})));
+ const result={phase:'cleanup',code:'native-capture-unavailable',receipts:{checkpoint:f.result.native.checkpoint,
+  checkpointUncertain:true,executionLease:f.result.executionLease,owner:f.result.owner,runtime:f.result.runtime,nativeDiagnostic:null}};
+ const failed=createQualificationReport(options({...f,result}));assert.equal(failed.outcome,'partial');assert.equal(failed.execution.cleanup,'unavailable');
 });

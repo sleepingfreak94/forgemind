@@ -20,8 +20,11 @@ node dist/src/local-runtime/native-cli.js \
 ```
 
 The packet has schema `native-owner-packet-v1`, a `task` matching NativeTask and an
-`objective`. The immutable packet digest binds objective, budget and permissions; only the
-observed source is excluded so verified checkpoint source transitions can resume.
+`objective`. The exact file digest includes every serialized byte. A separate parent binding
+binds objective, budget and permissions; only the observed source is excluded
+from that binding so verified checkpoint source transitions can resume. The fixed
+worker receives both expected hashes and verifies them before account access and
+at execution boundaries using the same bounded private loader.
 The packet must be owner-private, outside the worker checkout, and unchanged
 during each active invocation. A
 changed packet, source drift, cancellation, expired account/lease/fence or changed
@@ -60,6 +63,58 @@ provider, model/effort, account/review, parent grant digest, exact permission di
 budget digest, lease, fencing epoch and deadline. Host file/check actions use the
 separate current project-source authority. The process can stay alive through an
 authorized source edit because runtime identity is not project inventory.
+
+## Offline preflight and managed capture
+
+Add `--preflight` to the owner invocation above to receive a structured
+`native-preflight-v1` report and exit 0 (ready) or 2 (blocked). All four path
+flags remain required. This mode needs no terminal, does not open the account,
+and creates no run state. It validates the packet, task, budgets, canonical
+private paths, current source and explicit Codex executable/version. Its bounded
+version-only probe uses no inherited account environment; it rechecks source
+when that probe returns. Readiness is diagnostic evidence, never a launch grant.
+The callable `runNativeTask` repeats the same preflight before account preparation.
+
+Use `encodeNativePacket(task, objective)` to serialize packets. The file limit is
+**65,536 actual UTF-8 bytes**, including JSON formatting and the final newline.
+Oversized packets are rejected before JSON parsing. Programmatic objectives use
+the task's input budget instead; the fully assembled host prompt must fit that
+budget. Do not raise limits or silently trim permissions to make admission pass.
+
+The maintained CLI requires a real owner terminal. It launches a fixed internal
+worker through a managed PTY, creating two exclusive private raw copies before
+spawn. Under `--state`, `launches/<id>/native-terminal.log` and
+`terminal-output.log` capture the owner CLI terminal stream; they are identical
+copies, **not independent witnesses**, and do not expose native RPC/home logs.
+Each copy has a 2 MiB cap. Overflow preserves only the captured prefix and marks
+the attempt incomplete; it never truncates evidence into an apparent success.
+A worker's exit 2 stays a failure even when its capture is complete. Terminal
+capture alone does not prove native process cleanup.
+
+Both CLI and callable runner create private structured captures in
+`capture/<id>/` before account preparation/native startup. Selected complete
+results go into `terminal.json` with evidence-only acceptance manifests. The
+terminal body omits its own capture-location overlay to avoid self-reference;
+the returned result includes that overlay. Artifact-policy receipts live in
+`capture-authority/` (and CLI `launch-authority/`). Artifact settlement has a
+35-second grace; native/model/account deadlines and spend authority do not grow.
+
+Stopped runs get a small `failures/<id>.md` resume note with fixed phase/code,
+source and attempt. Terminal serialization/publication failure independently
+attempts that note once. Unavailable storage can still prevent recording; the
+returned capture status remains incomplete. Preserve original attempts, fix the
+cause in a fresh scope, and explicitly request a new run. There are zero automatic
+inference retries. Settlement is attempted once even when persistence throws.
+
+Legacy provider diagnostics retain exactly `kind`, `httpStatusCode` and
+`willRetry`. Private v1 failure context adds actual event origin, parse status,
+pinned CLI version and the last successfully settled host tool. It contains no
+remote message text. Public qualification projections omit private context and
+capture paths. Provider `other` is preserved as `other`; missing/unrecognized
+information remains unknown, without inferring a cause.
+
+See [prevention validation](native-prevention.md) and the
+[review failure ledger](native-prevention-failures.md).
 
 ## Source transitions and durable recovery
 
