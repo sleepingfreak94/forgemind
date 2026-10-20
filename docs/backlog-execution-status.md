@@ -1,5 +1,7 @@
 # Backlog execution and partial delivery
 
+Archived PR24 record: the later [remaining-work implementation](remaining-work-status.md) adds follow-up fixes and optional delivery destinations. Statements below refer to the original PR24 candidate.
+
 Baseline is the user-merged PR23 commit `01ba5eaf0def07696ec6aec6b0d76a782e944736`. The implementation follows the owner's rule: use the harness, record each failure before repair, attempt at most two focused repairs for a bug, then park that dependency and continue independent work. Prior evidence is retained; passing fixture checks do not erase a failed provider run.
 
 ## Included slices
