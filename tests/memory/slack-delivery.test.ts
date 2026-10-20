@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cpSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { digest, serialize } from '../../src/context-engine/validation.js';
 import { SlackDelivery } from '../../src/memory/slack-delivery.js';
@@ -210,16 +211,19 @@ test('scope isolation inherits private store protections and digest payload stay
 
 test('literal controls escape mentions/entities and account for expansion without enabling formatting', () => {
   const dangerous = '/project/<!here>-<@U123>-<#C123>-&lt;!channel&gt;-*bold*-https:example.com';
-  const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: dangerous,
+  // Slack controls are raw text, not valid Windows path characters. Keep metadata roots canonical.
+  const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: resolve(tmpdir(), 'project', '&lt;!channel&gt;'),
     dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
   const { mode, payload: p } = slackPayload(summary);
   assert.equal(mode, 'full-summary'); assert.equal(p.mrkdwn, false); assert.equal(p.parse, 'none');
   assert.equal(p.unfurl_links, false); assert.equal(p.unfurl_media, false);
   assert.ok(!Object.hasOwn(p, 'link_names')); assert.ok(!Object.hasOwn(p, 'channel'));
   assert.ok(!p.text.includes('<')); assert.ok(!p.text.includes('>'));
-  assert.match(p.text, /&lt;!here&gt;/); assert.match(p.text, /&amp;lt;!channel&amp;gt;/);
+  assert.match(slackLiteral(dangerous), /&lt;!here&gt;/); assert.match(p.text, /&amp;lt;!channel&amp;gt;/);
+  assert.equal(slackLiteral(dangerous), '/project/&lt;!here&gt;-&lt;@U123&gt;-&lt;#C123&gt;-&amp;lt;!channel&amp;gt;-*bold*-https:example.com');
+  assert.equal(p.text, slackLiteral('ForgeMind weekly summary (historical evidence only)\n' + serialize(summary)));
   assert.equal(slackLiteral('&<>'), '&amp;&lt;&gt;');
-  const expanded = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: '/project/' + '&'.repeat(900),
+  const expanded = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: resolve('/', 'project', '&'.repeat(900)),
     dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
   const digestPayload = slackPayload(expanded, 4096);
   assert.equal(digestPayload.mode, 'digest');

@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { teamsHelp, teamsMain, parseTeamsArgs } from '../../src/local-runtime/teams-delivery-cli.js';
 import { TeamsDelivery } from '../../src/memory/teams-delivery.js';
 import { fixture } from './fixture.js';
 
 const due = Date.UTC(2026, 9, 18, 4, 30), hash = 'a'.repeat(64);
+const workspace = resolve(tmpdir(), 'project'), directory = resolve(tmpdir(), 'private', 'state');
 test('strict CLI refuses URL/token/send/adapter flags and destination without explicit binding/consent', () => {
-  const base = ['config', '--workspace', '/project', '--state-dir', '/private/state', '--enable', 'true'];
+  const base = ['config', '--workspace', workspace, '--state-dir', directory, '--enable', 'true'];
   for (const suffix of [['--webhook-url', 'https://private.invalid/secret'], ['--token', 'private-token'],
     ['--adapter', '/private/adapter.js'], ['--recipient', 'a@example.invalid'], ['--destination-id', 'team'],
     ['--endpoint-binding', hash], ['--consent', 'true'], ['--enable', 'false'], ['--max-bytes', '24577']]) {
@@ -14,7 +17,7 @@ test('strict CLI refuses URL/token/send/adapter flags and destination without ex
   }
   assert.throws(() => parseTeamsArgs(['send', ...base.slice(1)]));
   assert.throws(() => parseTeamsArgs(['status', ...base.slice(1)]));
-  assert.throws(() => parseTeamsArgs(['outbox', '--workspace', '/project', '--state-dir', '/private/state', '--limit', '101']));
+  assert.throws(() => parseTeamsArgs(['outbox', '--workspace', workspace, '--state-dir', directory, '--limit', '101']));
   assert.equal(parseTeamsArgs([...base, '--destination-id', 'team', '--endpoint-binding', hash, '--consent', 'true']).command, 'config');
   assert.equal(parseTeamsArgs(['--help']).command, 'help'); assert.match(teamsHelp, /CLI never sends/);
 });

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { RequestOptions } from 'node:https';
@@ -10,7 +12,7 @@ import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/w
 
 // Fake credential shape only; all invocation paths use injected offline transports.
 const url = 'https://hooks.slack.com/services/T00000000/B00000000/offline_fixture_not_a_secret';
-const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: '/project',
+const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: resolve(tmpdir(), 'project'),
   dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
 function wire(statusCode: number, chunks: readonly Buffer[], check: (options: RequestOptions, body: string) => void = () => {}, aborted = false) {
   let opens = 0, destroyed = 0;

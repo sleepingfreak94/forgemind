@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { slackHelp, slackMain, parseSlackArgs } from '../../src/local-runtime/slack-delivery-cli.js';
 import { SlackDelivery } from '../../src/memory/slack-delivery.js';
 import { fixture } from './fixture.js';
 
 const due = Date.UTC(2026, 9, 18, 4, 30), hash = 'a'.repeat(64);
+const workspace = resolve(tmpdir(), 'project'), directory = resolve(tmpdir(), 'private', 'state');
 test('strict CLI refuses URL/token/send/adapter flags and destination without explicit binding/consent', () => {
-  const base = ['config', '--workspace', '/project', '--state-dir', '/private/state', '--enable', 'true'];
+  const base = ['config', '--workspace', workspace, '--state-dir', directory, '--enable', 'true'];
   for (const suffix of [['--webhook-url', 'https://private.invalid/secret'], ['--token', 'private-token'],
     ['--adapter', '/private/adapter.js'], ['--recipient', 'a@example.invalid'], ['--destination-id', 'team'],
     ['--endpoint-binding', hash], ['--consent', 'true'], ['--enable', 'false'], ['--max-bytes', '24577']]) {
@@ -14,7 +17,7 @@ test('strict CLI refuses URL/token/send/adapter flags and destination without ex
   }
   assert.throws(() => parseSlackArgs(['send', ...base.slice(1)]));
   assert.throws(() => parseSlackArgs(['status', ...base.slice(1)]));
-  assert.throws(() => parseSlackArgs(['outbox', '--workspace', '/project', '--state-dir', '/private/state', '--limit', '101']));
+  assert.throws(() => parseSlackArgs(['outbox', '--workspace', workspace, '--state-dir', directory, '--limit', '101']));
   assert.equal(parseSlackArgs([...base, '--destination-id', 'team', '--endpoint-binding', hash, '--consent', 'true']).command, 'config');
   assert.equal(parseSlackArgs(['--help']).command, 'help'); assert.match(slackHelp, /CLI never sends/);
 });

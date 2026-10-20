@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { ClientRequest, IncomingMessage, RequestOptions } from 'node:http';
 import { createTeamsHttpsTransport, createTeamsWorkflowAdapter, sendTeamsEnvelope } from '../../src/memory/teams-transport.js';
@@ -8,7 +10,7 @@ import { teamsEnvelope } from '../../src/memory/teams-envelope.js';
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
 
 const url = 'https://workflow.invalid/private?sig=fake-secret', token = 'fake-private-token';
-const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: '/project',
+const summary = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: resolve(tmpdir(), 'project'),
   dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
 function wire(statusCode: number, chunks: readonly Buffer[], check: (options: RequestOptions, body: string) => void = () => {}) {
   let opens = 0, destroyed = 0;
