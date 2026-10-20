@@ -107,8 +107,9 @@ test('strict errors fail compilation without emitting or executing tests', host,
   } finally { f.close(); }
 });
 
-test('compiled tests retain sandbox denials and use a separate writable temporary directory', host, async () => {
+test('compiled tests retain sandbox denials and use a separate writable temporary directory', host, async t => {
   const server = createServer(socket => socket.end());
+  t.after(() => new Promise<void>(done => server.close(() => done())));
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   const f = fixture(`import test from 'node:test'; import assert from 'node:assert/strict';
@@ -131,7 +132,6 @@ test('sandbox', async()=> {
     assert.equal(sourceIdentity(f.root), f.task.source);
   } finally {
     delete process.env.FORGEMIND_SECRET; f.close();
-    await new Promise<void>(done => server.close(() => done()));
   }
 });
 

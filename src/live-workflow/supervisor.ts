@@ -13,21 +13,24 @@ const cfg = JSON.parse(
 };
 let child: ReturnType<typeof spawn> | undefined,
   total = 0,
-  stopping = false;
+  stopping = false,
+  reaped = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 function stop(reason: string) {
   if (stopping) return;
   stopping = true;
-  process.send?.({ type: "stopping", reason });
-  if (child?.pid) {
+  if (process.connected) process.send?.({ type: "stopping", reason }, () => {});
+  if (child?.pid && !reaped) {
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch {
       child.kill("SIGKILL");
     }
-  } else process.exit(1);
+  } else if (!child) process.exit(1);
   setTimeout(() => process.exit(2), 2000).unref();
 }
+process.stdout.on("error", () => stop("output-failed"));
+process.stderr.on("error", () => stop("output-failed"));
 process.on("disconnect", () => stop("parent-disconnected"));
 process.on("SIGTERM", () => stop("cancelled"));
 process.on("SIGINT", () => stop("cancelled"));
@@ -67,16 +70,31 @@ process.on("message", (m) => {
       }
     });
   child.on("close", (code, signal) => {
+    reaped = true;
     if (timer) clearTimeout(timer);
     if (child?.pid) {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {}
     }
-    if (process.connected)
-      process.send?.({ type: "reaped", code, signal, stopping }, () =>
-        process.exit(0),
-      );
-    else process.exit(0);
+    // Child close does not flush writes already queued on our parent pipes.
+    // Bound both output completion and terminal IPC; no receipt on drain failure.
+    setTimeout(() => {
+      stop("output-drain-timeout");
+      process.exit(2);
+    }, 2000);
+    let pending = 2;
+    const drained = () => {
+      if (--pending) return;
+      if (process.connected)
+        process.send?.({ type: "reaped", code, signal, stopping }, () =>
+          process.exit(0),
+        );
+      else process.exit(0);
+    };
+    process.stdout.once("finish", drained);
+    process.stderr.once("finish", drained);
+    process.stdout.end();
+    process.stderr.end();
   });
 });

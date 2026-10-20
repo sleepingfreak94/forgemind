@@ -37,14 +37,32 @@ test('real Seatbelt allows selected reads and scratch; denies writes, secrets, f
 });
 test('terminal boundary rechecks source, cancellation and runtime deadline after reaping', async t => {
   for (const mode of ['source', 'cancel', 'deadline']) {
-    const f = hostFixture(t, { maxRuntimeMs: 650 }), controller = new AbortController();
-    const lease = await f.host.open(f.intent, controller.signal); await lease.rpc.request('ready', {});
+    const f = hostFixture(t), controller = new AbortController(), openedAt = Date.now();
+    const lease = await f.host.open(f.intent, controller.signal);
+    assert.deepEqual(await lease.rpc.request('ready', {}), { ready: true });
     lease.rpc.close(); await lease.stop();
+    const reapedAt = Date.now();
+    assert.ok(reapedAt < openedAt + f.intent.maxRuntimeMs, 'setup and reaping must finish within the runtime allowance');
     if (mode === 'source') { chmodSync(f.workspace.readFiles[0]!, 0o600); writeFileSync(f.workspace.readFiles[0]!, 'drift'); }
     if (mode === 'cancel') controller.abort();
-    if (mode === 'deadline') await new Promise(resolve => setTimeout(resolve, 700));
-    await assert.rejects(lease.finish({ status: 'completed', viewDigest: f.intent.viewDigest }));
+    const finish = () => lease.finish({ status: 'completed', viewDigest: f.intent.viewDigest });
+    if (mode === 'deadline') {
+      // Runtime starts during open; this exceeds it even if it began at reaping.
+      // Keep intent/grant valid so only the host runtime deadline can deny finish.
+      const terminalAt = reapedAt + f.intent.maxRuntimeMs + 1, realNow = Date.now;
+      assert.ok(terminalAt > openedAt + f.intent.maxRuntimeMs);
+      assert.ok(terminalAt < f.intent.expiresAt);
+      assert.ok(terminalAt < f.runtime.grant(f.grant.id)!.expiresAt);
+      const clock = t.mock.method(Date, 'now', () => terminalAt);
+      try { await assert.rejects(finish(), /host deadline/); }
+      finally { clock.mock.restore(); }
+      assert.equal(Date.now, realNow, 'terminal clock must be restored immediately');
+    } else {
+      await assert.rejects(finish(), mode === 'source' ? /file identity changed/ : (error: unknown) => error === controller.signal.reason);
+    }
     assert.equal(f.runtime.receipts().at(-1)!.outcome, 'denied');
+    assert.equal(f.runtime.receipts().at(-1)!.reason, 'host-enforcement');
+    assert.equal(f.runtime.grant(f.grant.id)!.usedActions, 1);
   }
 });
 test('native startup failure consumes reservation and cannot produce completed receipt', async t => {

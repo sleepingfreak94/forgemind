@@ -1,5 +1,7 @@
 # Backlog failure and repair index
 
+Archived PR24 record: the later [remaining-work implementation](remaining-work-status.md) adds follow-up fixes and optional delivery destinations. Statements below refer to the original PR24 candidate.
+
 Each original failure, source identity, policy receipt and resume point is retained privately before the next scoped attempt. This sanitized index does not replace those receipts. Two repairs are a maximum per bug, not permission to guess an upstream cause or repeat unknown side effects.
 
 | Finding | Observation and correction | Disposition |
