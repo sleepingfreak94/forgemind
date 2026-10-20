@@ -1,6 +1,6 @@
 # Activate weekly summaries and local sharing
 
-Weekly summaries can use the private email outbox, Microsoft Teams or Slack. SMTP integration is deferred. Choose the destination per registered project; an email address does not identify a Teams tenant or local organization member.
+Weekly summaries can use the private email outbox, Microsoft Teams or Slack. Gmail SMTP is available through the trusted owner adapter described in [Gmail SMTP](gmail-smtp.md); credentials and owner-host activation are separate from local queueing. Choose the destination per registered project; an email address does not identify a Teams tenant or local organization member.
 
 ## Select the project and destination
 
@@ -12,7 +12,7 @@ For Slack, follow [Slack delivery](slack-delivery.md). The owner selects an inco
 
 Configure the adapter destination ID and endpoint binding with explicit consent and payload budget. Enable the shared weekly schedule explicitly from the owner host. Inspect status and a preview, then tick and inspect the outbox. Tick queues locally; sending is a separate owner-authorized dispatch with the matching opaque adapter. Destination changes require fresh explicit configuration. Never automatically replay an accepted or uncertain entry.
 
-For email, retain [email outbox](weekly-delivery.md) behavior. Gmail SMTP setup is postponed; no password, OAuth flow or mailbox send is needed to verify local queueing or Teams.
+For email, retain [email outbox](weekly-delivery.md) behavior. The optional [Gmail SMTP adapter](gmail-smtp.md) requires an explicit sender, recipient, and private app-password resolver. A Gmail browser session does not supply that credential. Configure the email delivery directly when sharing an already enabled schedule with Slack; the email CLI config command also changes the shared schedule. Verify local queueing before separately authorizing any transport call.
 
 ## Schedule and verify
 
