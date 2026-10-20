@@ -1,6 +1,6 @@
 # Weekly scheduling and private email outbox
 
-WeeklyDelivery in src/memory/weekly-delivery.ts composes the existing WeeklySchedule; it does not replace its validator, Sunday 10:00 Asia/Kolkata calculation, cursor, retained results, or history. Scheduling and delivery configuration are disabled by default. No email provider, recipient, credential, account, daemon or network transport is selected or installed.
+WeeklyDelivery in src/memory/weekly-delivery.ts composes the existing WeeklySchedule; it does not replace its validator, Sunday 10:00 Asia/Kolkata calculation, cursor, retained results, or history. Scheduling and delivery configuration are disabled by default. No email provider, recipient, credential, account or daemon is selected or activated automatically. The optional [Gmail SMTP adapter](gmail-smtp.md) implements the trusted owner transport port.
 
 ## Local configuration and preview
 
@@ -43,7 +43,7 @@ Before invoking the callback, dispatch atomically commits status uncertain, incr
 
 Throws, malformed/unknown responses, timeout/interruption or a crash after the attempt claim remain uncertain. No tick, restart, CLI command or repeated dispatch auto-replays uncertain entries. An accepted entry likewise cannot replay. If saving acceptance fails, the durable claim remains uncertain and the persistence error propagates. Reconcile unknown outcomes externally using the service key/receipt; there is deliberately no automatic reset. In-flight sends cannot be recalled by disable; disabling prevents subsequent claims.
 
-This repository supplies no actual service or recipient. Actual email delivery remains pending configuration and explicit authorization of service access and disclosure. The offline test callbacks establish state-machine behavior only; they never send email.
+The optional [Gmail SMTP adapter](gmail-smtp.md) supplies a TLS transport and a separate constant setup test. It does not select a recipient, resolve ambient credentials, install a scheduler or authorize itself. Actual email delivery requires owner configuration and explicit authorization of service access and disclosure. The offline test callbacks establish state-machine behavior only; they never send email.
 
 ## Periodic invocation without daemon installation
 
