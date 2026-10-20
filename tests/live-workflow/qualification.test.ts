@@ -120,8 +120,10 @@ test('caller receiptBound boolean cannot substitute for terminal binding', () =>
   const f = nativeFixture();
   invalid(() => createQualificationReport(options({ ...f, result: { ...f.result, checks: [{ ...check, receiptBound: true }] } })));
 });
-test('actual NativeOwner transition exports parse honestly partial without UUID-to-policy association', () => {
-  const f = nativeFixture(), { task, exported } = ownerTransitionFixture(baseline, source);
+test('legacy NativeOwner transition exports remain partial without UUID-to-policy association', () => {
+  const f = nativeFixture(), { task, exported: current } = ownerTransitionFixture(baseline, source);
+  // Historical exports omit the additive association; matching UUIDs/hashes alone remain insufficient.
+  const { transitionEvidence: _newEvidence, ...exported } = current;
   const checkpoint = { ...f.result.native.checkpoint, binding: textHash(JSON.stringify({ ...task, source: undefined, authorityBinding: parent })) };
   const body = { schema: 'native-final-text-v1', trust: 'evidence-only', source, turnId: marker, messages: [{ id: marker, text: marker }] };
   const native = { ...f.result.native, checkpoint, finalResult: { ...body, digest: textHash(JSON.stringify(body)) } };

@@ -30,6 +30,8 @@ import { assertChatGPTPlanSession } from './chatgpt-plan.js';
 import type { ChatGPTPlanSession } from './chatgpt-plan.js';
 import { BrowserQaHandoff } from './browser-qa.js';
 import type { BrowserQaSetup } from './browser-qa.js';
+import { AutomaticRunHistory } from './automatic-run-history.js';
+import type { AutomaticHistoryOptions } from './automatic-run-history.js';
 
 export interface RecordingSetup {
   before: Omit<RecordingRequest, 'phase' | 'sourceIdentity' | 'baselineIdentity'>;
@@ -50,6 +52,8 @@ export interface RunOptions {
   videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
   /** Trusted host publication inputs; never read from task/project/model data. */
   publication?: PublishOptions & { author: CommitAuthor };
+  /** Explicit trusted-host configuration for automatic receipt-backed history. */
+  history?: AutomaticHistoryOptions;
   signal?: AbortSignal;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
@@ -438,7 +442,16 @@ export async function runTask(options: RunOptions) {
     ? AbortSignal.any([options.signal, AbortSignal.timeout(task.maxRuntimeMs)])
     : AbortSignal.timeout(task.maxRuntimeMs);
   const deadline = Date.now() + task.maxRuntimeMs;
-  return withRepositoryBudget({ deadline, signal }, () =>
-    executeFixtureTask({ ...options, task, signal }, deadline),
-  );
+  const history = options.history ? new AutomaticRunHistory(options.history, {
+    workspace: discoverRepository(options.workspace).root, runDirectory: options.stateDirectory,
+    taskId: task.taskId, execution: options.modelFactory ? 'fixture' : 'authenticated', maxRuntimeMs: task.maxRuntimeMs,
+  }) : undefined;
+  try {
+    const result = await withRepositoryBudget({ deadline, signal }, () =>
+      executeFixtureTask({ ...options, task, signal }, deadline));
+    return { ...result, ...(history ? { history: history.finish() } : {}) };
+  } catch (error) {
+    history?.finish();
+    throw error;
+  }
 }
