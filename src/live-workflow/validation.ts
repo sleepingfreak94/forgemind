@@ -7,7 +7,7 @@ import type {
   CodingProposal,
   ReviewResult,
 } from "./contracts.js";
-import { CLAUDE_PHASE_MODELS } from "./routing-profile.js";
+import { CLAUDE_PHASE_MODELS, CURSOR_PHASE_MODELS, CURSOR_TEST_MODEL } from "./routing-profile.js";
 export const sha256 = (value: string | Uint8Array): string =>
   createHash("sha256").update(value).digest("hex");
 export function object(
@@ -117,10 +117,14 @@ export function task(raw: unknown): LiveTask {
     !["low", "medium", "high"].includes(String(raw.effort))
   )
     throw new Error("Invalid model routing");
-  if (raw.provider !== undefined && raw.provider !== "openai" && raw.provider !== "anthropic")
+  if (raw.provider !== undefined && raw.provider !== "openai" && raw.provider !== "anthropic" && raw.provider !== "cursor")
     throw new Error("Invalid provider");
   // Claude phase models are owner-fixed; the task names only the reviewed coding model.
   if ((raw.provider === "anthropic") !== (raw.model === CLAUDE_PHASE_MODELS.coding) || /^claude-/.test(raw.model) && raw.provider !== "anthropic")
+    throw new Error("Invalid model routing");
+  // Cursor phase models are owner-fixed; the task names only the coding model or the owner-enabled test model.
+  const cursorModel = raw.model === CURSOR_PHASE_MODELS.coding || raw.model === CURSOR_TEST_MODEL;
+  if ((raw.provider === "cursor") !== cursorModel)
     throw new Error("Invalid model routing");
   if (
     raw.codingMode !== undefined &&

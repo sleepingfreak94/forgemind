@@ -21,7 +21,7 @@ export interface LiveTask {
   maxRuntimeMs: number;
   draftPr: boolean;
   /** Omitted means the reviewed ChatGPT/Codex route. */
-  provider?: "openai" | "anthropic";
+  provider?: "openai" | "anthropic" | "cursor";
   /** Omitted means today's single structured coding call; "tools" selects the agentic tool-use coding session. */
   codingMode?: "single-call" | "tools";
   /** Host tool calls allowed in a tools-mode coding session. */
