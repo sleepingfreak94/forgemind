@@ -18,7 +18,11 @@ export interface LiveTask {
   maxOutputBytes: number;
   maxRuntimeMs: number;
   draftPr: boolean;
+  /** Omitted means the reviewed ChatGPT/Codex route. */
+  provider?: "openai" | "anthropic";
 }
+/** Pipeline stage of one model call; routes that pin a model per stage require it. */
+export type ModelPhase = "plan" | "coding" | "review";
 export interface GeneratedPlan {
   objective: string;
   paths: string[];
@@ -56,6 +60,7 @@ export interface ModelPort {
     input: unknown,
     schema: object,
     signal: AbortSignal,
+    phase?: ModelPhase,
   ): Promise<unknown>;
 }
 export interface ActionEnvelope {

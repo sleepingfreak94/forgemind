@@ -26,6 +26,8 @@ import { fixtureResponse } from './native-fixture.js';
 import type { LiveTask } from "../../src/live-workflow/contracts.js";
 import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
 import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
+import { NativeClaudeModel } from '../../src/live-workflow/claude-cli-model.js';
+import { claudeStream, fakeCli, fixtureSession } from './claude-fixture.js';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-pipeline-"))),
@@ -273,6 +275,43 @@ test('real native fixture drives plan, edit and independent review end to end wi
  assert.equal(result.status,'completed-local');assert.equal(calls,3);assert.equal(readFileSync(join(result.worktree!,'value.txt'),'utf8'),'after');assert.equal(readFileSync(join(f.repo,'value.txt'),'utf8'),'before');
  const receipt=JSON.parse(readFileSync(join(result.artifacts,'receipt.json'),'utf8'));assert.equal(receipt.run.requests,3);assert.equal(receipt.run.status,'completed');
  }finally{f.cleanup();}
+});
+
+test('Claude route mismatches are rejected before worktree or ledger creation', async () => {
+  const f = fixture(), c = await fixtureSession();
+  try {
+    await assert.rejects(runTask({ ...f.options, claude: { cli: fakeCli, session: c.session } }), /Task provider does not match the Claude route/);
+    await assert.rejects(runTask({ ...f.options, task: { ...f.task, provider: 'anthropic', model: 'claude-sonnet-5-5' },
+      claude: { cli: fakeCli, session: c.session }, modelFactory: () => ({ complete: async () => ({}) }) }), /cannot be combined/);
+    assert.equal(existsSync(f.options.stateDirectory), false);
+    assert.equal(f.git('branch', '--list', 'task/*'), '');
+  } finally { f.cleanup(); rmSync(c.root, { recursive: true, force: true }); }
+});
+
+test('Claude route plans with Opus and codes and reviews with Sonnet through the real pipeline', {
+  skip: process.platform !== 'darwin', timeout: 60000 }, async () => {
+  const f = fixture(), c = await fixtureSession();
+  const task: LiveTask = { ...f.task, provider: 'anthropic', model: 'claude-sonnet-5-5' };
+  const outputs = [{ objective: task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
+    { summary: 'Correct value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] },
+    { verdict: 'pass', findings: [], acceptance: ['Value is after'] }];
+  const models: string[] = [];
+  try {
+    const result = await runTask({ ...f.options, task, modelFactory: (authority, source) => new NativeClaudeModel({ cli: fakeCli, task, authority, source,
+      session: c.session, runner: async request => {
+        const model = request.args[request.args.indexOf('--model') + 1]!; models.push(model);
+        return { stdout: claudeStream(model, outputs[models.length - 1]), stderr: '', code: 0 };
+      } }) });
+    assert.equal(result.status, 'completed-local');
+    assert.deepEqual(models, ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+    assert.equal(readFileSync(join(result.worktree!, 'value.txt'), 'utf8'), 'after');
+    assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'before');
+    const receipt = JSON.parse(readFileSync(join(result.artifacts, 'receipt.json'), 'utf8'));
+    assert.equal(receipt.run.requests, 3);
+    const usage = receipt.phases.filter((p: { name: string }) => p.name === 'model-usage').map((p: { data: string }) => JSON.parse(p.data));
+    assert.deepEqual(usage.map((u: { phase: string; model: string }) => [u.phase, u.model]),
+      [['plan', 'claude-opus-5-5'], ['coding', 'claude-sonnet-5-5'], ['review', 'claude-sonnet-5-5']]);
+  } finally { f.cleanup(); rmSync(c.root, { recursive: true, force: true }); }
 });
 
 test('plan contents precede owner approval and rejection prevents code and checks', { skip: process.platform !== 'darwin' }, async () => {

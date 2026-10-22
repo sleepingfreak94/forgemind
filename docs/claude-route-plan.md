@@ -1,6 +1,6 @@
 # Claude subscription route plan
 
-Status: **Phase 0 complete; Phase 1 next.** Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
+Status: **Phase 0 complete; Phase 1 implemented on this branch** ([usage](claude-driver.md)); Phase 2 pending. Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
 `origin/main` at `ba295e9`. No Claude route exists yet: `project:run` and the
 native owner CLI accept only the Codex/ChatGPT connection.
 

@@ -1,6 +1,6 @@
 # ADR-0014: Claude subscription route through the unmodified Claude Code CLI
 
-- Status: Accepted for planning; implementation gated on Phase 0 evidence
+- Status: Accepted; Phase 0 evidence complete; supervised route (Phase 1) implemented, native route (Phase 2) pending
 - Date: 2026-10-22
 - Basis: owner decisions to use their own Claude subscription through the Claude Code CLI and to fail closed on refusals; Anthropic's [Claude Code legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance) as read on 2026-10-22
 - Plan: [Claude subscription route plan](../claude-route-plan.md)

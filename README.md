@@ -74,6 +74,10 @@ node dist/src/local-runtime/live-cli.js billing-reset --connection /absolute/pri
 Reset stops subsequent dispatches from existing sessions and requires acknowledgement on the next run. A different account, client, host or signed email also requires its own acknowledgement. The saved record contains fingerprints, a timestamp and a random review ID; it contains no tokens or email. It does not inspect or change OpenAI billing settings.
 
 
+## Supervised coding with your Claude subscription
+
+On macOS, the same supervised pipeline can run on your own Claude subscription through the unmodified, pinned Claude Code CLI. Planning uses Opus 5.5; coding and review use Sonnet 5.5. You sign in yourself with `CLAUDE_CONFIG_DIR=<private profile> claude auth login`. ForgeMind never reads that login and places no proxy on its requests. Every call runs with tools, MCP and settings disabled inside a Seatbelt profile, and fails closed on refusals or any reported overage. Check readiness with `npm run probe:claude`, then run `project:run --provider anthropic`. See [the Claude route](docs/claude-driver.md) and [ADR-0014](docs/adr/ADR-0014-claude-subscription-route.md) for setup and limits.
+
 ## Windows setup checks
 
 After cloning, use PowerShell: `npm.cmd ci`, then `npm.cmd run verify:portable`. See [Windows instructions](docs/windows.md) for expected results and log capture. Portable fixtures have been checked on macOS; a Windows run is still needed. Native Windows authorization/sandbox execution remains unavailable and live coding stays disabled.
