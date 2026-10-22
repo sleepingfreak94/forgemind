@@ -172,15 +172,17 @@ test('Auto runs only in owner test mode and is marked test-only; failures fail c
 test('the Cursor route needs a matching task, keeps Auto to unpublished test runs and excludes other routes', async () => {
   const f = fixture();
   try {
-    const session = await open(f, 'Free'), cursor = { cli: f.cli, session };
-    assert.doesNotThrow(() => assertSingleRoute({ cursor }, cursorTask()));
-    assert.throws(() => assertSingleRoute({ cursor }, cursorTask('auto')), /Auto requires the owner test mode/);
-    assert.throws(() => assertSingleRoute({ cursor: { ...cursor, testAuto: true } }, cursorTask()), /Auto requires the owner test mode/);
-    assert.doesNotThrow(() => assertSingleRoute({ cursor: { ...cursor, testAuto: true } }, cursorTask('auto')));
-    assert.throws(() => assertSingleRoute({ cursor: { ...cursor, testAuto: true }, publication: {} }, cursorTask('auto')), /cannot publish/);
-    assert.throws(() => assertSingleRoute({ cursor: { ...cursor, testAuto: true } }, { ...cursorTask('auto'), draftPr: true }), /cannot publish/);
-    assert.throws(() => assertSingleRoute({ cursor }, { ...cursorTask(), provider: 'anthropic', model: 'claude-sonnet-5-5' }), /does not match the Cursor route/);
-    assert.throws(() => assertSingleRoute({ cursor, modelFactory: () => ({ complete: async () => ({}) }) }, cursorTask()), /cannot be combined/);
-    assert.throws(() => assertSingleRoute({ cursor: { cli: { ...f.cli } as CursorCli, session } }, cursorTask()), /Untrusted Cursor CLI pin/);
+    const session = await open(f, 'Free'), cursor = { cli: f.cli, session }, workspace = f.workspace;
+    assert.doesNotThrow(() => assertSingleRoute({ workspace, cursor }, cursorTask()));
+    assert.throws(() => assertSingleRoute({ workspace: f.scratch, cursor }, cursorTask()), /opened for a different workspace/);
+    assert.throws(() => assertSingleRoute({ cursor }, cursorTask()), /needs the run workspace/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor }, cursorTask('auto')), /Auto requires the owner test mode/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor: { ...cursor, testAuto: true } }, cursorTask()), /Auto requires the owner test mode/);
+    assert.doesNotThrow(() => assertSingleRoute({ workspace, cursor: { ...cursor, testAuto: true } }, cursorTask('auto')));
+    assert.throws(() => assertSingleRoute({ workspace, cursor: { ...cursor, testAuto: true }, publication: {} }, cursorTask('auto')), /cannot publish/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor: { ...cursor, testAuto: true } }, { ...cursorTask('auto'), draftPr: true }), /cannot publish/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor }, { ...cursorTask(), provider: 'anthropic', model: 'claude-sonnet-5-5' }), /does not match the Cursor route/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor, modelFactory: () => ({ complete: async () => ({}) }) }, cursorTask()), /cannot be combined/);
+    assert.throws(() => assertSingleRoute({ workspace, cursor: { cli: { ...f.cli } as CursorCli, session } }, cursorTask()), /Untrusted Cursor CLI pin/);
   } finally { f.close(); }
 });

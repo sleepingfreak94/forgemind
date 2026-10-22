@@ -27,7 +27,9 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
   - writes to scratch and the profile only;
   - `*:443` and DNS egress.
 
-  The project, `~/.ssh` and the owner's normal `~/.cursor` are unreadable, so the model sees only the prompt.
+  The project, `~/.ssh` and the owner's normal `~/.cursor` are unreadable. ForgeMind sends only the prompt.
+
+  The profile is the exception. The CLI must read its own login (`.cursor/auth.json`) and keeps its state there, so the sandbox can read and write the whole profile, and egress is open to any `*:443` host. If ask mode offers the model a file-read or web tool, a prompt-injected model could read the login and send it out, or leave configuration in the profile for later runs. The stream parser rejects tool events, but only after the call, so it detects such use without preventing it.
 - **Routing.** `grok-4.7-high` for plan, coding and review, owner-fixed and checked against the init label. There is no `auto`, no fallback and no substitution.
 - **Fail closed.** The stream must show:
   - one init with `apiKeySource: login`;
@@ -36,7 +38,7 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
   - one successful result whose text is a JSON object that the existing validators accept.
 
   Plan-limit errors, upgrade notices, tool calls, unknown events and malformed answers stop the task with a receipt.
-- **Account boundary.** `about` reports the plan tier. On a personal tier (anything but Business, Teams or Enterprise), only workspaces listed in the owner's `~/.forgemind/cursor-route.json` may run. Company code needs a company seat. Company code never goes through personal accounts, and routes are not mixed within a run.
+- **Account boundary.** `about` reports the plan tier, and each session is bound to the workspace it was checked for. On a personal tier (anything but Business, Teams or Enterprise), only workspaces listed in the owner's `~/.forgemind/cursor-route.json` may run. Company code needs a company seat. Company code never goes through personal accounts, and routes are not mixed within a run.
 - **Auto test mode.** With `--cursor-mode test-auto`, the owner may run an `auto` task:
   - Auto picks its own model, so receipts are marked test-only;
   - draft publication is refused.
@@ -45,6 +47,9 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
 
 ## Consequences and limits
 
+- The readable, writable profile and open `*:443` egress are a residual credential risk (see Sandbox). Possible follow-ups:
+  - deny-all tool permissions in the profile's CLI config, verified by a probe;
+  - recorded evidence that ask mode exposes no file or web tool.
 - The CLI keeps chats, projects and ACP sessions in the profile; there is no ephemeral mode. Prompts, which include source excerpts, persist in the owner-only profile.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed. Other Models and usage-based pricing on a company seat are governed by the account, not by ForgeMind.
 - Print mode has no JSON-schema option. The answer is free text that must parse and validate.

@@ -14,6 +14,8 @@ import type { LiveTask, ModelPort } from './contracts.js';
 
 /** Owner-supplied model routes; never read from a task manifest, project files or model output. */
 export interface RouteOptions {
+  /** The run's workspace; route sessions bound to a workspace must match it. */
+  workspace?: string;
   /** Required for the ChatGPT/Codex route only. */
   codexExecutable?: string;
   /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
@@ -51,6 +53,8 @@ export function assertSingleRoute(options: RouteOptions, task: LiveTask): void {
   if (options.cursor) {
     assertCursorSession(options.cursor.session);
     assertPinnedCursorCli(options.cursor.cli);
+    if (!options.workspace) throw new Error('The Cursor route needs the run workspace');
+    options.cursor.session.assertWorkspace(options.workspace);
     if (task.provider !== 'cursor') throw new Error('Task provider does not match the Cursor route');
     // Auto picks its own model: owner-enabled test runs only, and never published.
     if ((task.model === CURSOR_TEST_MODEL) !== (options.cursor.testAuto === true))

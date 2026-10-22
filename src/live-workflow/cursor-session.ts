@@ -78,7 +78,7 @@ export function cursorProfile(cli: CursorCli, scratch: string, profileDirectory:
   ].join('\n');
 }
 
-interface SessionState { readonly cli: CursorCli; profileDirectory: string; tier: string; company: boolean; closed: boolean }
+interface SessionState { readonly cli: CursorCli; readonly workspace: string; profileDirectory: string; tier: string; company: boolean; closed: boolean }
 const sessions = new WeakMap<CursorSubscriptionSession, SessionState>();
 let mint: (state: SessionState) => CursorSubscriptionSession;
 /** Owner's own Cursor sign-in, made through Cursor's flow into a dedicated profile. Holds paths only, never tokens. */
@@ -104,6 +104,10 @@ export class CursorSubscriptionSession {
         TMPDIR: tmp, AGENT_CLI_CREDENTIAL_STORE: 'file', NO_OPEN_BROWSER: '1',
       },
     };
+  }
+  /** A session is bound to the workspace its plan tier and allowlist were checked for. */
+  assertWorkspace(workspace: string): void {
+    if (realpathSync(workspace) !== this.#state().workspace) throw new Error('Cursor session was opened for a different workspace');
   }
   assertActive(): void { this.#state(); }
   close(): void { const state = sessions.get(this); if (state) state.closed = true; }
@@ -137,7 +141,7 @@ export async function openCursorSubscriptionSession(options: {
   for (const root of [options.workspace, ...(options.separateFrom ?? [])])
     if (inside(root, profileDirectory) || inside(profileDirectory, root))
       throw new Error('Cursor profile must be separate from project source, run state and worktrees');
-  const state: SessionState = { cli, profileDirectory, tier: 'unknown', company: false, closed: false };
+  const state: SessionState = { cli, workspace: realpathSync(options.workspace), profileDirectory, tier: 'unknown', company: false, closed: false };
   const session = mint(state);
   const scratch = mkdtempSync(join(options.scratchRoot, 'cursor-status-'));
   try {
