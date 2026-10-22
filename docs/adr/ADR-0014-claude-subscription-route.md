@@ -1,6 +1,6 @@
 # ADR-0014: Claude subscription route through the unmodified Claude Code CLI
 
-- Status: Accepted; Phase 0 evidence complete; supervised route (Phase 1) implemented, native route (Phase 2) pending
+- Status: Accepted; Phase 0 evidence complete; supervised route (Phase 1) implemented and validated with one live task; native route (Phase 2) pending
 - Date: 2026-10-22
 - Basis: owner decisions to use their own Claude subscription through the Claude Code CLI and to fail closed on refusals; Anthropic's [Claude Code legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance) as read on 2026-10-22
 - Plan: [Claude subscription route plan](../claude-route-plan.md)
@@ -15,7 +15,7 @@ Each invocation disables every built-in tool, all MCP servers except a ForgeMind
 
 Model routing is fixed by the owner, not selected by a task: planning uses `claude-opus-5-5`; coding, the native coding session and the fresh review use `claude-sonnet-5-5`. Effort comes from the task.
 
-Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
+Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each call passes `--max-turns` and turns CLI retries off, and a reported retry is rejected. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
 
 Two integration points are planned: a Claude `ModelPort` for the supervised `runTask` route, then a Claude native route that exposes exactly `host_read`, `host_apply` and `host_check` through a ForgeMind MCP endpoint. That endpoint runs in the trusted host over HTTP on `127.0.0.1`, not as a stdio child inside the Claude sandbox.
 
@@ -24,10 +24,23 @@ Two integration points are planned: a Claude `ModelPort` for the supervised `run
 - With no broker, ForgeMind cannot count upstream provider requests or bound full prompt and raw response bytes. Like the native executor's `unavailableNativeMetrics`, these limits must be reported, not claimed.
 - Subscriptions have no hard spend cap. The overage check is observed after a request starts, so it detects use beyond the plan; it does not prevent it.
 - Seatbelt cannot filter egress by hostname. The child gets TLS egress plus whatever Keychain access Claude Code needs to read its own credential.
+- Only the Keychain additions to the profile were bisected. The system base (preference reads, cfprefs, logging and notification services) is broader than strictly needed; the child has no tools, and narrowing it is open work.
 - `--json-schema` is delivered as a synthetic `StructuredOutput` tool call, so one answer costs two turns. Turn budgets must account for this.
 - A Claude Code update changes the pin. The terms review and Phase 0 invocation checks must be repeated before the new version is accepted.
 - If Anthropic's terms stop permitting this use, the route stays blocked. No automatic switch to another credential type happens.
 
 ## Validation
 
-Phase 0 evidence is recorded in the plan; raw output stays local under `docs/artifacts/claude-route/`. Implementation requires deterministic tests against a fake CLI that replays recorded stream output, covering refusal, schema mismatch, truncation, quota, timeout, cancellation, process-tree cleanup, source drift and overage-status rejection. It also requires a no-inference `probe:claude`, one owner-authorized live task, independent review and a draft PR.
+Phase 0 evidence is recorded in the plan; raw output stays local under `docs/artifacts/claude-route/`. Phase 1 is covered by:
+
+- a compiled fake CLI run under the real Claude Seatbelt profile, covering:
+  - sign-in, flags and environment;
+  - binary drift;
+  - cancellation and timeout with process-tree cleanup;
+  - the output limit and CLI failure;
+  - a full `runTask` through the production branch;
+- replayed streams for refusal, missing answers, retries, configuration drift, quota errors, safety stops and overage;
+- a no-inference `probe:claude`;
+- one owner-authorized live task: plan on Opus, code and review on Sonnet, completed with 3 requests and overage rejected each time.
+
+Phase 2 needs its own equivalent evidence. Independent review and a draft PR follow `AGENTS.md`.

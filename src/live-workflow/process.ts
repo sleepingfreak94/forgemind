@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { pinFile, verifyFile } from '../host-enforcement/manifest.js';
 export interface ProcessRequest {
   executable: string;
+  /** When set, the pinned executable's content must have exactly this SHA-256. */
+  executableSha256?: string;
   args: string[];
   cwd: string;
   env: Record<string, string>;
@@ -23,6 +25,8 @@ export async function supervised(
   request.signal?.throwIfAborted();
   const executable = pinFile(request.executable),
     supervisor = pinFile(fileURLToPath(new URL('./supervisor.js', import.meta.url)));
+  if (request.executableSha256 !== undefined && executable.digest !== request.executableSha256)
+    throw new Error('Executable is not the reviewed build');
   const node = pinFile(process.execPath);
   const dependencies = (request.dependencies ?? []).map((path) => pinFile(path));
   dependencies.forEach((file) => verifyFile(file));

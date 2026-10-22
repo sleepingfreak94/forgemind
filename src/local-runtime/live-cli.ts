@@ -129,6 +129,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   const inspected = inspectProject(root);
   if (inspected.repository.dirtyPaths.length) throw new Error('Source must be clean before task execution');
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  let claudeSession: { close(): void } | undefined;
   const controller = new AbortController(), abort = () => controller.abort();
   process.once('SIGINT', abort);
   try {
@@ -140,7 +141,8 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
     mkdirSync(runDirectory, { mode: 0o700 });
     const route = cli ? await (async () => {
       const session = await openClaudeSubscriptionSession({ profileDirectory: args['--claude-profile']!, cli,
-        scratchRoot: runDirectory, workspace: root, signal: controller.signal });
+        scratchRoot: runDirectory, separateFrom: [root, states, worktrees], signal: controller.signal });
+      claudeSession = session;
       process.stderr.write(`Claude ${cli.version} signed in (${session.subscriptionType}); ForgeMind does not read the login.\n`);
       return { claude: { cli, session } };
     })() : { codexExecutable: args['--codex']!, planSession: planSession! };
@@ -150,7 +152,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       ...(browserQa ? { browserQa } : {}),
       confirmPlan: async (_plan, digest) => (await terminal.question(`Approve plan ${digest}? Enter approve ${digest}: `, { signal: controller.signal })) === `approve ${digest}`,
       onProgress: message => process.stderr.write(message + '\n') }));
-  } finally { terminal.close(); process.removeListener('SIGINT', abort); }
+  } finally { claudeSession?.close(); terminal.close(); process.removeListener('SIGINT', abort); }
 }
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   liveMain().catch(error => {

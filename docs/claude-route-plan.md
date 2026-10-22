@@ -1,8 +1,8 @@
 # Claude subscription route plan
 
 Status: **Phase 0 complete; Phase 1 implemented on this branch** ([usage](claude-driver.md)); Phase 2 pending. Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
-`origin/main` at `ba295e9`. No Claude route exists yet: `project:run` and the
-native owner CLI accept only the Codex/ChatGPT connection.
+`origin/main` at `ba295e9`. Before this branch, `project:run` and the native owner
+CLI accepted only the Codex/ChatGPT connection.
 
 ## Owner decisions
 
@@ -54,7 +54,8 @@ ForgeMind has two coding routes on current `main`:
 
 Phase 1 adds a Claude `ModelPort` (smaller, reuses all supervised gates). Phase 2
 adds a Claude native route that exposes the three host functions through a
-ForgeMind stdio MCP server, with every built-in Claude Code tool disabled.
+ForgeMind MCP endpoint served by the trusted host over HTTP on `127.0.0.1` (Step 6),
+with every built-in Claude Code tool disabled.
 
 ## Phase 0: spikes (owner-authorized, small subscription usage)
 
@@ -180,39 +181,46 @@ effort `low` used `--tools ""`, `--strict-mcp-config`, an inline `--mcp-config` 
 
 **Phase 0 is complete.** Phase 1 can start.
 
-## Phase 1: supervised Claude ModelPort
+## Phase 1: supervised Claude ModelPort (implemented)
 
 | Change | Files |
 |---|---|
-| Task `provider: "openai" \| "anthropic"` (default `openai`); for `anthropic` the per-phase models are fixed by the owner routing below, not by the task | `contracts.ts`, `validation.ts` |
-| Per-phase routing: plan → `claude-opus-5-5`; coding and review → `claude-sonnet-5-5`. The orchestrator currently shares one `ModelPort` across plan (`orchestrator.ts:178`), coding (`:268`) and review (`:307`); it must request a port per phase | `routing-profile.ts`, `orchestrator.ts` |
-| `NativeClaudeModel`: one pinned CLI process per call, schema output, bounded stdout/runtime, source-drift and cancellation checks, fail-closed refusals, receipts with observed usage | new `src/live-workflow/claude-cli-model.ts` |
-| Pin binary by realpath, exact `--version` and SHA-256 (currently `~/.local/share/claude/versions/2.1.308`) | `claude-cli-model.ts`, `host-enforcement/manifest.ts` |
-| Claude Seatbelt profile | `process.ts` |
-| Owner session: dedicated config dir path, extra-usage acknowledgement, no token access | new `claude-plan.ts` |
-| Orchestrator accepts either session type | `orchestrator.ts` |
-| CLI: `project:run --provider anthropic --claude /canonical/claude --claude-config /private/dir` | `live-cli.ts` |
-| Readiness reporting per provider | `readiness.ts`, `scripts/doctor.mjs` |
+| Task `provider: "openai" \| "anthropic"` (absent means the ChatGPT route); an `anthropic` task must name `claude-sonnet-5-5`, and no other task may name a `claude-*` model | `contracts.ts`, `validation.ts` |
+| Per-phase routing: plan → `claude-opus-5-5`; coding and review → `claude-sonnet-5-5`. `ModelPort.complete` takes the pipeline phase | `routing-profile.ts`, `orchestrator.ts` |
+| `NativeClaudeModel`: one pinned CLI process per call, `--json-schema` output, `--max-turns 3`, CLI retries off, bounded output and runtime, source-drift and cancellation checks, stream validation, receipts with observed usage and failure reasons, per-call scratch removed | `claude-cli-model.ts`, `claude-stream.ts` |
+| Pin by canonical path, exact `--version` and SHA-256; pins are branded and the supervisor refuses an executable whose content no longer matches | `claude-session.ts`, `process.ts` |
+| Claude Seatbelt profile and owner session: dedicated profile directory path only, sandboxed `claude auth status`, no token access, profile kept apart from source, run state and worktrees | `claude-session.ts` |
+| Exactly one route per run; the task provider must match it | `orchestrator.ts` |
+| CLI: `project:run --provider anthropic --claude /canonical/claude --claude-profile /private/dir` and `probe:claude` | `live-cli.ts`, `claude-probe.ts` |
 
-## Phase 2: Claude native route
+Not done in Phase 1: Claude readiness in `doctor`/`project:inspect`, and an
+extra-usage acknowledgement (replaced by the observed overage gate).
 
-Claude Code with built-in tools disabled and a ForgeMind stdio MCP server exposing
-`host_read`, `host_apply`, `host_check` backed by existing `nativeTool` authority,
-checkpoints and receipts. Generalize `NativeTask.model` to a reviewed per-provider
-catalog; the native coding session uses `claude-sonnet-5-5`.
+## Phase 2: Claude native route (pending)
+
+Claude Code with built-in tools disabled and a ForgeMind MCP endpoint on
+`127.0.0.1`, run by the trusted host, exposing `host_read`, `host_apply`, `host_check`
+backed by existing `nativeTool` authority, checkpoints and receipts. Generalize
+`NativeTask.model` to a reviewed per-provider catalog; the native coding session uses
+`claude-sonnet-5-5`.
 
 ## Tests and acceptance
 
-- Fake `claude` executable replaying recorded stream-json (no provider requests):
-  schema mismatch, refusal, truncation, quota error, timeout, cancellation and
-  process-tree cleanup, source drift, full `runTask` on the Claude route.
-- `probe:claude`: version/hash pin and sandbox startup, no inference.
-- Existing suites, `typecheck` and `verify:portable` stay green.
-- One owner-authorized live task on a scratch project, before/after evidence,
-  independent review, draft PR per `AGENTS.md`.
+- Done: a compiled fake `claude` replays recorded stream-json under the real Claude
+  Seatbelt profile (no provider requests), covering sign-in, flags and environment,
+  binary drift, cancellation and timeout with process-tree cleanup, output limit,
+  CLI failure, and a full `runTask` through the production Claude branch. Replayed
+  streams cover refusal, schema/answer absence, retries, configuration drift, quota
+  (`api_error_status`), safety stops and overage.
+- Done: `probe:claude` pins the build and checks sign-in in the sandbox, no inference.
+- Done: one owner-authorized live task on a scratch repository (plan on Opus, code and
+  review on Sonnet, effort low): completed, 3 requests, overage rejected on each.
+- Not runnable on this machine: suites that need the reviewed Codex 0.161/0.162
+  binaries (`FORGEMIND_TEST_CODEX_0161/0162`), including the ChatGPT plan-session
+  pipeline test.
 
 ## Known limits
 
 - No hard provider request count or full prompt/response byte bound (no broker).
-- No hard spend cap on a subscription; relies on the owner's extra-usage setting.
+- No hard spend cap on a subscription; the overage gate is checked after a call starts.
 - CLI updates require re-running Phase 0 steps 3–6 and the terms check.

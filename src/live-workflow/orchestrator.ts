@@ -7,7 +7,7 @@ import { databasePath } from '../memory/database.js';
 import { RunAuthority, privateDirectory } from './authority.js';
 import { NativeCodexModel } from './provider.js';
 import { NativeClaudeModel } from './claude-cli-model.js';
-import { assertClaudeSession } from './claude-session.js';
+import { assertClaudeSession, assertPinnedClaudeCli } from './claude-session.js';
 import type { ClaudeCli, ClaudeSubscriptionSession } from './claude-session.js';
 import { readSources, plan, review, sha256, task as validateTask } from './validation.js';
 import { planSchema, codingSchema, reviewSchema } from './contracts.js';
@@ -309,7 +309,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     currentSource();
     const browserQaReports = browserQa?.assertCurrent();
     browserQaReady = !!browserQa;
-    progress('Running independent review in a fresh model invocation');
+    progress(`Running independent review in a fresh ${options.claude ? 'Claude' : 'Codex'} invocation`);
     const verdict = review(
       await model.complete(
         'You are the independent reviewer. You did not implement this candidate. Assess correctness, regressions, security, maintainability, policy and evidence. Return pass only if criteria are met; do not repair files. Report blocking findings as revise/blocked.',
@@ -451,6 +451,7 @@ function assertSingleRoute(options: RunOptions, task: LiveTask): void {
   }
   if (options.claude) {
     assertClaudeSession(options.claude.session);
+    assertPinnedClaudeCli(options.claude.cli);
     if (task.provider !== 'anthropic') throw new Error('Task provider does not match the Claude route');
   }
 }

@@ -57,16 +57,21 @@ draft publication behave exactly as on the ChatGPT route.
   - the routed model and pinned version;
   - subscription credentials (`apiKeySource: none`), with telemetry off;
   - only the `StructuredOutput` tool;
-  - at most three turns;
+  - at most three turns (also passed as `--max-turns`), with CLI retries off and any
+    reported retry rejected;
+  - no MCP servers, skills, slash commands or unreviewed plugins or agents;
   - usage from the routed model only;
   - overage reported `rejected` and unused;
-  - a single successful final result.
+  - a single successful final result with no API error or safety stop.
 - Anything else fails closed: refusals, errors, quota exhaustion, timeouts,
   cancellation, unexpected tools or models, permission denials and source drift.
   There is no retry, no `--fallback-model` and no model substitution.
 - Each call reserves one task request and a provider receipt. The receipt records
   the phase, model, effort, prompt and schema hashes, profile hash and pin. Usage
-  and the CLI's notional list-price figure are recorded as a `model-usage` phase.
+  and the CLI's notional list-price figure are recorded as a `model-usage` phase; a
+  failed or rejected call records its status fields and the reason.
+- The profile must sit outside the project, `--state-root` and `--worktree-root`.
+  Per-call scratch is removed after each call.
 
 ## Limits
 

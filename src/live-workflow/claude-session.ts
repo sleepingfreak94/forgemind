@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { supervised } from './process.js';
@@ -12,27 +12,38 @@ export const REVIEWED_CLAUDE_CLI = Object.freeze({
   versionOutput: '2.1.308 (Claude Code)',
   sha256: 'ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37',
 });
-export interface ClaudeCli { path: string; version: string; sha256: string }
+export type ReviewedClaudeBuild = { readonly version: string; readonly versionOutput: string; readonly sha256: string };
+/** Only `pinClaudeCli` creates one; plain objects are refused at launch. */
+export interface ClaudeCli { readonly path: string; readonly version: string; readonly sha256: string; readonly reviewed: boolean }
 export type ClaudeRunner = (request: ProcessRequest) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
 const literal = (path: string) => `(literal ${JSON.stringify(path)})`;
 const subpath = (path: string) => `(subpath ${JSON.stringify(path)})`;
+const pinned = new WeakSet<ClaudeCli>();
 const inside = (root: string, path: string) => { const r = relative(root, path); return r === '' || !r.startsWith('..' + sep) && r !== '..' && !isAbsolute(r); };
 
-/** Pin the unmodified installed binary by canonical path, exact version and content hash. */
-export function pinClaudeCli(executable: string): ClaudeCli {
+/** Pin the unmodified installed binary by canonical path, exact version and content hash.
+ * `build` exists for conformance fakes; the CLI and probe always use the reviewed build. */
+export function pinClaudeCli(executable: string, build: ReviewedClaudeBuild = REVIEWED_CLAUDE_CLI): ClaudeCli {
   if (!isAbsolute(executable) || realpathSync(executable) !== executable) throw new Error('Canonical Claude executable required');
   const stat = lstatSync(executable);
   if (!stat.isFile() || !(stat.mode & 0o111) || stat.mode & 0o022) throw new Error('Claude executable must be a non-writable regular file');
   const digest = createHash('sha256').update(readFileSync(executable)).digest('hex');
-  if (digest !== REVIEWED_CLAUDE_CLI.sha256) throw new Error('Claude executable is not the reviewed build');
+  if (digest !== build.sha256) throw new Error('Claude executable is not the reviewed build');
   const version = execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 15000, env: { PATH: '/usr/bin:/bin' } }).trim();
-  if (version !== REVIEWED_CLAUDE_CLI.versionOutput) throw new Error('Claude CLI version is not reviewed');
-  return { path: executable, version: REVIEWED_CLAUDE_CLI.version, sha256: digest };
+  if (version !== build.versionOutput) throw new Error('Claude CLI version is not reviewed');
+  const cli = Object.freeze({ path: executable, version: build.version, sha256: digest, reviewed: digest === REVIEWED_CLAUDE_CLI.sha256 });
+  pinned.add(cli);
+  return cli;
+}
+export function assertPinnedClaudeCli(cli: unknown): asserts cli is ClaudeCli {
+  if (!cli || typeof cli !== 'object' || !pinned.has(cli as ClaudeCli)) throw new Error('Untrusted Claude executable pin');
 }
 
 /** Deny-default profile from Phase 0. Claude Code reads its own Keychain item through
- * /usr/bin/security; ForgeMind never reads it. Hostname egress filtering is unavailable. */
+ * /usr/bin/security; ForgeMind never reads it. Hostname egress filtering is unavailable.
+ * The preference, cfprefs and logging reads are the system base the CLI needs to start;
+ * only the Keychain additions were bisected, so the base is a disclosed residual (ADR-0014). */
 export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileDirectory: string, home: string, userCacheDirectory: string): string {
   const mds = join(userCacheDirectory, 'mds');
   return [
@@ -65,15 +76,18 @@ export class ClaudeSubscriptionSession {
   launch(cli: ClaudeCli, scratch: string, args: string[], input: string, limits: { timeoutMs: number; maxOutputBytes: number },
     signal: AbortSignal, check: () => void): ProcessRequest {
     const state = this.#state();
+    assertPinnedClaudeCli(cli);
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
     return {
-      executable: cli.path, args, cwd: work, input, signal, check, ...limits,
+      executable: cli.path, executableSha256: cli.sha256, args, cwd: work, input, signal, check, ...limits,
       profile: claudeInferenceProfile(cli, scratch, state.profileDirectory, state.home, state.userCacheDirectory),
       env: {
         PATH: '/usr/bin:/bin', HOME: state.home, USER: userInfo().username, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
         TMPDIR: tmp, CLAUDE_CODE_TMPDIR: tmp, CLAUDE_CONFIG_DIR: state.profileDirectory,
         DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        // No CLI-side retries; a reported retry is rejected by the stream parser regardless.
+        CLAUDE_CODE_MAX_RETRIES: '0',
       },
     };
   }
@@ -93,25 +107,35 @@ export function assertClaudeSession(value: unknown): asserts value is ClaudeSubs
 /** Validate the owner-private profile and ask the sandboxed CLI whether it is signed in.
  * Only loggedIn/authMethod/apiProvider/subscriptionType are read from its answer. */
 export async function openClaudeSubscriptionSession(options: {
-  profileDirectory: string; cli: ClaudeCli; scratchRoot: string; workspace?: string; signal?: AbortSignal; runner?: ClaudeRunner;
+  profileDirectory: string; cli: ClaudeCli; scratchRoot: string;
+  /** Project source, run state and worktree roots the profile must neither contain nor sit inside. */
+  separateFrom?: readonly string[]; signal?: AbortSignal; runner?: ClaudeRunner;
 }): Promise<ClaudeSubscriptionSession> {
   const { profileDirectory, cli } = options;
+  assertPinnedClaudeCli(cli);
   if (!isAbsolute(profileDirectory) || realpathSync(profileDirectory) !== profileDirectory) throw new Error('Canonical Claude profile directory required');
   const stat = lstatSync(profileDirectory);
   if (!stat.isDirectory() || stat.uid !== process.getuid?.() || stat.mode & 0o077) throw new Error('Claude profile must be an owner-only directory');
-  if (options.workspace && (inside(options.workspace, profileDirectory) || inside(profileDirectory, options.workspace)))
-    throw new Error('Claude profile must be separate from project source');
+  for (const root of options.separateFrom ?? [])
+    if (inside(root, profileDirectory) || inside(profileDirectory, root))
+      throw new Error('Claude profile must be separate from project source, run state and worktrees');
   const home = realpathSync(homedir());
   const userCacheDirectory = realpathSync(execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8' }).trim());
   const state: SessionState = { profileDirectory, home, userCacheDirectory, subscriptionType: 'unknown', closed: false };
   const session = mint(state);
   const scratch = mkdtempSync(join(options.scratchRoot, 'claude-status-'));
-  const result = await (options.runner ?? supervised)(session.launch(cli, scratch, ['auth', 'status'], '',
-    { timeoutMs: 30000, maxOutputBytes: 65536 }, options.signal ?? AbortSignal.timeout(30000), () => {}));
-  let status: Record<string, unknown>;
-  try { status = JSON.parse(result.stdout); } catch { throw new Error('Claude sign-in status unavailable'); }
-  if (result.code !== 0 || status.loggedIn !== true || status.authMethod !== 'claude.ai' || status.apiProvider !== 'firstParty')
-    throw new Error('Claude profile is not signed in with a Claude subscription; run `claude auth login` with this CLAUDE_CONFIG_DIR yourself');
-  state.subscriptionType = typeof status.subscriptionType === 'string' ? status.subscriptionType.slice(0, 40) : 'unknown';
-  return session;
+  try {
+    const result = await (options.runner ?? supervised)(session.launch(cli, scratch, ['auth', 'status'], '',
+      { timeoutMs: 30000, maxOutputBytes: 65536 }, options.signal ?? AbortSignal.timeout(30000), () => {}));
+    let status: Record<string, unknown>;
+    try { status = JSON.parse(result.stdout); } catch { throw new Error('Claude sign-in status unavailable'); }
+    if (result.code !== 0 || status.loggedIn !== true || status.authMethod !== 'claude.ai' || status.apiProvider !== 'firstParty')
+      throw new Error('Claude profile is not signed in with a Claude subscription; run `claude auth login` with this CLAUDE_CONFIG_DIR yourself');
+    const plan = status.subscriptionType;
+    state.subscriptionType = typeof plan === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(plan) ? plan : 'unknown';
+    return session;
+  } catch (error) {
+    session.close();
+    throw error;
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 }

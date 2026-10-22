@@ -118,7 +118,7 @@ export function task(raw: unknown): LiveTask {
   if (raw.provider !== undefined && raw.provider !== "openai" && raw.provider !== "anthropic")
     throw new Error("Invalid provider");
   // Claude phase models are owner-fixed; the task names only the reviewed coding model.
-  if (raw.provider === "anthropic" && raw.model !== CLAUDE_PHASE_MODELS.coding)
+  if ((raw.provider === "anthropic") !== (raw.model === CLAUDE_PHASE_MODELS.coding) || /^claude-/.test(raw.model) && raw.provider !== "anthropic")
     throw new Error("Invalid model routing");
   for (const key of ["readPaths", "writePaths"] as const) {
     const list = raw[key];
