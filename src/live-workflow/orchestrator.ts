@@ -14,6 +14,7 @@ import { planSchema, codingSchema, reviewSchema } from './contracts.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import { applyEdits } from './edits.js';
 import { runChecks } from './checks.js';
+import type { CheckRuntime } from './check-runtime.js';
 import {
   discoverRepository,
   createTaskWorktree,
@@ -63,6 +64,8 @@ export interface RunOptions {
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
   /** Authenticated owner-reviewed subscription route; never supplied by a task manifest. */
   planSession?: ChatGPTPlanSession;
+  /** Owner-selected node_modules for ADR-0015 node-project checks; never supplied by a task manifest. */
+  checkRuntime?: CheckRuntime;
   /** Owner's Claude sign-in plus the pinned CLI (ADR-0014); never supplied by a task manifest. */
   claude?: { cli: ClaudeCli; session: ClaudeSubscriptionSession };
 }
@@ -221,7 +224,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     if (options.browserQa) browserQa = new BrowserQaHandoff({ setup: options.browserQa, workspace: activeRoot,
       task, baselineSource: baseline, artifacts, authority, source: currentSource, signal });
     progress('Running baseline checks');
-    const beforeChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal);
+    const beforeChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal, options.checkRuntime);
     save('before-checks.json', beforeChecks);
     currentSource();
     const capture = async (phase: 'before' | 'after'): Promise<EvidenceManifest | undefined> => {
@@ -292,7 +295,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       throw new Error('Proposed edit is ignored or has no reviewable Git diff');
     save('candidate.patch', diff.diff);
     progress('Running candidate checks');
-    const afterChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal);
+    const afterChecks = await runChecks(activeRoot, current, task.checks, directory, authority, signal, options.checkRuntime);
     save('after-checks.json', afterChecks);
     currentSource();
     if (afterChecks.some((c) => !c.passed))
@@ -454,6 +457,8 @@ function assertSingleRoute(options: RunOptions, task: LiveTask): void {
     assertPinnedClaudeCli(options.claude.cli);
     if (task.provider !== 'anthropic') throw new Error('Task provider does not match the Claude route');
   }
+  if (task.checks.some(c => c.profile === 'node-project') && !options.checkRuntime)
+    throw new Error('node-project checks require an owner-selected --node-modules');
 }
 export async function runTask(options: RunOptions) {
   const task = validateTask(options.task);

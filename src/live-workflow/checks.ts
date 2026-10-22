@@ -1,7 +1,9 @@
-import { realpathSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { realpathSync, mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { runtimeFiles, supervised } from './process.js';
 import { sha256 } from './validation.js';
+import { assertCheckRuntime } from './check-runtime.js';
+import type { CheckRuntime } from './check-runtime.js';
 import type { ActionAuthority, CheckCommand } from './contracts.js';
 export interface CheckResult {
   id: string;
@@ -9,6 +11,22 @@ export interface CheckResult {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+}
+const subpath = (path: string) => `(subpath ${JSON.stringify(path)})`;
+const literal = (path: string) => `(literal ${JSON.stringify(path)})`;
+function checkProfile(root: string, scratch: string, executable: string, files: string[], nodeModules?: string): string {
+  // single-process: no fork, so the command must use e.g. Node --test-isolation=none.
+  // node-project (ADR-0015): fork, exec of the pinned Node runtime and of owner-installed tools inside the
+  // read-only node_modules (for example the native TypeScript compiler); nothing the check can write is executable.
+  return [
+    '(version 1)', '(deny default)',
+    `(allow process-exec ${literal(executable)}${nodeModules ? ' ' + subpath(nodeModules) : ''})`,
+    ...(nodeModules ? ['(allow process-fork)', '(allow signal (target same-sandbox))'] : []),
+    '(allow process-info* (target same-sandbox))', '(allow sysctl-read)', '(allow file-read-metadata)',
+    `(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (literal "/dev/null") ${subpath(root)} ${subpath(scratch)}${nodeModules ? ' ' + subpath(nodeModules) : ''} ${files.map(literal).join(' ')})`,
+    `(deny file-read* ${subpath(join(root, '.git'))} ${subpath(join(root, '.codex'))} (regex #"(^|/)\\.env($|\\.)"))`,
+    `(allow file-write* ${subpath(scratch)}${nodeModules ? ' (literal "/dev/null")' : ''})`,
+  ].join('\n');
 }
 /** Checks get repository reads and private scratch writes. No network, credentials or source writes. */
 export async function runChecks(
@@ -18,16 +36,32 @@ export async function runChecks(
   scratchParent: string,
   authority: ActionAuthority,
   signal: AbortSignal,
+  runtime?: CheckRuntime,
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
+  // All node-project checks of one phase share a scratch, in manifest order (build, then test).
+  let shared: string | undefined;
   for (const command of commands) {
     signal.throwIfAborted();
-    const scratch = mkdtempSync(join(scratchParent, 'check-'));
-    mkdirSync(join(scratch, 'tmp'), { mode: 0o700 });
+    const node = command.profile === 'node-project';
+    if (node) {
+      if (!runtime) throw new Error('node-project checks require an owner-selected --node-modules');
+      assertCheckRuntime(runtime, root);
+    }
     const executable = realpathSync(command.executable),
       files = runtimeFiles(executable);
-    // No process-fork: the command must use a single-process runner, e.g. Node --test-isolation=none.
-    const profile = `(version 1)\n(deny default)\n(allow process-exec (literal ${JSON.stringify(executable)}))\n(allow process-info* (target same-sandbox))\n(allow sysctl-read)\n(allow file-read-metadata)\n(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (literal "/dev/null") (subpath ${JSON.stringify(root)}) (subpath ${JSON.stringify(scratch)}) ${files.map((f) => `(literal ${JSON.stringify(f)})`).join(' ')})\n(deny file-read* (subpath ${JSON.stringify(join(root, '.git'))}) (subpath ${JSON.stringify(join(root, '.codex'))}) (regex #"(^|/)\\.env($|\\.)"))\n(allow file-write* (subpath ${JSON.stringify(scratch)}))`;
+    if (node && executable !== runtime!.node) throw new Error('node-project checks must run the pinned Node runtime');
+    let scratch: string;
+    if (node && shared) scratch = shared;
+    else {
+      scratch = realpathSync(mkdtempSync(join(scratchParent, node ? 'node-project-' : 'check-')));
+      mkdirSync(join(scratch, 'tmp'), { mode: 0o700 });
+      if (node) { symlinkSync(runtime!.nodeModules, join(scratch, 'node_modules'), 'dir'); shared = scratch; }
+    }
+    const args = node
+      ? command.args.map(a => a.replaceAll('{scratch}', scratch).replaceAll('{nodeModules}', runtime!.nodeModules))
+      : command.args;
+    const profile = checkProfile(root, scratch, executable, files, node ? runtime!.nodeModules : undefined);
     const receipt = authority.reserve({
       kind: 'command',
       source,
@@ -35,17 +69,19 @@ export async function runChecks(
         id: command.id,
         executable,
         dependencies: files,
-        args: command.args,
+        args,
         cwd: root,
         profileSha256: sha256(profile),
         timeoutMs: command.timeoutMs,
+        ...(node ? { profile: 'node-project', nodeModules: runtime!.nodeModules, lockSha256: runtime!.lockSha256,
+          nodeModulesIdentity: runtime!.identity, unhashed: ['nodeModulesContents'] } : {}),
       },
     });
     try {
       const result = await supervised({
         executable,
         dependencies: files,
-        args: command.args,
+        args,
         cwd: root,
         env: {
           PATH: '/usr/bin:/bin',
@@ -54,12 +90,14 @@ export async function runChecks(
           LANG: 'C',
           LC_ALL: 'C',
           OPENSSL_CONF: '/dev/null',
+          // Seatbelt cannot nest: tests that apply their own profile detect this and skip.
+          FORGEMIND_NESTED_SANDBOX: '1',
         },
         profile,
         timeoutMs: command.timeoutMs,
         maxOutputBytes: 1048576,
         signal,
-        check: () => receipt.check(),
+        check: () => { receipt.check(); if (node) assertCheckRuntime(runtime, root); },
       });
       const item = {
         id: command.id,

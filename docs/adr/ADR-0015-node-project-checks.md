@@ -16,7 +16,7 @@ Running checks outside Seatbelt would execute model-written code with the owner'
 
 Add an owner-selected `node-project` check profile alongside the existing behaviour (`single-process`, the default):
 
-- The executable must be the host's pinned Node runtime. The check may fork and exec only that runtime; no shell, `npm`, `git` or other tool is allowed.
+- The executable must be the host's pinned Node runtime. The check may fork, and may exec only that runtime and files inside the selected read-only `node_modules` (owner-installed tools such as the native TypeScript compiler, which `tsc` launches as a platform binary). Nothing the check can write is executable, and no shell, `npm`, `git` or other system tool is allowed.
 - The owner enables the profile per run with an explicit `--node-modules /canonical/path/node_modules` on `project:run`. Task manifests and model output cannot supply it. Without it, `node-project` checks are refused before any worktree is created.
 - `node_modules` is read-only to the check. The host requires the `package-lock.json` beside it to be byte-identical to the worktree's, and records the lockfile hash and directory identity in the command receipt. Package contents are not hashed; that residual is disclosed.
 - All `node-project` checks in one phase share a single private scratch directory, in manifest order, so a build check can be followed by a test check. Arguments may use the literal placeholders `{scratch}` and `{nodeModules}`, which the host substitutes with canonical paths. Other checks may not use them.
