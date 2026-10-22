@@ -129,8 +129,27 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
 - With a deny-default profile, the CLI reported "Not logged in" and sent no
   inference request. `security` inside that profile failed with "A Module Directory
   Service error". It succeeded once file writes were broadly allowed, so the Keychain
-  stack needs at least one writable path the profile does not grant. **Open:**
-  narrow that to the exact paths. Broad file-write is not acceptable for the route.
+  stack needs at least one writable path the profile does not grant.
+- **Resolved by narrowing with sandboxed `claude auth status`** (login yes/no only,
+  no inference, no direct Keychain queries). Changing one permission class at a
+  time, the minimal additions to the deny-default base profile are:
+  - `process-exec` of `/usr/bin/security`;
+  - `file-read*` of `/private/var/db/mds`, `/Library/Keychains`,
+    `~/Library/Keychains`, and `<DARWIN_USER_CACHE_DIR>/mds`;
+  - `file-write*` of `<DARWIN_USER_CACHE_DIR>/mds` only. Symlinks must be resolved:
+    Seatbelt matches `/private/var/folders/…`, not `/var/folders/…`;
+  - `mach-lookup` of `com.apple.system.opendirectoryd.membership`, beyond the base
+    list (SecurityServer, trustd, opendirectoryd.libinfo, DNS, cfprefsd).
+  The base still allows TLS egress to any `*:443` and DNS, because hostnames cannot
+  be filtered.
+- With that profile, the sandboxed ForgeMind profile completed one structured call
+  each on `claude-sonnet-5-5` and `claude-opus-5-5` at effort `low`. Both succeeded
+  with schema-valid output, `num_turns: 2`, `analytics_disabled: true`, no messaging
+  socket, and overage `rejected`/unused. Opus 5.5 is available on the owner's Pro
+  plan. Local evidence: `claude-min.sb` (SHA-256 `ca2624ce…`),
+  `step4-sandboxed-sonnet.jsonl` (`11f602d9…`), `step4-sandboxed-opus.jsonl`
+  (`65ad2a5b…`).
+- Steps 2 and 4 are done. Remaining in Phase 0: step 6, host tools over MCP.
 
 ## Phase 1: supervised Claude ModelPort
 
