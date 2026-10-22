@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openClaudeSubscriptionSession, pinClaudeCli } from '../../src/live-workflow/claude-session.js';
+import { openClaudeSubscriptionSession, pinClaudeConformanceCli } from '../../src/live-workflow/claude-session.js';
 import type { ClaudeCli, ClaudeRunner } from '../../src/live-workflow/claude-session.js';
 import type { ProcessRequest } from '../../src/live-workflow/process.js';
 
@@ -81,20 +81,25 @@ export function fakeCli(): ClaudeCli {
   execFileSync('/usr/bin/cc', ['-O1', '-o', path, join(root, 'fake.c')]);
   chmodSync(path, 0o755);
   const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
-  return compiled = pinClaudeCli(path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256 });
+  return compiled = pinClaudeConformanceCli(path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256 });
 }
+
+/** False when the fake CLI compiles and pins; otherwise why Claude fake-CLI tests are skipped. */
+export const fakeCliSkip: string | false = (() => {
+  try { fakeCli(); return false; } catch { return 'Claude fake CLI needs a working C compiler (/usr/bin/cc)'; }
+})();
 
 /** Owner-only profile directory plus a session opened through `auth status`: replayed by
  * default, or through the real sandboxed fake when `supervised` is set. */
 export async function fixtureSession(status: Record<string, unknown> = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', subscriptionType: 'pro' },
-  options: { supervised?: boolean } = {}) {
+  options: { supervised?: boolean; cli?: ClaudeCli } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-claude-')));
   const profile = realpathSync(mkdtempSync(join(root, 'p-'))); chmodSync(profile, 0o700);
   const scratch = realpathSync(mkdtempSync(join(root, 's-')));
   writeFileSync(join(profile, 'status.json'), JSON.stringify(status));
   const requests: ProcessRequest[] = [];
   const replayed: ClaudeRunner = async request => { requests.push(request); return { stdout: JSON.stringify(status), stderr: '', code: 0 }; };
-  const session = await openClaudeSubscriptionSession({ profileDirectory: profile, cli: fakeCli(), scratchRoot: scratch,
+  const session = await openClaudeSubscriptionSession({ profileDirectory: profile, cli: options.cli ?? fakeCli(), scratchRoot: scratch,
     ...(options.supervised ? {} : { runner: replayed }) });
   return { root, profile, scratch, session, requests };
 }

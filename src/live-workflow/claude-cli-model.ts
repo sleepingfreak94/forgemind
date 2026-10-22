@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { sha256 } from './validation.js';
 import { supervised } from './process.js';
-import { claudeFailureSummary, parseClaudeStream } from './claude-stream.js';
+import { claudeFailureSummary, claudeStreamShape, parseClaudeStream } from './claude-stream.js';
 import { assertClaudeSession, assertPinnedClaudeCli } from './claude-session.js';
 import type { ClaudeCli, ClaudeRunner, ClaudeSubscriptionSession } from './claude-session.js';
 import { CLAUDE_PHASE_MODELS } from './routing-profile.js';
@@ -69,7 +69,8 @@ export class NativeClaudeModel implements ModelPort {
         parsed = parseClaudeStream(result.stdout, { model, version: cli.version, tools: ['StructuredOutput'], maxTurns: MAX_TURNS });
       } catch (error) {
         authority.phase('model-rejected', source, { provider: 'anthropic', phase, model,
-          reason: error instanceof Error ? error.message : 'rejected', result: claudeFailureSummary(result.stdout) });
+          reason: error instanceof Error ? error.message : 'rejected', result: claudeFailureSummary(result.stdout),
+          events: claudeStreamShape(result.stdout) });
         throw error;
       }
       const text = JSON.stringify(parsed.output);

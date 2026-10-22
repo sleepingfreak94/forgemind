@@ -27,7 +27,7 @@ import type { LiveTask } from "../../src/live-workflow/contracts.js";
 import { ChatGPTStore } from '../../src/live-workflow/chatgpt-store.js';
 import { openChatGPTPlanSession } from '../../src/live-workflow/chatgpt-plan.js';
 import { NativeClaudeModel } from '../../src/live-workflow/claude-cli-model.js';
-import { claudeStream, fakeArgs, fakeCli, fixtureSession } from './claude-fixture.js';
+import { claudeStream, fakeArgs, fakeCli, fakeCliSkip, fixtureSession } from './claude-fixture.js';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-pipeline-"))),
@@ -277,7 +277,7 @@ test('real native fixture drives plan, edit and independent review end to end wi
  }finally{f.cleanup();}
 });
 
-test('Claude route mismatches are rejected before worktree or ledger creation', async () => {
+test('Claude route mismatches are rejected before worktree or ledger creation', { skip: fakeCliSkip }, async () => {
   const f = fixture(), c = await fixtureSession();
   try {
     await assert.rejects(runTask({ ...f.options, claude: { cli: fakeCli(), session: c.session } }), /Task provider does not match the Claude route/);
@@ -289,7 +289,7 @@ test('Claude route mismatches are rejected before worktree or ledger creation', 
 });
 
 test('Claude route plans with Opus and codes and reviews with Sonnet through the real pipeline', {
-  skip: process.platform !== 'darwin', timeout: 60000 }, async () => {
+  skip: process.platform !== 'darwin' || fakeCliSkip, timeout: 60000 }, async () => {
   const f = fixture(), c = await fixtureSession();
   const task: LiveTask = { ...f.task, provider: 'anthropic', model: 'claude-sonnet-5-5' };
   const outputs = [{ objective: task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
@@ -315,7 +315,7 @@ test('Claude route plans with Opus and codes and reviews with Sonnet through the
 });
 
 test('production Claude route runs the pinned CLI under its Seatbelt profile for plan, code and review', {
-  skip: process.platform !== 'darwin', timeout: 90000 }, async () => {
+  skip: process.platform !== 'darwin' || fakeCliSkip, timeout: 90000 }, async () => {
   const f = fixture(), c = await fixtureSession(undefined, { supervised: true });
   const task: LiveTask = { ...f.task, provider: 'anthropic', model: 'claude-sonnet-5-5' };
   const outputs: [string, unknown][] = [

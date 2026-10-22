@@ -4,15 +4,15 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtemp
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { claudeFailureSummary, parseClaudeStream } from '../../src/live-workflow/claude-stream.js';
-import { assertClaudeSession, openClaudeSubscriptionSession, claudeInferenceProfile, pinClaudeCli } from '../../src/live-workflow/claude-session.js';
+import { claudeFailureSummary, claudeStreamShape, parseClaudeStream } from '../../src/live-workflow/claude-stream.js';
+import { assertClaudeSession, openClaudeSubscriptionSession, claudeInferenceProfile, pinClaudeCli, pinClaudeConformanceCli } from '../../src/live-workflow/claude-session.js';
 import type { ClaudeCli } from '../../src/live-workflow/claude-session.js';
 import { NativeClaudeModel } from '../../src/live-workflow/claude-cli-model.js';
 import { task as validateTask } from '../../src/live-workflow/validation.js';
 import { CLAUDE_PHASE_MODELS } from '../../src/live-workflow/routing-profile.js';
 import type { ActionEnvelope, LiveTask } from '../../src/live-workflow/contracts.js';
 import type { ProcessRequest } from '../../src/live-workflow/process.js';
-import { claudeStream, fakeArgs, fakeCli, fakeEnv, fixtureSession } from './claude-fixture.js';
+import { claudeStream, fakeArgs, fakeCli, fakeCliSkip, fakeEnv, fixtureSession } from './claude-fixture.js';
 
 const sonnet = 'claude-sonnet-5-5', opus = 'claude-opus-5-5';
 const expected = { model: sonnet, version: '2.1.308', tools: ['StructuredOutput'], maxTurns: 3 };
@@ -55,6 +55,18 @@ const rejections: [string, string, RegExp][] = [
 ];
 for (const [name, stream, error] of rejections)
   test(`stream parser fails closed on ${name}`, () => assert.throws(() => parseClaudeStream(stream, expected), error));
+test('thinking progress estimates are allowed only as numeric system events after init', () => {
+  const progress = { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 40, estimated_tokens_delta: 40 };
+  const lines = claudeStream(sonnet, answer).trimEnd().split('\n');
+  const observed = [lines[0], JSON.stringify(progress), JSON.stringify({ ...progress, estimated_tokens: 80 }), ...lines.slice(1)].join('\n') + '\n';
+  assert.deepEqual(parseClaudeStream(observed, expected).output, answer);
+  const first = [JSON.stringify(progress), ...lines].join('\n') + '\n';
+  assert.throws(() => parseClaudeStream(first, expected), /Unreviewed Claude session start$/);
+  const textual = claudeStream(sonnet, answer, { extra: [{ ...progress, estimated_tokens: 'many' }] });
+  assert.throws(() => parseClaudeStream(textual, expected), /\(system thinking_tokens\)/);
+  const fallback = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'model_fallback' }] });
+  assert.throws(() => parseClaudeStream(fallback, expected), /\(system model_fallback\)/);
+});
 test('stream parser bounds usage and failure summaries carry status fields only', () => {
   const big = parseClaudeStream(claudeStream(sonnet, answer, { result: { usage: { pad: 'x'.repeat(5000) } } }), expected);
   assert.equal(big.usage, null);
@@ -62,6 +74,10 @@ test('stream parser bounds usage and failure summaries carry status fields only'
   assert.deepEqual(claudeFailureSummary(failed), { subtype: 'error_during_execution', is_error: true, terminal_reason: 'completed',
     stop_reason: 'tool_use', api_error_status: 429, num_turns: 2 });
   assert.equal(claudeFailureSummary('not json'), null);
+  const extra = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'status', status: 'x' }, { type: 'system', subtype: '<b>' }] });
+  assert.throws(() => parseClaudeStream(extra, expected), /^Error: Unreviewed Claude session start \(system status\)$/);
+  assert.deepEqual(claudeStreamShape(extra + 'nope\n').slice(4, 7), ['system/status', 'system/unlabelled', 'result/success']);
+  assert.equal(claudeStreamShape(extra + 'nope\n').at(-1), 'invalid');
 });
 test('stream parser requires an observed overage status', () => {
   const stream = claudeStream(sonnet, answer).split('\n').filter(line => !line.includes('rate_limit_event')).join('\n');
@@ -83,7 +99,7 @@ test('Claude tasks name only the reviewed coding model; provider is optional and
   assert.deepEqual(CLAUDE_PHASE_MODELS, { plan: opus, coding: sonnet, review: sonnet });
 });
 
-test('session requires a subscription sign-in and an owner-only profile; forged sessions are rejected', async () => {
+test('session requires a subscription sign-in and an owner-only profile; forged sessions are rejected', { skip: fakeCliSkip }, async () => {
   for (const status of [{ loggedIn: false }, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' },
     { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'bedrock' }]) await assert.rejects(fixtureSession(status), /not signed in/);
   const f = await fixtureSession();
@@ -108,7 +124,7 @@ test('session requires a subscription sign-in and an owner-only profile; forged 
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions', () => {
+test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions', { skip: fakeCliSkip }, () => {
   const cli = fakeCli();
   const profile = claudeInferenceProfile(cli, '/private/tmp/fm/scratch', '/Users/o/.forgemind/claude-profile', '/Users/o', '/private/var/folders/x/C');
   assert.match(profile, /^\(version 1\)\n\(deny default\)/);
@@ -128,8 +144,9 @@ function fakeAuthority(directory: string, recorder: Recorder) {
   };
 }
 async function modelFixture(stdout: ((request: ProcessRequest) => string) | 'supervised',
-  options: { code?: number; source?: () => string; task?: LiveTask; cli?: ClaudeCli } = {}) {
-  const f = await fixtureSession(undefined, { supervised: stdout === 'supervised' });
+  options: { code?: number; source?: () => string; task?: LiveTask; cli?: ClaudeCli; sessionCli?: ClaudeCli } = {}) {
+  const sessionCli = options.sessionCli ?? options.cli;
+  const f = await fixtureSession(undefined, { supervised: stdout === 'supervised', ...(sessionCli ? { cli: sessionCli } : {}) });
   const state = join(f.root, 'state'); mkdirSync(state, { mode: 0o700 });
   const recorder: Recorder = { requests: [], reserved: [], finished: [], phases: [], data: [] };
   const launches: ProcessRequest[] = [];
@@ -141,7 +158,7 @@ async function modelFixture(stdout: ((request: ProcessRequest) => string) | 'sup
 }
 const modelArg = (request: ProcessRequest) => request.args[request.args.indexOf('--model') + 1]!;
 
-test('each phase runs its owner-fixed model with tools, MCP, settings and persistence disabled', async () => {
+test('each phase runs its owner-fixed model with tools, MCP, settings and persistence disabled', { skip: fakeCliSkip }, async () => {
   const m = await modelFixture(request => claudeStream(modelArg(request), answer));
   try {
     const signal = new AbortController().signal;
@@ -172,13 +189,13 @@ test('each phase runs its owner-fixed model with tools, MCP, settings and persis
   } finally { m.cleanup(); }
 });
 
-test('model refuses calls without a phase, for non-Claude tasks, or over the prompt limit before reserving a request', async () => {
+test('model refuses calls without a phase, for non-Claude tasks, or over the prompt limit before reserving a request', { skip: fakeCliSkip }, async () => {
   const signal = new AbortController().signal;
   for (const [options, call, error] of [
     [{}, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal), /require a pipeline phase/],
     [{ task: liveTask({ provider: undefined, model: 'gpt-6.1-sol' }) }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /not routed to Claude/],
     [{ task: liveTask({ maxPromptBytes: 64 }) }, (m: NativeClaudeModel) => m.complete('x'.repeat(100), {}, {}, signal, 'plan'), /prompt limit/],
-    [{ cli: { ...fakeCli() } }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /Untrusted Claude executable pin/],
+    [{ cli: { ...fakeCli() }, sessionCli: fakeCli() }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /Untrusted Claude executable pin/],
   ] as const) {
     const m = await modelFixture(request => claudeStream(modelArg(request), answer), options);
     try {
@@ -188,7 +205,7 @@ test('model refuses calls without a phase, for non-Claude tasks, or over the pro
   }
 });
 
-test('process failure, refusal and source drift fail closed with an indeterminate receipt and no retry', async () => {
+test('process failure, refusal and source drift fail closed with an indeterminate receipt and no retry', { skip: fakeCliSkip }, async () => {
   const signal = new AbortController().signal;
   let source = 'source-a';
   for (const [stdout, options, error] of [
@@ -206,7 +223,7 @@ test('process failure, refusal and source drift fail closed with an indeterminat
   }
 });
 
-const sandboxed = { skip: process.platform !== 'darwin', timeout: 60000 };
+const sandboxed = { skip: process.platform !== 'darwin' || fakeCliSkip, timeout: 60000 };
 test('the pinned fake runs under the real Claude Seatbelt profile: sign-in, one call, recorded flags and environment', sandboxed, async () => {
   const m = await modelFixture('supervised');
   try {
@@ -229,7 +246,7 @@ test('a pinned binary that changes before launch is refused with no request made
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fm-claude-drift-'))), path = join(dir, 'claude');
   copyFileSync(fakeCli().path, path); chmodSync(path, 0o755);
   const build = { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
-  const cli = pinClaudeCli(path, build);
+  const cli = pinClaudeConformanceCli(path, build);
   assert.equal(cli.reviewed, false);
   assert.throws(() => pinClaudeCli(path), /not the reviewed build/);
   const m = await modelFixture('supervised', { cli });
@@ -240,6 +257,20 @@ test('a pinned binary that changes before launch is refused with no request made
     assert.equal(existsSync(join(m.f.profile, 'count')), false, 'the changed binary never ran');
     assert.deepEqual(m.recorder.finished, ['indeterminate']);
   } finally { m.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a model whose CLI differs from its session\'s pinned CLI is refused before reserving a request', { skip: fakeCliSkip }, async () => {
+  const other = pinClaudeConformanceCli(fakeCli().path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256: fakeCli().sha256 });
+  assert.notEqual(other, fakeCli());
+  const m = await modelFixture(r => claudeStream(modelArg(r), answer), { cli: other, sessionCli: fakeCli() });
+  try {
+    await assert.rejects(m.model.complete('x', {}, {}, new AbortController().signal, 'coding'), /differs from the session/);
+    assert.equal(m.recorder.requests.length, 0);
+    assert.equal(m.launches.length, 0);
+    assert.equal(m.recorder.reserved.length, 0);
+    assert.deepEqual(m.recorder.finished, []);
+    assert.deepEqual(readdirSync(m.state), []);
+  } finally { m.cleanup(); }
 });
 
 test('cancellation and timeout stop the whole sandboxed process tree with an indeterminate receipt', sandboxed, async () => {
@@ -281,5 +312,6 @@ test('output beyond the task limit and a failing CLI are rejected, and the recei
     await assert.rejects(rejected.model.complete('x', {}, {}, new AbortController().signal, 'review'), /did not complete/);
     assert.deepEqual(rejected.recorder.phases, ['model-rejected']);
     assert.match(String(rejected.recorder.data[0]!.reason), /did not complete/);
+    assert.deepEqual(rejected.recorder.data[0]!.events, ['system/init', 'assistant', 'user', 'rate_limit_event', 'result/success']);
   } finally { rejected.cleanup(); }
 });
