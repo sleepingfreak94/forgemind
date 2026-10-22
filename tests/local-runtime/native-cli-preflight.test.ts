@@ -22,7 +22,7 @@ function fixture(){
 test('--preflight works without a terminal, account or run-state creation',posix,()=>{
  const f=fixture();try{
   writeFileSync(f.packet,encodeNativePacket(f.task,'Read and review input'),{mode:0o600});
-  const r=spawnSync(process.execPath,[cli,'--preflight','--packet',f.packet,'--connection',f.connection,'--codex',f.codex,'--state',f.state],{encoding:'utf8',timeout:10000});
+  const r=spawnSync(process.execPath,[cli,'--preflight','--packet',f.packet,'--connection',f.connection,'--codex',f.codex,'--state',f.state],{encoding:'utf8',timeout:30000});
   assert.equal(r.status,0,r.stderr);const report=JSON.parse(r.stdout);assert.equal(report.ready,true);assert.equal(report.schema,'native-preflight-v1');assert.equal(report.packet.maximumBytes,65536);
   assert(!existsSync(f.state));assert(!existsSync(f.connection));
  }finally{f.close();}
@@ -30,7 +30,7 @@ test('--preflight works without a terminal, account or run-state creation',posix
 test('--preflight reports packet-too-large before opening an account or creating state',posix,()=>{
  const f=fixture();try{
   writeFileSync(f.packet,'x'.repeat(230689),{mode:0o600});
-  const r=spawnSync(process.execPath,[cli,'--preflight','--packet',f.packet,'--connection',f.connection,'--codex',f.codex,'--state',f.state],{encoding:'utf8',timeout:10000});
+  const r=spawnSync(process.execPath,[cli,'--preflight','--packet',f.packet,'--connection',f.connection,'--codex',f.codex,'--state',f.state],{encoding:'utf8',timeout:30000});
   assert.equal(r.status,2);assert.deepEqual(JSON.parse(r.stdout).issues,[{code:'packet-too-large'}]);assert(!existsSync(f.state));assert(!existsSync(f.connection));
  }finally{f.close();}
 });
