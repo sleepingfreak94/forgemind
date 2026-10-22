@@ -46,7 +46,7 @@ const rejections: [string, string, RegExp][] = [
     { name: 'cc-plugin-plugin-authoring', path: 'builtin' }, { name: 'cc-plugin-telemetry', path: 'builtin' }] } }), /configuration differs/],
   ['configured MCP server', claudeStream(sonnet, answer, { init: { mcp_servers: [{ name: 'x', status: 'connected' }] } }), /configuration differs/],
   ['profile skill', claudeStream(sonnet, answer, { init: { skills: ['deploy'] } }), /configuration differs/],
-  ['unreviewed agent', claudeStream(sonnet, answer, { init: { agents: ['claude', 'custom-agent'] } }), /configuration differs/],
+  ['unreviewed agent', claudeStream(sonnet, answer, { init: { agents: ['claude', 'custom-agent'] } }), /configuration differs from the reviewed profile \(agents\)/],
   ['permission mode', claudeStream(sonnet, answer, { init: { permissionMode: 'bypassPermissions' } }), /configuration differs/],
   ['API error status', claudeStream(sonnet, answer, { result: { api_error_status: 429 } }), /did not complete/],
   ['safety stop', claudeStream(sonnet, answer, { result: { safety_stops: 1 } }), /did not complete/],
@@ -67,6 +67,12 @@ test('thinking progress estimates are allowed only as numeric system events afte
   const fallback = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'model_fallback' }] });
   assert.throws(() => parseClaudeStream(fallback, expected), /\(system model_fallback\)/);
 });
+test('the built-in agent list without --safe-mode is reviewed', () => {
+  const agents = ['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup'];
+  assert.deepEqual(parseClaudeStream(claudeStream(sonnet, answer, { init: { agents } }), expected).output, answer);
+  assert.throws(() => parseClaudeStream(claudeStream(sonnet, answer, { init: { agents, skills: ['x'], permissionMode: 'plan' } }), expected),
+    /\(skills, permissionMode\)$/);
+});
 test('stream parser bounds usage and failure summaries carry status fields only', () => {
   const big = parseClaudeStream(claudeStream(sonnet, answer, { result: { usage: { pad: 'x'.repeat(5000) } } }), expected);
   assert.equal(big.usage, null);
@@ -78,6 +84,21 @@ test('stream parser bounds usage and failure summaries carry status fields only'
   assert.throws(() => parseClaudeStream(extra, expected), /^Error: Unreviewed Claude session start \(system status\)$/);
   assert.deepEqual(claudeStreamShape(extra + 'nope\n').slice(4, 7), ['system/status', 'system/unlabelled', 'result/success']);
   assert.equal(claudeStreamShape(extra + 'nope\n').at(-1), 'invalid');
+});
+test('stream parser accepts only the expected connected MCP servers and counts host tool calls', () => {
+  const hostTools = ['mcp__forgemind__host_read', 'mcp__forgemind__host_apply', 'mcp__forgemind__host_check'];
+  const mcp = { ...expected, tools: ['StructuredOutput', ...hostTools], mcpServers: ['forgemind'] };
+  const connected = { name: 'forgemind', status: 'connected' };
+  const stream = (servers: unknown[]) => claudeStream(sonnet, answer, { init: { tools: mcp.tools, mcp_servers: servers } });
+  const calls = claudeStream(sonnet, answer, { init: { tools: mcp.tools, mcp_servers: [connected] }, extra: [{ type: 'assistant',
+    message: { content: hostTools.map((name, i) => ({ type: 'tool_use', id: `toolu_${i}`, name, input: {} })) } }] });
+  const parsed = parseClaudeStream(calls, mcp);
+  assert.deepEqual(parsed.output, answer);
+  assert.equal(parsed.toolCalls, 3);
+  for (const servers of [[{ name: 'forgemind', status: 'failed' }], [], [connected, { name: 'x', status: 'connected' }], ['forgemind']])
+    assert.throws(() => parseClaudeStream(stream(servers), mcp), /configuration differs/);
+  assert.throws(() => parseClaudeStream(claudeStream(sonnet, answer, { init: { mcp_servers: [connected] } }), expected), /configuration differs/);
+  assert.equal(parseClaudeStream(claudeStream(sonnet, answer), expected).toolCalls, 0);
 });
 test('stream parser requires an observed overage status', () => {
   const stream = claudeStream(sonnet, answer).split('\n').filter(line => !line.includes('rate_limit_event')).join('\n');

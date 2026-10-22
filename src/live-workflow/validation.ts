@@ -102,6 +102,8 @@ export function task(raw: unknown): LiveTask {
     "maxRuntimeMs",
     "draftPr",
     "provider",
+    "codingMode",
+    "maxToolCalls",
   ]);
   if (raw.schemaVersion !== 1 || typeof raw.draftPr !== "boolean")
     throw new Error("Invalid task version/preferences");
@@ -120,6 +122,20 @@ export function task(raw: unknown): LiveTask {
   // Claude phase models are owner-fixed; the task names only the reviewed coding model.
   if ((raw.provider === "anthropic") !== (raw.model === CLAUDE_PHASE_MODELS.coding) || /^claude-/.test(raw.model) && raw.provider !== "anthropic")
     throw new Error("Invalid model routing");
+  if (
+    raw.codingMode !== undefined &&
+    ((raw.codingMode !== "single-call" && raw.codingMode !== "tools") ||
+      (raw.codingMode === "tools" && raw.provider !== "anthropic"))
+  )
+    throw new Error("Invalid coding mode");
+  if (
+    raw.codingMode === "tools"
+      ? !Number.isSafeInteger(raw.maxToolCalls) ||
+        (raw.maxToolCalls as number) < 1 ||
+        (raw.maxToolCalls as number) > 64
+      : raw.maxToolCalls !== undefined
+  )
+    throw new Error("Invalid tool-call budget");
   for (const key of ["readPaths", "writePaths"] as const) {
     const list = raw[key];
     if (

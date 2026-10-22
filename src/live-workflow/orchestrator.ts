@@ -14,6 +14,7 @@ import { planSchema, codingSchema, reviewSchema } from './contracts.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import { applyEdits } from './edits.js';
 import { runChecks } from './checks.js';
+import { runToolCoding } from './coding-tools.js';
 import type { CheckRuntime } from './check-runtime.js';
 import {
   discoverRepository,
@@ -273,25 +274,36 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     if (browserQa) { progress('Handing baseline to trusted host browser QA'); await browserQa.capture('baseline'); }
     const beforeVideo = await capture('before');
     currentSource();
-    progress('Generating bounded code edits');
-    const raw = await model.complete(
-      'Implement the approved plan. For small changes to existing files prefer {path,beforeSha256,format:"text-replacements-v1",replacements:[{before,after}]}. Use the exact supplied whole-file beforeSha256. Each nonempty before must match exactly once in the original file; operations must not overlap, use regex, or depend on another operation. Keep anchors short but unique. The host preserves untouched bytes. Alternatively return {path,beforeSha256,content} with complete UTF-8 content (null digest for new files; null content deletes a file). Never mix formats within an edit. Do not change unrelated paths or weaken tests. Do not execute tools.',
-      { task, plan: generated, sources, memory: context ?? null, beforeChecks },
-      codingSchema,
-      signal,
-      'coding',
-    );
-    currentSource();
-    memory?.assertCurrent(context!);
-    const changes = applyEdits(activeRoot, current, task.writePaths, raw, authority, currentSource);
-    current = sourceIdentity(activeRoot);
+    const tools = task.codingMode === 'tools';
+    progress(tools ? 'Coding with host tools' : 'Generating bounded code edits');
+    let changes: ReturnType<typeof applyEdits>;
+    if (tools) {
+      const coded = await runToolCoding(model, { root: activeRoot, task, source: current, authority, checkDirectory: directory, signal,
+        boundary: () => signal.throwIfAborted(), input: { task, plan: generated, sources, memory: context ?? null, beforeChecks },
+        ...(options.checkRuntime ? { checkRuntime: options.checkRuntime } : {}) });
+      ({ changes, source: current } = coded);
+      currentSource(); memory?.assertCurrent(context!);
+    } else {
+      const raw = await model.complete(
+        'Implement the approved plan. For small changes to existing files prefer {path,beforeSha256,format:"text-replacements-v1",replacements:[{before,after}]}. Use the exact supplied whole-file beforeSha256. Each nonempty before must match exactly once in the original file; operations must not overlap, use regex, or depend on another operation. Keep anchors short but unique. The host preserves untouched bytes. Alternatively return {path,beforeSha256,content} with complete UTF-8 content (null digest for new files; null content deletes a file). Never mix formats within an edit. Do not change unrelated paths or weaken tests. Do not execute tools.',
+        { task, plan: generated, sources, memory: context ?? null, beforeChecks },
+        codingSchema,
+        signal,
+        'coding',
+      );
+      currentSource();
+      memory?.assertCurrent(context!);
+      changes = applyEdits(activeRoot, current, task.writePaths, raw, authority, currentSource);
+      current = sourceIdentity(activeRoot);
+    }
     authority.phase('candidate', current, {
       summary: changes.summary,
       paths: changes.edits.map((e) => e.path),
     });
     save('changes.json', changes);
     const diff = captureTicketDiff(activeRoot, checkout.baseHead, task.writePaths);
-    if (changes.edits.some((edit) => !diff.paths.includes(edit.path)))
+    // A tools session may revise a file more than once; its reviewable result is the final diff.
+    if (tools ? !diff.paths.length : changes.edits.some((edit) => !diff.paths.includes(edit.path)))
       throw new Error('Proposed edit is ignored or has no reviewable Git diff');
     save('candidate.patch', diff.diff);
     progress('Running candidate checks');

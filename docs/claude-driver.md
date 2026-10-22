@@ -75,6 +75,46 @@ draft publication behave exactly as on the ChatGPT route.
 - The profile must sit outside the project, `--state-root` and `--worktree-root`.
   Per-call scratch is removed after each call.
 
+## Tools coding mode
+
+This is a separate, opt-in mode ([ADR-0014](adr/ADR-0014-claude-subscription-route.md)
+Phase 2). The bullets above about disabled MCP servers describe the default
+single-call mode.
+
+- **Opt in.** Set `"codingMode": "tools"` and `"maxToolCalls"` (1 to 64) in the
+  task manifest. It works on the Claude route only. Planning and the fresh review
+  stay single structured-output calls.
+
+  ```json
+  { "provider": "anthropic", "model": "claude-sonnet-5-5", "codingMode": "tools", "maxToolCalls": 16 }
+  ```
+
+- **Tools.** The coding phase becomes one Sonnet session whose only tools are:
+  - `host_read`: reads one granted read or write path and returns its path, sha256
+    and content (null for an absent file);
+  - `host_apply`: applies edits in the same formats and with the same validator as
+    a single-call answer, against granted write paths only;
+  - `host_check`: runs one predefined check by id, after the checks listed before
+    it in the task.
+
+  Calls run one at a time.
+- **Transport and sandbox.** ForgeMind serves these tools from a local MCP endpoint
+  named `forgemind` on 127.0.0.1, with a random port and a secret path. Besides the
+  CLI's own HTTPS, the Claude sandbox may reach only that loopback port. Built-in
+  tools stay off. `--safe-mode` is not used in this mode because it disables MCP.
+- **Failures.** A rejected call that leaves source and authority intact is returned
+  to Claude as a tool error so it can correct it. These end the session and fail
+  the task, with no retry: budget exhaustion (tool calls or tool-result bytes),
+  source changes made outside the host tools, cancellation, and a lost authority.
+  A session that applies no edits also fails.
+- **Checks on the stream and records.** The stream must report the connected
+  `forgemind` server and a tool-call count equal to the host's; the host count is
+  authoritative. Every apply is recorded as a `tool-apply` phase with before and
+  after source. The reviewed result is the final Git diff.
+- **Real builds and tests.** Combine this mode with
+  [ADR-0015](adr/ADR-0015-node-project-checks.md) `node-project` checks so
+  `host_check` can run real builds and tests.
+
 ## Limits
 
 - `maxModelRequests` counts CLI invocations. Upstream request count, full prompt
@@ -87,4 +127,6 @@ draft publication behave exactly as on the ChatGPT route.
   DNS.
 - `maxOutputBytes` covers the whole stream-json output, including about 5 KiB of
   session metadata per call.
-- The Claude native route (host tools over MCP) is not implemented yet.
+- A tools session counts as one ForgeMind request regardless of its turns. Host
+  tool calls are bounded by `maxToolCalls` and the prompt byte budget
+  (`maxPromptBytes`, which also covers tool results).

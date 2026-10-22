@@ -6,6 +6,8 @@ export interface ClaudeStreamExpectation {
   version: string;
   /** Exact tool inventory the CLI must report; structured output alone is ['StructuredOutput']. */
   tools: readonly string[];
+  /** Exact MCP server names that must all be reported connected; default none. */
+  mcpServers?: readonly string[];
   maxTurns: number;
 }
 export interface ClaudeStreamResult {
@@ -14,13 +16,16 @@ export interface ClaudeStreamResult {
   /** Notional list-price figure reported by the CLI; not a subscription charge. */
   listCostUsd: number | null;
   usage: unknown;
+  /** Assistant tool_use blocks other than StructuredOutput. */
+  toolCalls: number;
 }
 
 const MAX_LINES = 4096;
 const MAX_USAGE_BYTES = 4096;
 /** Built-ins the reviewed 2.1.308 reports under `--safe-mode`; none is callable without tools. */
 const REVIEWED_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring'];
-const REVIEWED_AGENTS = new Set(['claude', 'Explore', 'general-purpose', 'Plan']);
+// Without --safe-mode (MCP routes) the CLI also lists statusline-setup. No agent is callable: the tool inventory is exact.
+const REVIEWED_AGENTS = new Set(['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup']);
 const allowedTypes = new Set(['system', 'assistant', 'user', 'rate_limit_event', 'result']);
 const record = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
@@ -53,17 +58,29 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
   if (session.analytics_disabled !== true) throw new Error('Claude telemetry was not disabled');
   if (!Array.isArray(session.tools) || !isDeepStrictEqual([...session.tools].sort(), [...expected.tools].sort()))
     throw new Error('Claude tool inventory differs from the reviewed set');
+  const servers: unknown = session.mcp_servers;
+  const serverNames = Array.isArray(servers) && servers.every(s => record(s) && s.status === 'connected' && typeof s.name === 'string')
+    ? servers.map(s => (s as Record<string, unknown>).name as string).sort() : undefined;
   const plugins = Array.isArray(session.plugins) ? session.plugins.map(p => record(p) && p.path === 'builtin' ? p.name : undefined) : undefined;
-  if (!isDeepStrictEqual(session.mcp_servers, []) || !isDeepStrictEqual(session.skills, []) || !isDeepStrictEqual(session.slash_commands, [])
-    || session.permissionMode !== 'default' || !isDeepStrictEqual(plugins && [...plugins].sort(), REVIEWED_PLUGINS)
-    || !Array.isArray(session.agents) || !session.agents.every(agent => REVIEWED_AGENTS.has(String(agent))))
-    throw new Error('Claude session configuration differs from the reviewed profile');
+  const differing = Object.entries({
+    mcp_servers: !serverNames || !isDeepStrictEqual(serverNames, [...(expected.mcpServers ?? [])].sort()),
+    skills: !isDeepStrictEqual(session.skills, []),
+    slash_commands: !isDeepStrictEqual(session.slash_commands, []),
+    permissionMode: session.permissionMode !== 'default',
+    plugins: !isDeepStrictEqual(plugins && [...plugins].sort(), REVIEWED_PLUGINS),
+    agents: !Array.isArray(session.agents) || !session.agents.every(agent => REVIEWED_AGENTS.has(String(agent))),
+  }).filter(([, bad]) => bad).map(([field]) => field);
+  if (differing.length) throw new Error(`Claude session configuration differs from the reviewed profile (${differing.join(', ')})`);
+  let toolCalls = 0;
   for (const event of events.filter(e => e.type === 'assistant')) {
     const content = record(event.message) ? event.message.content : undefined;
     if (!Array.isArray(content)) throw new Error('Malformed Claude message');
-    for (const block of content)
-      if (record(block) && block.type === 'tool_use' && !expected.tools.includes(String(block.name)))
-        throw new Error('Claude called an unreviewed tool');
+    for (const block of content) {
+      if (record(block) && block.type === 'tool_use') {
+        if (!expected.tools.includes(String(block.name))) throw new Error('Claude called an unreviewed tool');
+        if (block.name !== 'StructuredOutput') toolCalls++;
+      }
+    }
   }
   const limits = events.filter(e => e.type === 'rate_limit_event');
   if (!limits.length) throw new Error('Claude overage status unavailable');
@@ -92,6 +109,7 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
     numTurns: result.num_turns as number,
     listCostUsd: typeof cost === 'number' && Number.isFinite(cost) ? cost : null,
     usage,
+    toolCalls,
   };
 }
 

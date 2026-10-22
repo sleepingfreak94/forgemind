@@ -1,6 +1,6 @@
 # ADR-0014: Claude subscription route through the unmodified Claude Code CLI
 
-- Status: Accepted; Phase 0 evidence complete; supervised route (Phase 1) implemented and validated with one live task; native route (Phase 2) pending
+- Status: Accepted; Phase 0 evidence complete; supervised route (Phase 1) and tools coding mode (Phase 2) implemented, each validated with one live task
 - Date: 2026-10-22
 - Basis: owner decisions to use their own Claude subscription through the Claude Code CLI and to fail closed on refusals; Anthropic's [Claude Code legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance) as read on 2026-10-22
 - Plan: [Claude subscription route plan](../claude-route-plan.md)
@@ -17,7 +17,15 @@ Model routing is fixed by the owner, not selected by a task: planning uses `clau
 
 Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each call passes `--max-turns` and turns CLI retries off, and a reported retry is rejected. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
 
-Two integration points are planned: a Claude `ModelPort` for the supervised `runTask` route, then a Claude native route that exposes exactly `host_read`, `host_apply` and `host_check` through a ForgeMind MCP endpoint. That endpoint runs in the trusted host over HTTP on `127.0.0.1`, not as a stdio child inside the Claude sandbox.
+Two integration points exist: a Claude `ModelPort` for the supervised `runTask` route, and a tools coding mode in that same pipeline (Phase 2), where one Sonnet session drives exactly `host_read`, `host_apply` and `host_check` through a ForgeMind MCP endpoint. That endpoint runs in the trusted host over HTTP on `127.0.0.1` with a random port and secret path, not as a stdio child inside the Claude sandbox. The sandbox may reach only that loopback port besides the CLI's own HTTPS. Planning, plan approval, candidate checks, the fresh review and publication are unchanged.
+
+Phase 2 is built into `runTask`, not the Codex native executor. That executor's runner is bound to the ChatGPT session, the Codex app-server and its broker. The provider-neutral pieces are reused through the supervised authority:
+- the exact path and check grants;
+- the edit validator;
+- the check runner;
+- receipts.
+
+A tools session keeps the run authority bound to its starting source, because a provider receipt cannot span authority source changes. Each apply records its before and after tree sources, and the host verifies the tree before every call.
 
 ## Consequences and limits
 
@@ -28,6 +36,13 @@ Two integration points are planned: a Claude `ModelPort` for the supervised `run
 - `--json-schema` is delivered as a synthetic `StructuredOutput` tool call, so one answer costs two turns. Turn budgets must account for this.
 - A Claude Code update changes the pin. The terms review and Phase 0 invocation checks must be repeated before the new version is accepted.
 - If Anthropic's terms stop permitting this use, the route stays blocked. No automatic switch to another credential type happens.
+- In tools mode `--safe-mode` is off, because it disables MCP. Isolation relies on:
+  - the dedicated profile;
+  - empty setting sources;
+  - strict MCP configuration;
+  - an exact tool inventory;
+  - the stream checks: a connected `forgemind` server only, and a tool-call count equal to the host's.
+- Without `--safe-mode` the CLI lists one more built-in agent, `statusline-setup`. No agent is callable.
 
 ## Validation
 
@@ -43,4 +58,10 @@ Phase 0 evidence is recorded in the plan; raw output stays local under `docs/art
 - a no-inference `probe:claude`;
 - one owner-authorized live task: plan on Opus, code and review on Sonnet, completed with 3 requests and overage rejected each time.
 
-Phase 2 needs its own equivalent evidence. Independent review and a draft PR follow `AGENTS.md`.
+Phase 2 is covered by:
+- tools-host tests: grants, rejected-versus-fatal calls, budgets, outside drift, cancellation, and a full tools-mode `runTask` holding a provider receipt across applies;
+- MCP endpoint tests: protocol, loopback host and origin refusal, size and batch limits, and stop on fatal;
+- `codeWithTools` tests: arguments, loopback-only egress, tool-call accounting, and failure paths;
+- one owner-authorized live tools-mode task: Opus plan, a Sonnet session with 5 turns and 3 host calls, Sonnet review, 3 requests, overage rejected.
+
+Independent review and draft PRs follow `AGENTS.md`.
