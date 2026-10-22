@@ -38,7 +38,10 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
   });
   const system = events.filter(e => e.type === 'system');
   if (system.some(e => e.subtype === 'api_retry')) throw new Error('Claude CLI retried a request; no automatic retry');
-  if (system.length !== 1 || system[0]!.subtype !== 'init' || events[0] !== system[0]) throw new Error('Unreviewed Claude session start');
+  if (system.length !== 1 || system[0]!.subtype !== 'init' || events[0] !== system[0]) {
+    const extra = system.find(e => e.subtype !== 'init');
+    throw new Error(`Unreviewed Claude session start${extra ? ` (system ${label(extra.subtype)})` : ''}`);
+  }
   const session = system[0]!;
   if (session.model !== expected.model) throw new Error('Claude model mismatch; no substitution');
   if (session.claude_code_version !== expected.version) throw new Error('Claude CLI version mismatch');
@@ -89,6 +92,17 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
   };
 }
 
+const label = (value: unknown) => typeof value === 'string' && /^[a-z_]{1,40}$/.test(value) ? value : 'unlabelled';
+/** Event types and subtypes, in order and capped, for rejection receipts; never content. */
+export function claudeStreamShape(stdout: string): string[] {
+  return stdout.split('\n').filter(line => line.trim()).slice(0, 64).map(line => {
+    try {
+      const value: unknown = JSON.parse(line);
+      if (!record(value)) return 'invalid';
+      return value.subtype === undefined ? label(value.type) : `${label(value.type)}/${label(value.subtype)}`;
+    } catch { return 'invalid'; }
+  });
+}
 /** Status fields of a failed run's final result, for the receipt; never model text. */
 export function claudeFailureSummary(stdout: string): Record<string, string | number | boolean | null> | null {
   const last = stdout.trimEnd().split('\n').at(-1);

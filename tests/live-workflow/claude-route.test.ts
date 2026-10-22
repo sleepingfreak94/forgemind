@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, mkdtemp
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { claudeFailureSummary, parseClaudeStream } from '../../src/live-workflow/claude-stream.js';
+import { claudeFailureSummary, claudeStreamShape, parseClaudeStream } from '../../src/live-workflow/claude-stream.js';
 import { assertClaudeSession, openClaudeSubscriptionSession, claudeInferenceProfile, pinClaudeCli } from '../../src/live-workflow/claude-session.js';
 import type { ClaudeCli } from '../../src/live-workflow/claude-session.js';
 import { NativeClaudeModel } from '../../src/live-workflow/claude-cli-model.js';
@@ -62,6 +62,10 @@ test('stream parser bounds usage and failure summaries carry status fields only'
   assert.deepEqual(claudeFailureSummary(failed), { subtype: 'error_during_execution', is_error: true, terminal_reason: 'completed',
     stop_reason: 'tool_use', api_error_status: 429, num_turns: 2 });
   assert.equal(claudeFailureSummary('not json'), null);
+  const extra = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'status', status: 'x' }, { type: 'system', subtype: '<b>' }] });
+  assert.throws(() => parseClaudeStream(extra, expected), /^Error: Unreviewed Claude session start \(system status\)$/);
+  assert.deepEqual(claudeStreamShape(extra + 'nope\n').slice(4, 7), ['system/status', 'system/unlabelled', 'result/success']);
+  assert.equal(claudeStreamShape(extra + 'nope\n').at(-1), 'invalid');
 });
 test('stream parser requires an observed overage status', () => {
   const stream = claudeStream(sonnet, answer).split('\n').filter(line => !line.includes('rate_limit_event')).join('\n');
@@ -281,5 +285,6 @@ test('output beyond the task limit and a failing CLI are rejected, and the recei
     await assert.rejects(rejected.model.complete('x', {}, {}, new AbortController().signal, 'review'), /did not complete/);
     assert.deepEqual(rejected.recorder.phases, ['model-rejected']);
     assert.match(String(rejected.recorder.data[0]!.reason), /did not complete/);
+    assert.deepEqual(rejected.recorder.data[0]!.events, ['system/init', 'assistant', 'user', 'rate_limit_event', 'result/success']);
   } finally { rejected.cleanup(); }
 });
