@@ -13,6 +13,7 @@ import { validateCommitAuthor } from '../live-workflow/repository.js';
 import { loadBrowserQaConfiguration } from '../live-workflow/browser-qa-command.js';
 import { pinFile } from '../host-enforcement/manifest.js';
 import { pinClaudeCli, openClaudeSubscriptionSession } from '../live-workflow/claude-session.js';
+import { nodeProjectRuntime } from '../live-workflow/check-runtime.js';
 
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:connect --connection /private/forgemind-account
@@ -38,7 +39,8 @@ Draft PR tasks require all three explicit publication options before account rev
 Browser QA host config requires the connection tuple; both phase reports gate review and publication.
 No credentials are read and no worktree is created when run connection options are absent.
 No --yes, paid API fallback, endpoint override, or automatic task replay exists.
-Checks remain single-process, read-only and offline. Docker/Compose checks are unavailable.
+Checks are read-only and offline. They are single-process unless a check sets "profile": "node-project" and you pass
+--node-modules /canonical/project/node_modules (ADR-0015). Docker/Compose checks are unavailable.
 `;
 export function parseLiveArguments(argv: readonly string[]) {
   const [mode, ...raw] = argv;
@@ -47,7 +49,7 @@ export function parseLiveArguments(argv: readonly string[]) {
   const accountMode = ['connect', 'auth-status', 'billing-reset'].includes(mode!);
   const allowed = accountMode ? ['--connection'] :
     ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email', '--browser-qa-config',
-      '--provider', '--claude', '--claude-profile'] : [])];
+      '--provider', '--claude', '--claude-profile', '--node-modules'] : [])];
   const values: Record<string, string> = Object.create(null);
   for (let i = 0; i < raw.length; i += 2) {
     const key = raw[i]!, value = raw[i + 1];
@@ -146,7 +148,8 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       process.stderr.write(`Claude ${cli.version} signed in (${session.subscriptionType}); ForgeMind does not read the login.\n`);
       return { claude: { cli, session } };
     })() : { codexExecutable: args['--codex']!, planSession: planSession! };
-    output(await runTask({ workspace: root, task: manifest, ...route,
+    const checkRuntime = args['--node-modules'] ? nodeProjectRuntime(args['--node-modules']) : undefined;
+    output(await runTask({ workspace: root, task: manifest, ...route, ...(checkRuntime ? { checkRuntime } : {}),
       stateDirectory: runDirectory, worktreeDirectory: worktrees, signal: controller.signal,
       ...(publication ? { publication } : {}),
       ...(browserQa ? { browserQa } : {}),

@@ -209,7 +209,12 @@ Validation included 77 focused browser-QA checks, 112 portable regressions and 1
 
 - Keep the selected account's server-side connected-app credit control off. The saved owner acknowledgement is not an automatic billing attestation; reset it if that setting changes.
 - Verify real OAuth sign-in, credit-disabled inference and quota-exhaustion behavior; local-transport conformance is not live-provider evidence.
-- Add reviewed multiprocess/build/Docker check profiles; current checks cannot run npm, PHP workers or Compose stacks requiring subprocesses/network/writes.
+- Node projects can opt into the reviewed `node-project` check profile ([ADR-0015](adr/ADR-0015-node-project-checks.md)):
+  - Set `"profile": "node-project"` on a check and pass `--node-modules /canonical/project/node_modules`.
+  - Checks run the pinned Node or a tool inside the read-only `node_modules`, such as the native `tsc` binary, with no fork. They build into a shared phase scratch through `{scratch}` and `{nodeModules}`, and tests run with `--test-isolation=none`.
+  - The package lock must match the worktree's.
+  - Tests that start their own `sandbox-exec` cannot nest and still need host verification.
+  - npm itself, PHP workers, Docker/Compose and network-dependent checks remain unavailable.
 - Integrate per-task preference confirmation. Execution fixtures currently require complete project-level preferences; onboarding still supports both preference modes.
 - Verify a complete live-provider coding task, live independent model review and unattended browser/recording automation; supervised project evidence delivery is verified above.
 - Windows and Linux enforcement remain unsupported; no unsandboxed fallback exists.

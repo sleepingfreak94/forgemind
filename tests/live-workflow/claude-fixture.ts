@@ -84,8 +84,12 @@ export function fakeCli(): ClaudeCli {
   return compiled = pinClaudeConformanceCli(path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256 });
 }
 
-/** False when the fake CLI compiles and pins; otherwise why Claude fake-CLI tests are skipped. */
-export const fakeCliSkip: string | false = (() => {
+/** False when the fake CLI compiles and pins; otherwise why Claude fake-CLI tests are skipped.
+ * Inside an ADR-0015 sandboxed node-project check (FORGEMIND_NESTED_SANDBOX=1) it carries the nesting
+ * reason instead, without compiling anything. */
+export const fakeCliSkip: string | false = process.env.FORGEMIND_NESTED_SANDBOX === '1'
+  ? 'Claude fake CLI needs its own Seatbelt profile, which cannot nest inside a sandboxed check'
+  : (() => {
   try { fakeCli(); return false; } catch { return 'Claude fake CLI needs a working C compiler (/usr/bin/cc)'; }
 })();
 

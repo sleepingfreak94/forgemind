@@ -3,6 +3,8 @@ export interface CheckCommand {
   executable: string;
   args: string[];
   timeoutMs: number;
+  /** Reviewed check profile; omitted means today's single-process behaviour. */
+  profile?: "single-process" | "node-project";
 }
 export interface LiveTask {
   schemaVersion: 1;

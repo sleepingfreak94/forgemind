@@ -35,6 +35,12 @@ test('Claude route tuple is all-or-none and excludes the ChatGPT connection opti
   assert.throws(() => parseLiveArguments([...common, '--provider', 'bedrock']), /openai or anthropic/);
   assert.throws(() => parseLiveArguments([...common, ...claude.slice(0, 2), '--claude', 'relative/claude']), /absolute paths/);
 });
+test('node-modules option is accepted for run only', () => {
+  const values = parseLiveArguments(['run', '--workspace', '/absolute/project', '--task', '/absolute/task.json',
+    '--node-modules', '/absolute/project/node_modules']).values;
+  assert.equal(values['--node-modules'], '/absolute/project/node_modules');
+  assert.throws(() => parseLiveArguments(['inspect', '--workspace', '/absolute/project', '--node-modules', '/absolute/project/node_modules']));
+});
 test('connection CLI refuses noninteractive authentication before any network or state access', () => {
   const executable = fileURLToPath(new URL('../../src/local-runtime/live-cli.js', import.meta.url));
   assert.throws(() => execFileSync(process.execPath, [executable, 'connect', '--connection', '/nonexistent/forgemind-test'],
