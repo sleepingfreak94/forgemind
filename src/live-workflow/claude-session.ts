@@ -13,7 +13,7 @@ export const REVIEWED_CLAUDE_CLI = Object.freeze({
   sha256: 'ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37',
 });
 export type ReviewedClaudeBuild = { readonly version: string; readonly versionOutput: string; readonly sha256: string };
-/** Only `pinClaudeCli` creates one; plain objects are refused at launch. */
+/** Only `pinClaudeCli` and `pinClaudeConformanceCli` create one; plain objects are refused at launch. */
 export interface ClaudeCli { readonly path: string; readonly version: string; readonly sha256: string; readonly reviewed: boolean }
 export type ClaudeRunner = (request: ProcessRequest) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
@@ -23,8 +23,16 @@ const pinned = new WeakSet<ClaudeCli>();
 const inside = (root: string, path: string) => { const r = relative(root, path); return r === '' || !r.startsWith('..' + sep) && r !== '..' && !isAbsolute(r); };
 
 /** Pin the unmodified installed binary by canonical path, exact version and content hash.
- * `build` exists for conformance fakes; the CLI and probe always use the reviewed build. */
-export function pinClaudeCli(executable: string, build: ReviewedClaudeBuild = REVIEWED_CLAUDE_CLI): ClaudeCli {
+ * Only the reviewed build is accepted. */
+export function pinClaudeCli(executable: string): ClaudeCli {
+  return pinBuild(executable, REVIEWED_CLAUDE_CLI);
+}
+/** For conformance fakes only; production code must never call it. Runs the same pinning checks
+ * against the supplied build; the result has `reviewed: false` unless the digest equals the reviewed one. */
+export function pinClaudeConformanceCli(executable: string, build: ReviewedClaudeBuild): ClaudeCli {
+  return pinBuild(executable, build);
+}
+function pinBuild(executable: string, build: ReviewedClaudeBuild): ClaudeCli {
   if (!isAbsolute(executable) || realpathSync(executable) !== executable) throw new Error('Canonical Claude executable required');
   const stat = lstatSync(executable);
   if (!stat.isFile() || !(stat.mode & 0o111) || stat.mode & 0o022) throw new Error('Claude executable must be a non-writable regular file');
@@ -64,7 +72,7 @@ export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileD
   ].join('\n');
 }
 
-interface SessionState { profileDirectory: string; home: string; userCacheDirectory: string; subscriptionType: string; closed: boolean }
+interface SessionState { readonly cli: ClaudeCli; profileDirectory: string; home: string; userCacheDirectory: string; subscriptionType: string; closed: boolean }
 const sessions = new WeakMap<ClaudeSubscriptionSession, SessionState>();
 let mint: (state: SessionState) => ClaudeSubscriptionSession;
 /** Owner's own Claude sign-in, made through Claude Code's flow. Holds paths only, never tokens. */
@@ -77,6 +85,7 @@ export class ClaudeSubscriptionSession {
     signal: AbortSignal, check: () => void): ProcessRequest {
     const state = this.#state();
     assertPinnedClaudeCli(cli);
+    if (cli !== state.cli) throw new Error("Claude CLI differs from the session's pinned build");
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
     return {
@@ -121,7 +130,7 @@ export async function openClaudeSubscriptionSession(options: {
       throw new Error('Claude profile must be separate from project source, run state and worktrees');
   const home = realpathSync(homedir());
   const userCacheDirectory = realpathSync(execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8' }).trim());
-  const state: SessionState = { profileDirectory, home, userCacheDirectory, subscriptionType: 'unknown', closed: false };
+  const state: SessionState = { cli, profileDirectory, home, userCacheDirectory, subscriptionType: 'unknown', closed: false };
   const session = mint(state);
   const scratch = mkdtempSync(join(options.scratchRoot, 'claude-status-'));
   try {

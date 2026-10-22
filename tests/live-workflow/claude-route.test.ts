@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { claudeFailureSummary, claudeStreamShape, parseClaudeStream } from '../../src/live-workflow/claude-stream.js';
-import { assertClaudeSession, openClaudeSubscriptionSession, claudeInferenceProfile, pinClaudeCli } from '../../src/live-workflow/claude-session.js';
+import { assertClaudeSession, openClaudeSubscriptionSession, claudeInferenceProfile, pinClaudeCli, pinClaudeConformanceCli } from '../../src/live-workflow/claude-session.js';
 import type { ClaudeCli } from '../../src/live-workflow/claude-session.js';
 import { NativeClaudeModel } from '../../src/live-workflow/claude-cli-model.js';
 import { task as validateTask } from '../../src/live-workflow/validation.js';
@@ -144,8 +144,9 @@ function fakeAuthority(directory: string, recorder: Recorder) {
   };
 }
 async function modelFixture(stdout: ((request: ProcessRequest) => string) | 'supervised',
-  options: { code?: number; source?: () => string; task?: LiveTask; cli?: ClaudeCli } = {}) {
-  const f = await fixtureSession(undefined, { supervised: stdout === 'supervised' });
+  options: { code?: number; source?: () => string; task?: LiveTask; cli?: ClaudeCli; sessionCli?: ClaudeCli } = {}) {
+  const sessionCli = options.sessionCli ?? options.cli;
+  const f = await fixtureSession(undefined, { supervised: stdout === 'supervised', ...(sessionCli ? { cli: sessionCli } : {}) });
   const state = join(f.root, 'state'); mkdirSync(state, { mode: 0o700 });
   const recorder: Recorder = { requests: [], reserved: [], finished: [], phases: [], data: [] };
   const launches: ProcessRequest[] = [];
@@ -194,7 +195,7 @@ test('model refuses calls without a phase, for non-Claude tasks, or over the pro
     [{}, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal), /require a pipeline phase/],
     [{ task: liveTask({ provider: undefined, model: 'gpt-6.1-sol' }) }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /not routed to Claude/],
     [{ task: liveTask({ maxPromptBytes: 64 }) }, (m: NativeClaudeModel) => m.complete('x'.repeat(100), {}, {}, signal, 'plan'), /prompt limit/],
-    [{ cli: { ...fakeCli() } }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /Untrusted Claude executable pin/],
+    [{ cli: { ...fakeCli() }, sessionCli: fakeCli() }, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal, 'plan'), /Untrusted Claude executable pin/],
   ] as const) {
     const m = await modelFixture(request => claudeStream(modelArg(request), answer), options);
     try {
@@ -245,7 +246,7 @@ test('a pinned binary that changes before launch is refused with no request made
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fm-claude-drift-'))), path = join(dir, 'claude');
   copyFileSync(fakeCli().path, path); chmodSync(path, 0o755);
   const build = { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256: createHash('sha256').update(readFileSync(path)).digest('hex') };
-  const cli = pinClaudeCli(path, build);
+  const cli = pinClaudeConformanceCli(path, build);
   assert.equal(cli.reviewed, false);
   assert.throws(() => pinClaudeCli(path), /not the reviewed build/);
   const m = await modelFixture('supervised', { cli });
@@ -256,6 +257,20 @@ test('a pinned binary that changes before launch is refused with no request made
     assert.equal(existsSync(join(m.f.profile, 'count')), false, 'the changed binary never ran');
     assert.deepEqual(m.recorder.finished, ['indeterminate']);
   } finally { m.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a model whose CLI differs from its session\'s pinned CLI is refused before reserving a request', { skip: fakeCliSkip }, async () => {
+  const other = pinClaudeConformanceCli(fakeCli().path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256: fakeCli().sha256 });
+  assert.notEqual(other, fakeCli());
+  const m = await modelFixture(r => claudeStream(modelArg(r), answer), { cli: other, sessionCli: fakeCli() });
+  try {
+    await assert.rejects(m.model.complete('x', {}, {}, new AbortController().signal, 'coding'), /differs from the session/);
+    assert.equal(m.recorder.requests.length, 0);
+    assert.equal(m.launches.length, 0);
+    assert.equal(m.recorder.reserved.length, 0);
+    assert.deepEqual(m.recorder.finished, []);
+    assert.deepEqual(readdirSync(m.state), []);
+  } finally { m.cleanup(); }
 });
 
 test('cancellation and timeout stop the whole sandboxed process tree with an indeterminate receipt', sandboxed, async () => {
