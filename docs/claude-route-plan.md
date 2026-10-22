@@ -77,8 +77,35 @@ ForgeMind stdio MCP server, with every built-in Claude Code tool disabled.
 6. **Host tools over MCP (for Phase 2).** Confirm `--tools ""` plus
    `--allowedTools mcp__forgemind__host_read,...` exposes only those functions.
 
-Evidence goes to `docs/artifacts/claude-route/`. Any failed spike blocks the route
-and is reported; it is not worked around.
+Evidence goes to `docs/artifacts/claude-route/` (gitignored, local only). Any failed
+spike blocks the route and is reported; it is not worked around.
+
+### Step 3 first probe (2026-10-22)
+
+Pinned binary `~/.local/share/claude/versions/2.1.308`, SHA-256
+`ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37`. One call with
+the step 3 flags plus `--safe-mode`, the owner's existing login, an empty scratch
+working directory and effort `low`. Raw output: `step3-structured-output.jsonl`,
+SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
+
+- Exit 0, `result.subtype: success`, `terminal_reason: completed`.
+  `result.structured_output` held the schema-valid object.
+- `apiKeySource: none`, so the subscription login was used. No API key involved.
+- The only tool offered was `StructuredOutput`. `--json-schema` is implemented as a
+  synthetic tool call, so one answer costs `num_turns: 2` and ends with
+  `stop_reason: tool_use`. Budgets must count this.
+- MCP servers, skills and slash commands were empty. Built-in plugins still loaded
+  (`cc-plugin-telemetry`, `cc-plugin-agents-md`, `cc-plugin-plugin-authoring`), and
+  `analytics_disabled: false`. Step 4 must disable telemetry and non-essential
+  traffic through the environment and verify.
+- The CLI opened a messaging socket under `/tmp/cc-socks/`, outside the scratch
+  directory. The Seatbelt profile must handle or redirect this.
+- `rate_limit_event` reported `overageStatus: rejected`,
+  `overageDisabledReason: org_level_disabled`, `isUsingOverage: false`. ForgeMind can
+  fail closed on every run unless overage is observably rejected and unused, without
+  touching credentials. This reading arrives only after a request has started.
+- Usage and notional list-price cost (`costBasis: list`) are reported per run for
+  receipts. List price is not a subscription charge.
 
 ## Phase 1: supervised Claude ModelPort
 
