@@ -7,6 +7,7 @@ import type {
   CodingProposal,
   ReviewResult,
 } from "./contracts.js";
+import { CLAUDE_PHASE_MODELS } from "./routing-profile.js";
 export const sha256 = (value: string | Uint8Array): string =>
   createHash("sha256").update(value).digest("hex");
 export function object(
@@ -100,6 +101,7 @@ export function task(raw: unknown): LiveTask {
     "maxOutputBytes",
     "maxRuntimeMs",
     "draftPr",
+    "provider",
   ]);
   if (raw.schemaVersion !== 1 || typeof raw.draftPr !== "boolean")
     throw new Error("Invalid task version/preferences");
@@ -112,6 +114,11 @@ export function task(raw: unknown): LiveTask {
     !/^[a-zA-Z0-9._-]+$/.test(raw.model) ||
     !["low", "medium", "high"].includes(String(raw.effort))
   )
+    throw new Error("Invalid model routing");
+  if (raw.provider !== undefined && raw.provider !== "openai" && raw.provider !== "anthropic")
+    throw new Error("Invalid provider");
+  // Claude phase models are owner-fixed; the task names only the reviewed coding model.
+  if ((raw.provider === "anthropic") !== (raw.model === CLAUDE_PHASE_MODELS.coding) || /^claude-/.test(raw.model) && raw.provider !== "anthropic")
     throw new Error("Invalid model routing");
   for (const key of ["readPaths", "writePaths"] as const) {
     const list = raw[key];

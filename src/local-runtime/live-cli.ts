@@ -12,6 +12,7 @@ import { runTask } from '../live-workflow/orchestrator.js';
 import { validateCommitAuthor } from '../live-workflow/repository.js';
 import { loadBrowserQaConfiguration } from '../live-workflow/browser-qa-command.js';
 import { pinFile } from '../host-enforcement/manifest.js';
+import { pinClaudeCli, openClaudeSubscriptionSession } from '../live-workflow/claude-session.js';
 
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:connect --connection /private/forgemind-account
@@ -23,6 +24,13 @@ const usage = `Supervised project coding with your ChatGPT plan (macOS):
     --state-root /private/runs --worktree-root /private/worktrees
     [--browser-qa-config /private/browser-qa.json]
     [--gh /canonical/gh --author-name "Repository owner" --author-email "owner@users.noreply.github.com"]
+  project:run --workspace /absolute/project --task /absolute/task.json --provider anthropic
+    --claude /canonical/claude-code-binary --claude-profile /private/claude-profile
+    --state-root /private/runs --worktree-root /private/worktrees
+
+Claude route (ADR-0014): sign in yourself first with
+  CLAUDE_CONFIG_DIR=/private/claude-profile claude auth login
+ForgeMind never reads that login. Planning uses Opus 5.5; coding and review use Sonnet 5.5.
 
 Connection prints a browser sign-in link; complete OpenAI authentication and consent yourself.
 Run remembers the owner's credits-off acknowledgement for the same account; billing-reset forgets it.
@@ -38,21 +46,28 @@ export function parseLiveArguments(argv: readonly string[]) {
   if (!['inspect', 'run', 'connect', 'auth-status', 'billing-reset'].includes(mode ?? '')) throw new Error('Expected inspect, run, connect, auth-status or billing-reset');
   const accountMode = ['connect', 'auth-status', 'billing-reset'].includes(mode!);
   const allowed = accountMode ? ['--connection'] :
-    ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email', '--browser-qa-config'] : [])];
+    ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email', '--browser-qa-config',
+      '--provider', '--claude', '--claude-profile'] : [])];
   const values: Record<string, string> = Object.create(null);
   for (let i = 0; i < raw.length; i += 2) {
     const key = raw[i]!, value = raw[i + 1];
-    const authorField = key === '--author-name' || key === '--author-email';
+    const textField = key === '--author-name' || key === '--author-email' || key === '--provider';
     if (!allowed.includes(key) || key in values || !value || value.startsWith('--') || /[\x00-\x1f\x7f]/.test(value) ||
-      !authorField && (!isAbsolute(value) || resolve(value) !== value)) throw new Error('Exact absolute paths and recognized options required');
+      !textField && (!isAbsolute(value) || resolve(value) !== value)) throw new Error('Exact absolute paths and recognized options required');
     values[key] = value;
   }
   for (const key of accountMode ? ['--connection'] : ['--workspace', ...(mode === 'run' ? ['--task'] : [])]) {
     if (!values[key]) throw new Error(`Required ${key}`);
   }
-  const live = ['--connection', '--codex', '--state-root', '--worktree-root'];
+  if (values['--provider'] && !['openai', 'anthropic'].includes(values['--provider']))
+    throw new Error('Provider must be openai or anthropic');
+  const claude = values['--provider'] === 'anthropic';
+  const live = claude ? ['--claude', '--claude-profile', '--state-root', '--worktree-root'] : ['--connection', '--codex', '--state-root', '--worktree-root'];
+  const other = claude ? ['--connection', '--codex'] : ['--claude', '--claude-profile'];
+  if (other.some(key => values[key])) throw new Error(claude ? 'Claude route does not accept connection or codex' : 'Claude options require --provider anthropic');
   if (mode === 'run' && live.some(key => values[key]) && !live.every(key => values[key]))
-    throw new Error('Connection, codex, state-root and worktree-root must be supplied together');
+    throw new Error(claude ? 'Claude, claude-profile, state-root and worktree-root must be supplied together'
+      : 'Connection, codex, state-root and worktree-root must be supplied together');
   if (values['--browser-qa-config'] && !live.every(key => values[key]))
     throw new Error('Browser QA config requires the complete connection tuple');
   const publication = ['--gh', '--author-name', '--author-email'];
@@ -90,18 +105,20 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   const browserQa = args['--browser-qa-config'] ? loadBrowserQaConfiguration(args['--browser-qa-config']!, root) : undefined;
   if (manifest.draftPr && !args['--gh'])
     throw new Error('Draft PR requires explicit publication --gh, --author-name and --author-email');
-  if (!args['--connection']) {
+  const claude = args['--provider'] === 'anthropic';
+  if ((manifest.provider === 'anthropic') !== claude) throw new Error('Task provider does not match the selected route');
+  if (!args[claude ? '--claude' : '--connection']) {
     output({ status: 'blocked', taskId: manifest.taskId, workspace: root, liveCodingEnabled: false,
       reason: LIVE_BLOCK_REASON, worktreeCreated: false, providerRequests: 0 });
     process.exitCode = 2; return;
   }
   if (process.platform !== 'darwin') throw new Error('Supervised live coding currently requires macOS');
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Supervised execution requires an owner terminal');
-  for (const key of ['--connection', '--state-root', '--worktree-root']) {
+  for (const key of [claude ? '--claude-profile' : '--connection', '--state-root', '--worktree-root']) {
     const path = args[key]!;
     if (!outside(root, path) || !outside(path, root)) throw new Error('Account, state and worktree directories must be separate from project source');
   }
-  if (realpathSync(args['--codex']!) !== args['--codex']) throw new Error('Canonical Codex executable required');
+  if (!claude && realpathSync(args['--codex']!) !== args['--codex']) throw new Error('Canonical Codex executable required');
   const publication = args['--gh'] ? (() => {
     const gh = pinFile(args['--gh']!);
     if (gh.path !== args['--gh'] || !(lstatSync(gh.path).mode & 0o111) || !/^\/[A-Za-z0-9_./-]+$/.test(gh.path))
@@ -112,20 +129,30 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   const inspected = inspectProject(root);
   if (inspected.repository.dirtyPaths.length) throw new Error('Source must be clean before task execution');
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
+  let claudeSession: { close(): void } | undefined;
   const controller = new AbortController(), abort = () => controller.abort();
   process.once('SIGINT', abort);
   try {
-    const session = await openChatGPTPlanSession(args['--connection']!, { isTTY: true, confirm: prompt => terminal.question(prompt, { signal: controller.signal }) });
+    const planSession = claude ? undefined
+      : await openChatGPTPlanSession(args['--connection']!, { isTTY: true, confirm: prompt => terminal.question(prompt, { signal: controller.signal }) });
+    const cli = claude ? pinClaudeCli(args['--claude']!) : undefined;
     const states = privateDirectory(args['--state-root']!), worktrees = privateDirectory(args['--worktree-root']!);
     const runDirectory = join(states, manifest.taskId + '-' + randomUUID());
     mkdirSync(runDirectory, { mode: 0o700 });
-    output(await runTask({ workspace: root, task: manifest, codexExecutable: args['--codex']!,
-      stateDirectory: runDirectory, worktreeDirectory: worktrees, planSession: session, signal: controller.signal,
+    const route = cli ? await (async () => {
+      const session = await openClaudeSubscriptionSession({ profileDirectory: args['--claude-profile']!, cli,
+        scratchRoot: runDirectory, separateFrom: [root, states, worktrees], signal: controller.signal });
+      claudeSession = session;
+      process.stderr.write(`Claude ${cli.version} signed in (${session.subscriptionType}); ForgeMind does not read the login.\n`);
+      return { claude: { cli, session } };
+    })() : { codexExecutable: args['--codex']!, planSession: planSession! };
+    output(await runTask({ workspace: root, task: manifest, ...route,
+      stateDirectory: runDirectory, worktreeDirectory: worktrees, signal: controller.signal,
       ...(publication ? { publication } : {}),
       ...(browserQa ? { browserQa } : {}),
       confirmPlan: async (_plan, digest) => (await terminal.question(`Approve plan ${digest}? Enter approve ${digest}: `, { signal: controller.signal })) === `approve ${digest}`,
       onProgress: message => process.stderr.write(message + '\n') }));
-  } finally { terminal.close(); process.removeListener('SIGINT', abort); }
+  } finally { claudeSession?.close(); terminal.close(); process.removeListener('SIGINT', abort); }
 }
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   liveMain().catch(error => {

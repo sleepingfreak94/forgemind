@@ -1,3 +1,8 @@
+import type { ModelPhase } from './contracts.js';
+/** Owner-fixed Claude routing (ADR-0014): Opus plans; Sonnet codes and reviews. Never task-selected. */
+export const CLAUDE_PHASE_MODELS: Readonly<Record<ModelPhase, string>> = Object.freeze({
+  plan: 'claude-opus-5-5', coding: 'claude-sonnet-5-5', review: 'claude-sonnet-5-5',
+});
 export type OwnerRole = 'coder' | 'debugger' | 'tester' | 'reviewer' | 'architect' | 'classifier' | 'weekly-summary';
 /** Policy preference, never an availability or billing authorization claim. */
 export function ownerRouting(role: OwnerRole, options: { highTried?: boolean; architecturePurpose?: string; hostQualified?: boolean } = {}) {

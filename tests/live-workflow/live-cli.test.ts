@@ -23,6 +23,18 @@ test('CLI accepts explicit connection tuple, never endpoint/token/approval bypas
   assert.throws(() => parseLiveArguments(['connect', '--connection', '/repo/../account']));
   assert.throws(() => parseLiveArguments(['inspect', '--workspace', '/repo', '--connection', '/account']));
 });
+test('Claude route tuple is all-or-none and excludes the ChatGPT connection options', () => {
+  const common = ['run', '--workspace', '/repo', '--task', '/task.json'];
+  const claude = ['--provider', 'anthropic', '--claude', '/claude', '--claude-profile', '/profile', '--state-root', '/runs', '--worktree-root', '/trees'];
+  const values = parseLiveArguments([...common, ...claude]).values;
+  assert.equal(values['--provider'], 'anthropic'); assert.equal(values['--claude-profile'], '/profile');
+  assert.throws(() => parseLiveArguments([...common, '--provider', 'anthropic', '--claude', '/claude']), /supplied together/);
+  assert.throws(() => parseLiveArguments([...common, ...claude, '--connection', '/account']), /does not accept connection/);
+  assert.throws(() => parseLiveArguments([...common, ...claude, '--codex', '/codex']), /does not accept connection/);
+  assert.throws(() => parseLiveArguments([...common, '--claude', '/claude', '--claude-profile', '/profile']), /require --provider anthropic/);
+  assert.throws(() => parseLiveArguments([...common, '--provider', 'bedrock']), /openai or anthropic/);
+  assert.throws(() => parseLiveArguments([...common, ...claude.slice(0, 2), '--claude', 'relative/claude']), /absolute paths/);
+});
 test('connection CLI refuses noninteractive authentication before any network or state access', () => {
   const executable = fileURLToPath(new URL('../../src/local-runtime/live-cli.js', import.meta.url));
   assert.throws(() => execFileSync(process.execPath, [executable, 'connect', '--connection', '/nonexistent/forgemind-test'],

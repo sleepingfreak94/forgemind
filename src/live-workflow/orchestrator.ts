@@ -6,6 +6,9 @@ import { defaultMemoryDirectory } from '../memory/location.js';
 import { databasePath } from '../memory/database.js';
 import { RunAuthority, privateDirectory } from './authority.js';
 import { NativeCodexModel } from './provider.js';
+import { NativeClaudeModel } from './claude-cli-model.js';
+import { assertClaudeSession, assertPinnedClaudeCli } from './claude-session.js';
+import type { ClaudeCli, ClaudeSubscriptionSession } from './claude-session.js';
 import { readSources, plan, review, sha256, task as validateTask } from './validation.js';
 import { planSchema, codingSchema, reviewSchema } from './contracts.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
@@ -43,7 +46,8 @@ export interface RunOptions {
   task: LiveTask;
   stateDirectory: string;
   worktreeDirectory: string;
-  codexExecutable: string;
+  /** Required for the ChatGPT/Codex route only. */
+  codexExecutable?: string;
   confirmPlan: (plan: unknown, digest: string) => Promise<boolean>;
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
@@ -59,6 +63,8 @@ export interface RunOptions {
   modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
   /** Authenticated owner-reviewed subscription route; never supplied by a task manifest. */
   planSession?: ChatGPTPlanSession;
+  /** Owner's Claude sign-in plus the pinned CLI (ADR-0014); never supplied by a task manifest. */
+  claude?: { cli: ClaudeCli; session: ClaudeSubscriptionSession };
 }
 async function executeFixtureTask(options: RunOptions, deadline: number): Promise<{
   status: string;
@@ -67,10 +73,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   prUrl?: string;
 }> {
   const task = validateTask(options.task);
-  if (!options.modelFactory && !options.planSession)
-    throw new Error(
-      'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
-    );
+  assertSingleRoute(options, task);
   const repo = discoverRepository(options.workspace),
     initial = sourceIdentity(repo.root);
   const directory = privateDirectory(options.stateDirectory);
@@ -161,13 +164,15 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     });
     const model =
       options.modelFactory?.(authority, currentSource) ??
-      new NativeCodexModel({
-        executable: options.codexExecutable,
-        task,
-        authority,
-        source: currentSource,
-        ...(options.planSession ? { planSession: options.planSession } : {}),
-      });
+      (options.claude
+        ? new NativeClaudeModel({ cli: options.claude.cli, task, authority, source: currentSource, session: options.claude.session })
+        : new NativeCodexModel({
+            executable: options.codexExecutable!,
+            task,
+            authority,
+            source: currentSource,
+            ...(options.planSession ? { planSession: options.planSession } : {}),
+          }));
     const sources = readSources(
       activeRoot,
       [...new Set([...task.readPaths, ...task.writePaths])],
@@ -186,6 +191,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         },
         planSchema,
         signal,
+        'plan',
       ),
       task.writePaths,
     );
@@ -270,6 +276,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       { task, plan: generated, sources, memory: context ?? null, beforeChecks },
       codingSchema,
       signal,
+      'coding',
     );
     currentSource();
     memory?.assertCurrent(context!);
@@ -302,7 +309,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     currentSource();
     const browserQaReports = browserQa?.assertCurrent();
     browserQaReady = !!browserQa;
-    progress('Running independent review in a fresh Codex invocation');
+    progress(`Running independent review in a fresh ${options.claude ? 'Claude' : 'Codex'} invocation`);
     const verdict = review(
       await model.complete(
         'You are the independent reviewer. You did not implement this candidate. Assess correctness, regressions, security, maintainability, policy and evidence. Return pass only if criteria are met; do not repair files. Report blocking findings as revise/blocked.',
@@ -324,6 +331,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
         },
         reviewSchema,
         signal,
+        'review',
       ),
     );
     save('review.json', { ...verdict, source: current });
@@ -428,16 +436,28 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   }
 }
 
-export async function runTask(options: RunOptions) {
-  const task = validateTask(options.task);
-  if (!options.modelFactory && !options.planSession)
+/** Exactly one of fixture, ChatGPT or Claude routes; the task provider must match a production route. */
+function assertSingleRoute(options: RunOptions, task: LiveTask): void {
+  const routes = [options.modelFactory, options.planSession, options.claude].filter(Boolean).length;
+  if (!routes)
     throw new Error(
       'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
     );
+  if (routes > 1) throw new Error('Production and fixture dependencies cannot be combined');
   if (options.planSession) {
     assertChatGPTPlanSession(options.planSession);
-    if (options.modelFactory) throw new Error('Production and fixture dependencies cannot be combined');
+    if (task.provider === 'anthropic') throw new Error('Task provider does not match the ChatGPT route');
+    if (!options.codexExecutable) throw new Error('Codex executable required for the ChatGPT route');
   }
+  if (options.claude) {
+    assertClaudeSession(options.claude.session);
+    assertPinnedClaudeCli(options.claude.cli);
+    if (task.provider !== 'anthropic') throw new Error('Task provider does not match the Claude route');
+  }
+}
+export async function runTask(options: RunOptions) {
+  const task = validateTask(options.task);
+  assertSingleRoute(options, task);
   const signal = options.signal
     ? AbortSignal.any([options.signal, AbortSignal.timeout(task.maxRuntimeMs)])
     : AbortSignal.timeout(task.maxRuntimeMs);
