@@ -16,13 +16,11 @@ export interface CheckResult {
 const subpath = (path: string) => `(subpath ${JSON.stringify(path)})`;
 const literal = (path: string) => `(literal ${JSON.stringify(path)})`;
 function checkProfile(root: string, scratch: string, executable: string, files: string[], nodeModules?: string): string {
-  // single-process: no fork, so the command must use e.g. Node --test-isolation=none.
-  // node-project (ADR-0015): fork, exec of the pinned Node runtime and of owner-installed tools inside the
-  // read-only node_modules (for example the native TypeScript compiler); nothing the check can write is executable.
+  // No profile allows fork: the command is the only process, so nothing can outlive the supervisor's reap.
+  // Tests use e.g. Node --test-isolation=none. node-project (ADR-0015) adds read-only node_modules.
   return [
     '(version 1)', '(deny default)',
-    `(allow process-exec ${literal(executable)}${nodeModules ? ' ' + subpath(nodeModules) : ''})`,
-    ...(nodeModules ? ['(allow process-fork)', '(allow signal (target same-sandbox))'] : []),
+    `(allow process-exec ${literal(executable)})`,
     '(allow process-info* (target same-sandbox))', '(allow sysctl-read)', '(allow file-read-metadata)',
     `(allow file-read* (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (literal "/dev/null") ${subpath(root)} ${subpath(scratch)}${nodeModules ? ' ' + subpath(nodeModules) : ''} ${files.map(literal).join(' ')})`,
     `(deny file-read* ${subpath(join(root, '.git'))} ${subpath(join(root, '.codex'))} (regex #"(^|/)\\.env($|\\.)"))`,
@@ -73,7 +71,9 @@ export async function runChecks(
       }
       const executable = realpathSync(command.executable),
         files = runtimeFiles(executable);
-      if (node && executable !== runtime!.node) throw new Error('node-project checks must run the pinned Node runtime');
+      // Either the pinned Node runtime or an owner-installed tool such as the native TypeScript compiler.
+    if (node && executable !== runtime!.node && !executable.startsWith(runtime!.nodeModules + '/'))
+      throw new Error('node-project checks must run the pinned Node runtime or a tool inside the selected node_modules');
       let scratch: string;
       if (node && shared) scratch = shared;
       else {

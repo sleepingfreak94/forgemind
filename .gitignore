@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 .askme-harness/
 .DS_Store

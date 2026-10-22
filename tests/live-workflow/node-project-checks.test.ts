@@ -13,11 +13,15 @@ import type { CheckCommand, LiveTask } from '../../src/live-workflow/contracts.j
 
 const repo = realpathSync(fileURLToPath(new URL('../../..', import.meta.url)));
 const node = realpathSync(process.execPath);
+const nativeTsc = join(repo, 'node_modules', '@typescript', `typescript-${process.platform}-${process.arch}`, 'lib', 'tsc');
 const darwin = { skip: process.platform !== 'darwin' || process.env.FORGEMIND_NESTED_SANDBOX === '1', timeout: 120000 };
 const authority = { reserve: (_: unknown) => ({ check() {}, finish() {} }) };
-const nodeCheck = (id: string, args: string[]): CheckCommand => ({ id, executable: node, profile: 'node-project', timeoutMs: 60000, args });
+const nodeCheck = (id: string, args: string[], executable = node): CheckCommand => ({ id, executable, profile: 'node-project', timeoutMs: 60000, args });
+/** Passes only when `body` fails with a sandbox denial (EPERM/EACCES), not any other error. */
+const denied = (id: string, body: string) => nodeCheck(id, ['-e',
+  `const done=e=>process.exit(e&&(e.code==='EPERM'||e.code==='EACCES')?0:(console.error(e&&e.code),2));try{${body}}catch(e){done(e)}`]);
 
-function fixture(ignore = '/node_modules\n') {
+function fixture(ignore = '/node_modules\n.env\n') {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fm-node-project-'))), root = join(dir, 'project'), scratch = join(dir, 'scratch');
   mkdirSync(join(root, 'src'), { recursive: true }); mkdirSync(scratch);
   copyFileSync(join(repo, 'package-lock.json'), join(root, 'package-lock.json'));
@@ -27,55 +31,87 @@ function fixture(ignore = '/node_modules\n') {
   writeFileSync(join(root, '.gitignore'), ignore);
   const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=F', '-c', 'user.email=f@example.invalid', ...args], { cwd: root });
   git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
+  if (ignore.includes('.env')) writeFileSync(join(root, '.env'), 'SECRET=x\n');
   return { dir, root, scratch, runtime: nodeProjectRuntime(join(repo, 'node_modules')), close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 const signal = () => AbortSignal.timeout(110000);
+const run = (f: ReturnType<typeof fixture>, commands: CheckCommand[], runtime: CheckRuntime | undefined = f.runtime, abort = signal()) =>
+  runChecks(f.root, 'source', commands, f.scratch, authority as never, abort, runtime);
 
-test('a node-project phase builds TypeScript and runs its tests in one shared scratch, leaving source untouched', darwin, async () => {
+test('a node-project phase builds with the native compiler and tests in one process, leaving source untouched', darwin, async () => {
   const f = fixture();
   try {
-    const results = await runChecks(f.root, 'source', [
-      nodeCheck('build', ['{nodeModules}/typescript/bin/tsc', '--outDir', '{scratch}/out', '--module', 'nodenext', '--target', 'es2022',
-        '--typeRoots', '{nodeModules}/@types', '--types', 'node', 'src/value.ts', 'src/value.test.ts']),
-      nodeCheck('test', ['--test', '{scratch}/out/value.test.js']),
+    const results = await run(f, [
+      nodeCheck('build', ['--outDir', '{scratch}/out', '--module', 'nodenext', '--target', 'es2022',
+        '--typeRoots', '{nodeModules}/@types', '--types', 'node', 'src/value.ts', 'src/value.test.ts'], nativeTsc),
+      nodeCheck('test', ['--test', '--test-isolation=none', '{scratch}/out/value.test.js']),
       nodeCheck('nested-flag', ['-e', "process.exit(process.env.FORGEMIND_NESTED_SANDBOX === '1' ? 0 : 1)"]),
-    ], f.scratch, authority as never, signal(), f.runtime);
+    ]);
     assert.deepEqual(results.map(r => [r.id, r.passed]), [['build', true], ['test', true], ['nested-flag', true]], JSON.stringify(results));
-    assert.match(results[1]!.stdout, /pass 1/);
     assert.equal(results[0]!.stdout, '', 'TypeScript reported no diagnostics');
-    assert.deepEqual(readdirSync(f.root).sort(), ['.git', '.gitignore', 'package-lock.json', 'src'], 'source untouched and the node_modules link removed');
+    assert.match(results[1]!.stdout, /pass 1/);
+    assert.deepEqual(readdirSync(f.root).sort(), ['.env', '.git', '.gitignore', 'package-lock.json', 'src'], 'source untouched and the node_modules link removed');
     assert.equal(readdirSync(f.scratch).length, 1, 'one shared scratch for the phase');
   } finally { f.close(); }
 });
 
-test('node-project checks still deny shells, scratch executables, network and source writes', darwin, async () => {
+test('node-project checks cannot start processes, reach the network, write outside scratch or read secrets', darwin, async () => {
   const f = fixture();
   try {
-    const probes: [string, string][] = [
-      ['shell', "try{require('child_process').execFileSync('/bin/sh',['-c','true']);process.exit(1)}catch{process.exit(0)}"],
-      ['scratch-binary', "const fs=require('fs'),p=process.env.TMPDIR+'/node-copy';fs.copyFileSync(process.execPath,p);fs.chmodSync(p,0o755);" +
-        "try{require('child_process').execFileSync(p,['-e','0']);process.exit(1)}catch(e){process.exit(e.code==='EPERM'||e.code==='EACCES'?0:2)}"],
-      ['network', "require('net').connect(443,'1.1.1.1').on('connect',()=>process.exit(1)).on('error',()=>process.exit(0))"],
-      ['source-write', "try{require('fs').writeFileSync('src/injected.ts','x');process.exit(1)}catch{process.exit(0)}"],
-      ['node-modules-write', `try{require('fs').writeFileSync(${JSON.stringify(join(repo, 'node_modules', '.fm-probe'))},'x');process.exit(1)}catch{process.exit(0)}`],
-    ];
-    const results = await runChecks(f.root, 'source', probes.map(([id, code]) => nodeCheck(id, ['-e', code])), f.scratch, authority as never, signal(), f.runtime);
-    assert.deepEqual(results.filter(r => !r.passed).map(r => r.id), [], JSON.stringify(results));
+    const results = await run(f, [
+      denied('shell', "require('child_process').execFileSync('/bin/sh',['-c','true'])"),
+      denied('node-child', "require('child_process').execFileSync(process.execPath,['-e','0'])"),
+      denied('detached-child', "require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}).on('error',done).on('spawn',()=>process.exit(1))"),
+      denied('network', "require('net').connect(443,'1.1.1.1').on('error',done).on('connect',()=>process.exit(1))"),
+      denied('source-write', "require('fs').writeFileSync('src/injected.ts','x')"),
+      denied('node-modules-write', `require('fs').writeFileSync(${JSON.stringify(join(repo, 'node_modules', '.fm-probe'))},'x')`),
+      denied('linked-node-modules-write', "require('fs').writeFileSync(process.env.HOME+'/node_modules/.fm-probe','x')"),
+      denied('git-read', "require('fs').readFileSync('.git/HEAD')"),
+      denied('env-read', "require('fs').readFileSync('.env')"),
+    ]);
+    assert.deepEqual(results.filter(r => !r.passed).map(r => [r.id, r.stderr.trim().slice(0, 80)]), [], JSON.stringify(results));
     assert.equal(existsSync(join(f.root, 'src/injected.ts')), false);
     assert.equal(existsSync(join(repo, 'node_modules', '.fm-probe')), false);
+  } finally { f.close(); }
+});
+
+test('single-process checks interleave without node_modules access and the shared scratch survives them', darwin, async () => {
+  const f = fixture();
+  try {
+    const single: CheckCommand = { id: 'single', executable: node, timeoutMs: 60000,
+      args: ['-e', `try{require('fs').readFileSync(${JSON.stringify(join(repo, 'node_modules', 'typescript', 'package.json'))});process.exit(1)}catch(e){process.exit(e.code==='EPERM'?0:2)}`] };
+    const results = await run(f, [
+      nodeCheck('mark', ['-e', "require('fs').writeFileSync(process.argv[1],'x')", '{scratch}/marker']),
+      single,
+      nodeCheck('read-mark', ['-e', "require('fs').readFileSync(process.argv[1])", '{scratch}/marker']),
+    ]);
+    assert.deepEqual(results.map(r => [r.id, r.passed]), [['mark', true], ['single', true], ['read-mark', true]], JSON.stringify(results));
+    assert.equal(readdirSync(f.scratch).length, 2, 'the single-process check had its own scratch');
+  } finally { f.close(); }
+});
+
+test('the worktree link is removed after a failing or aborted check', darwin, async () => {
+  const f = fixture();
+  try {
+    const [failed] = await run(f, [nodeCheck('fail', ['-e', 'process.exit(1)'])]);
+    assert.equal(failed!.passed, false);
+    assert.equal(existsSync(join(f.root, 'node_modules')), false);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 500);
+    await assert.rejects(run(f, [nodeCheck('hang', ['-e', 'setInterval(()=>{},1000)'])], f.runtime, controller.signal));
+    assert.equal(existsSync(join(f.root, 'node_modules')), false);
   } finally { f.close(); }
 });
 
 test('node-project checks are refused without a genuine, matching runtime or with another executable', darwin, async () => {
   const f = fixture();
   try {
-    const run = (commands: CheckCommand[], runtime?: CheckRuntime) => runChecks(f.root, 'source', commands, f.scratch, authority as never, signal(), runtime);
     const probe = nodeCheck('probe', ['-e', '0']);
-    await assert.rejects(run([probe]), /require an owner-selected --node-modules/);
-    await assert.rejects(run([probe], { ...f.runtime }), /Untrusted check runtime/);
-    await assert.rejects(run([{ ...probe, executable: '/bin/echo' }], f.runtime), /pinned Node runtime/);
+    await assert.rejects(runChecks(f.root, 'source', [probe], f.scratch, authority as never, signal()), /require an owner-selected --node-modules/);
+    await assert.rejects(run(f, [probe], { ...f.runtime }), /Untrusted check runtime/);
+    await assert.rejects(run(f, [{ ...probe, executable: '/bin/echo' }]), /pinned Node runtime or a tool inside/);
     writeFileSync(join(f.root, 'package-lock.json'), '{}');
-    await assert.rejects(run([probe], f.runtime), /does not match the selected node_modules/);
+    await assert.rejects(run(f, [probe]), /does not match the selected node_modules/);
     assert.throws(() => nodeProjectRuntime(repo + '/node_modules/../node_modules'), /Canonical node_modules/);
     assert.throws(() => nodeProjectRuntime(join(repo, 'src')), /Canonical node_modules/);
   } finally { f.close(); }
@@ -84,15 +120,13 @@ test('node-project checks are refused without a genuine, matching runtime or wit
 test('the node_modules link must be ignored and must not replace a different node_modules', darwin, async () => {
   const unignored = fixture('');
   try {
-    await assert.rejects(runChecks(unignored.root, 'source', [nodeCheck('probe', ['-e', '0'])], unignored.scratch, authority as never, signal(),
-      unignored.runtime), /would change source identity/);
+    await assert.rejects(run(unignored, [nodeCheck('probe', ['-e', '0'])]), /would change source identity/);
     assert.equal(existsSync(join(unignored.root, 'node_modules')), false, 'refused link is removed');
   } finally { unignored.close(); }
   const foreign = fixture();
   try {
     mkdirSync(join(foreign.root, 'node_modules'));
-    await assert.rejects(runChecks(foreign.root, 'source', [nodeCheck('probe', ['-e', '0'])], foreign.scratch, authority as never, signal(),
-      foreign.runtime), /not the selected node_modules/);
+    await assert.rejects(run(foreign, [nodeCheck('probe', ['-e', '0'])]), /not the selected node_modules/);
   } finally { foreign.close(); }
 });
 

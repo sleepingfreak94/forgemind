@@ -211,7 +211,7 @@ Validation included 77 focused browser-QA checks, 112 portable regressions and 1
 - Verify real OAuth sign-in, credit-disabled inference and quota-exhaustion behavior; local-transport conformance is not live-provider evidence.
 - Node projects can opt into the reviewed `node-project` check profile ([ADR-0015](adr/ADR-0015-node-project-checks.md)):
   - Set `"profile": "node-project"` on a check and pass `--node-modules /canonical/project/node_modules`.
-  - Checks may fork, exec the pinned Node and owner-installed tools inside the read-only `node_modules`, and build into a shared phase scratch through `{scratch}` and `{nodeModules}`.
+  - Checks run the pinned Node or a tool inside the read-only `node_modules`, such as the native `tsc` binary, with no fork. They build into a shared phase scratch through `{scratch}` and `{nodeModules}`, and tests run with `--test-isolation=none`.
   - The package lock must match the worktree's.
   - Tests that start their own `sandbox-exec` cannot nest and still need host verification.
   - npm itself, PHP workers, Docker/Compose and network-dependent checks remain unavailable.

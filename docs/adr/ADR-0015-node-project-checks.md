@@ -1,6 +1,6 @@
 # ADR-0015: Reviewed node-project check profile
 
-- Status: Accepted; implementation in progress on `task/node-project-checks`
+- Status: Accepted; implemented
 - Date: 2026-10-22
 - Basis: owner decision to let harness checks run real builds and tests while model-written code stays sandboxed
 
@@ -16,7 +16,10 @@ Running checks outside Seatbelt would execute model-written code with the owner'
 
 Add an owner-selected `node-project` check profile alongside the existing behaviour (`single-process`, the default):
 
-- The executable must be the host's pinned Node runtime. The check may fork, and may exec only that runtime and files inside the selected read-only `node_modules` (owner-installed tools such as the native TypeScript compiler, which `tsc` launches as a platform binary). Nothing the check can write is executable, and no shell, `npm`, `git` or other system tool is allowed.
+- The executable must be the host's pinned Node runtime or an executable file inside the selected `node_modules`, such as the native TypeScript compiler (`@typescript/typescript-<platform>-<arch>/lib/tsc`).
+  - **No profile allows `process-fork`.** The check is a single process, so no child can detach into a new session and outlive the supervisor's process-group reap.
+  - Tests therefore run in one process, for example `node --test --test-isolation=none`, and the `tsc` JavaScript shim, which spawns the native compiler, cannot be used.
+  - Nothing the check can write is executable, and no shell, `npm`, `git` or other tool is allowed.
 - The owner enables the profile per run with an explicit `--node-modules /canonical/path/node_modules` on `project:run`. Task manifests and model output cannot supply it. Without it, `node-project` checks are refused before any worktree is created.
 - `node_modules` is read-only to the check. The host requires the `package-lock.json` beside it to be byte-identical to the worktree's, and records the lockfile hash and directory identity in the command receipt. Package contents are not hashed; that residual is disclosed.
 - All `node-project` checks in one phase share a single private scratch directory, in manifest order, so a build check can be followed by a test check. Arguments may use the literal placeholders `{scratch}` and `{nodeModules}`, which the host substitutes with canonical paths. Other checks may not use them.
@@ -31,5 +34,6 @@ Add an owner-selected `node-project` check profile alongside the existing behavi
 
 - Harness checks can run the TypeScript build, type check and tests that do not nest a sandbox, so most candidate verification happens inside the run.
 - Tests that start `sandbox-exec` (Seatbelt, native executor and fake Claude CLI tests) still need host verification after the run. This is a macOS limit, not a policy choice.
-- A child process may exhaust the check's own timeout and output bounds, which are unchanged; the supervisor still reaps the whole process tree.
+- Tests that spawn helper processes (other CLIs, `git`, test isolation) cannot run inside a check.
+- Fork was considered and removed. A check could detach a grandchild with `{detached: true}` (setsid), which leaves the process group the supervisor kills; it was reproduced surviving cleanup. macOS offers no unprivileged way to tie such a process back to the check's sandbox.
 - `node_modules` is trusted owner-installed code, as it is for the host build.
