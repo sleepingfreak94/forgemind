@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCursorStream } from '../../src/live-workflow/cursor-stream.js';
-import { assertCursorSession, cursorBuildManifest, cursorProfile, openCursorSubscriptionSession, pinCursorCli, pinCursorConformanceCli }
+import { CURSOR_DENY_ALL, lockCursorPermissions, assertCursorSession, cursorBuildManifest, cursorProfile, openCursorSubscriptionSession, pinCursorCli, pinCursorConformanceCli }
   from '../../src/live-workflow/cursor-session.js';
 import type { CursorCli, CursorRunner } from '../../src/live-workflow/cursor-session.js';
 import { NativeCursorModel } from '../../src/live-workflow/cursor-cli-model.js';
@@ -110,6 +110,63 @@ test('launch re-verifies the pinned build and the profile denies fork, Keychain 
     assert.throws(() => session.launch(other, f.scratch, [], '', { timeoutMs: 1, maxOutputBytes: 1 }, signal, () => {}), /differs from the session/);
     appendFileSync(join(f.build, 'index.js'), '//changed');
     assert.throws(() => session.launch(f.cli, f.scratch, [], '', { timeoutMs: 1, maxOutputBytes: 1 }, signal, () => {}), /changed since it was pinned/);
+  } finally { f.close(); }
+});
+
+const lockedProfile = { version: 1, editor: { vimMode: false }, approvalMode: 'allowlist', permissions: { allow: [], deny: [...CURSOR_DENY_ALL] } };
+const lockedWork = { permissions: { allow: [], deny: [...CURSOR_DENY_ALL] } };
+const launchIn = (f: ReturnType<typeof fixture>, session: Awaited<ReturnType<typeof open>>, name = 'call') =>
+  session.launch(f.cli, join(f.scratch, name), ['-p'], '', { timeoutMs: 1000, maxOutputBytes: 1000 }, new AbortController().signal, () => {});
+
+test('launch writes both lock files with exactly CURSOR_DENY_ALL', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free');
+    launchIn(f, session);
+    const profileConfig = join(f.profile, '.cursor', 'cli-config.json'), workConfig = join(f.scratch, 'call', 'work', '.cursor', 'cli.json');
+    assert.deepEqual(JSON.parse(readFileSync(profileConfig, 'utf8')), lockedProfile);
+    assert.deepEqual(JSON.parse(readFileSync(workConfig, 'utf8')), lockedWork);
+    for (const file of [profileConfig, workConfig]) assert.equal(lstatSync(file).mode & 0o777, 0o600);
+    for (const dir of [join(f.profile, '.cursor'), join(f.scratch, 'call', 'work', '.cursor')]) {
+      assert.ok(lstatSync(dir).isDirectory()); assert.equal(lstatSync(dir).mode & 0o777, 0o700);
+    }
+    assert.ok(Object.isFrozen(CURSOR_DENY_ALL));
+    assert.deepEqual([...CURSOR_DENY_ALL], ['Read(**)', 'Read(/**)', 'Write(**)', 'Write(/**)', 'Shell(*)', 'WebFetch(*)', 'Mcp(*:*)']);
+  } finally { f.close(); }
+});
+
+test('a tampered profile config that allows reads is replaced', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), file = join(f.profile, '.cursor', 'cli-config.json');
+    writeFileSync(file, JSON.stringify({ version: 1, approvalMode: 'auto', permissions: { allow: ['Read(**)'], deny: [] } }));
+    launchIn(f, session);
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), lockedProfile);
+  } finally { f.close(); }
+});
+
+test('a symlinked cli-config.json is replaced without changing its target', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), file = join(f.profile, '.cursor', 'cli-config.json'), target = join(f.root, 'target.json');
+    writeFileSync(target, 'original');
+    rmSync(file); symlinkSync(target, file);
+    launchIn(f, session);
+    assert.ok(lstatSync(file).isFile()); assert.ok(!lstatSync(file).isSymbolicLink());
+    assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), lockedProfile);
+    assert.equal(readFileSync(target, 'utf8'), 'original');
+  } finally { f.close(); }
+});
+
+test('a symlinked profile .cursor is refused', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), dir = join(f.profile, '.cursor'), elsewhere = mkdtempSync(join(f.root, 'else-'));
+    rmSync(dir, { recursive: true }); symlinkSync(elsewhere, dir);
+    assert.throws(() => launchIn(f, session), /\.cursor/);
+    assert.ok(!existsSync(join(elsewhere, 'cli-config.json')));
+    await assert.rejects(open(f, 'Free'), /\.cursor/);
+    assert.throws(() => lockCursorPermissions(f.profile, join(f.scratch, 'x')), /\.cursor/);
   } finally { f.close(); }
 });
 

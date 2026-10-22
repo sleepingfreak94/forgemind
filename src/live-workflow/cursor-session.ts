@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
-import { homedir, userInfo } from 'node:os';
+import { homedir } from 'node:os';
 import { supervised } from './process.js';
 import type { ProcessRequest } from './process.js';
 
@@ -62,6 +62,38 @@ export function assertPinnedCursorCli(cli: unknown): asserts cli is CursorCli {
   if (!cli || typeof cli !== 'object' || !pinned.has(cli as CursorCli)) throw new Error('Untrusted Cursor CLI pin');
 }
 
+/** Every Cursor model tool denied (file read and write, shell, web, MCP). In Cursor's permission model deny wins
+ * over allow, so this closes the ADR-0016 risk that ask mode's read tool can read the login in the profile. */
+export const CURSOR_DENY_ALL: readonly string[] = Object.freeze(
+  ['Read(**)', 'Read(/**)', 'Write(**)', 'Write(/**)', 'Shell(*)', 'WebFetch(*)', 'Mcp(*:*)']);
+
+function cursorConfigDirectory(parent: string): string {
+  const dir = join(parent, '.cursor');
+  let stat = lstatSync(dir, { throwIfNoEntry: false });
+  if (!stat) { mkdirSync(dir, { mode: 0o700 }); stat = lstatSync(dir); }
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.())
+    throw new Error(`Cursor ${dir} (.cursor) must be a real directory owned by the current user`);
+  return dir;
+}
+function replaceFile(dir: string, name: string, data: string): void {
+  const tmp = join(dir, `.${name}.${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    writeFileSync(tmp, data, { flag: 'wx', mode: 0o600 });
+    renameSync(tmp, join(dir, name));
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    throw error;
+  }
+}
+/** Write deny-all permission configs into the profile and work `.cursor` directories. The sandboxed CLI can write
+ * in its profile, so the host never follows links: directories must be real, files are replaced by rename. */
+export function lockCursorPermissions(profileDirectory: string, workDirectory: string): void {
+  const profileDir = cursorConfigDirectory(profileDirectory), workDir = cursorConfigDirectory(workDirectory);
+  replaceFile(profileDir, 'cli-config.json', JSON.stringify({ version: 1, editor: { vimMode: false }, approvalMode: 'allowlist',
+    permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
+  replaceFile(workDir, 'cli.json', JSON.stringify({ permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
+}
+
 /** Deny-default profile from Phase 0: no fork, no Keychain (file credential store), reads of the system
  * and the pinned build only, writes to per-call scratch and the owner's Cursor profile. */
 export function cursorProfile(cli: CursorCli, scratch: string, profileDirectory: string): string {
@@ -96,11 +128,12 @@ export class CursorSubscriptionSession {
     if (cursorBuildManifest(cli.directory) !== cli.manifestSha256) throw new Error('Cursor CLI changed since it was pinned');
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
+    lockCursorPermissions(state.profileDirectory, work);
     return {
       executable: cli.node, args: [cli.entry, ...args], dependencies: [cli.entry], cwd: work, input, signal, check, ...limits,
       profile: cursorProfile(cli, scratch, state.profileDirectory),
       env: {
-        PATH: '/usr/bin:/bin', HOME: state.profileDirectory, USER: userInfo().username, LANG: 'en_US.UTF-8',
+        PATH: '/usr/bin:/bin', HOME: state.profileDirectory, USER: process.env.USER || String(process.getuid?.() ?? ''), LANG: 'en_US.UTF-8',
         TMPDIR: tmp, AGENT_CLI_CREDENTIAL_STORE: 'file', NO_OPEN_BROWSER: '1',
       },
     };
