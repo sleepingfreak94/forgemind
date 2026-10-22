@@ -17,6 +17,7 @@ import {
   readSources,
   task,
 } from "../../src/live-workflow/validation.js";
+import { CLAUDE_PHASE_MODELS } from "../../src/live-workflow/routing-profile.js";
 test("exact path boundary rejects secrets traversal links and unauthorized model writes", () => {
   for (const p of [
     "../x",
@@ -114,4 +115,67 @@ test("check profiles and placeholders are validated", () => {
   const plain = task(manifest(baseCheck));
   assert.deepEqual(plain.checks[0], baseCheck);
   assert.equal("profile" in plain.checks[0]!, false);
+});
+test("coding mode and tool-call budget are validated", () => {
+  const common = {
+    schemaVersion: 1,
+    taskId: "coding-mode",
+    objective: "x",
+    readPaths: ["value.txt"],
+    writePaths: ["value.txt"],
+    checks: [
+      { id: "c", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+    ],
+    effort: "low",
+    maxModelRequests: 1,
+    maxPromptBytes: 1000,
+    maxOutputBytes: 1000,
+    maxRuntimeMs: 1000,
+    draftPr: false,
+  };
+  const anthropic = {
+    ...common,
+    provider: "anthropic",
+    model: CLAUDE_PHASE_MODELS.coding,
+  };
+  const openai = { ...common, model: "gpt-test" };
+  assert.equal("codingMode" in task(anthropic), false);
+  assert.equal(task({ ...openai, codingMode: "single-call" }).codingMode, "single-call");
+  assert.equal(task({ ...anthropic, codingMode: "single-call" }).codingMode, "single-call");
+  for (const n of [1, 64]) {
+    const r = task({ ...anthropic, codingMode: "tools", maxToolCalls: n });
+    assert.equal(r.codingMode, "tools");
+    assert.equal(r.maxToolCalls, n);
+  }
+  for (const m of ["agent", null])
+    assert.throws(() => task({ ...anthropic, codingMode: m }), /Invalid coding mode/);
+  assert.throws(
+    () => task({ ...openai, codingMode: "tools", maxToolCalls: 8 }),
+    /Invalid coding mode/,
+  );
+  assert.throws(
+    () => task({ ...openai, provider: "openai", codingMode: "tools", maxToolCalls: 8 }),
+    /Invalid coding mode/,
+  );
+  assert.throws(
+    () => task({ ...anthropic, codingMode: "tools" }),
+    /Invalid tool-call budget/,
+  );
+  for (const n of [0, 65, 1.5, "8", -1])
+    assert.throws(
+      () => task({ ...anthropic, codingMode: "tools", maxToolCalls: n }),
+      /Invalid tool-call budget/,
+    );
+  assert.throws(
+    () => task({ ...anthropic, maxToolCalls: 8 }),
+    /Invalid tool-call budget/,
+  );
+  assert.throws(
+    () => task({ ...anthropic, codingMode: "single-call", maxToolCalls: 8 }),
+    /Invalid tool-call budget/,
+  );
+  assert.throws(
+    () => task({ ...anthropic, toolBudget: 8 }),
+    /Unexpected object fields/,
+  );
 });

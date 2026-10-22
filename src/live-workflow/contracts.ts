@@ -22,6 +22,10 @@ export interface LiveTask {
   draftPr: boolean;
   /** Omitted means the reviewed ChatGPT/Codex route. */
   provider?: "openai" | "anthropic";
+  /** Omitted means today's single structured coding call; "tools" selects the agentic tool-use coding session. */
+  codingMode?: "single-call" | "tools";
+  /** Host tool calls allowed in a tools-mode coding session. */
+  maxToolCalls?: number;
 }
 /** Pipeline stage of one model call; routes that pin a model per stage require it. */
 export type ModelPhase = "plan" | "coding" | "review";
