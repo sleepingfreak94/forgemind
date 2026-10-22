@@ -1,6 +1,6 @@
 # Cursor route plan
 
-Status: **plan; Phase 0 not started.** Branch `task/cursor-route`, based on `origin/main` at `b0bc462`. Goal: run the same supervised `project:run` workflow used with Claude (plan, code, review, checks, receipts, draft PR) through the owner's Cursor CLI, starting from the existing ACP adapter ([ADR-0011](adr/ADR-0011-cursor-acp-protocol-slice.md), [Cursor driver](cursor-driver.md)). A decision record (ADR-0016) follows Phase 0, as ADR-0014 did for Claude.
+Status: **Phase 0 complete (2026-10-23); live Grok 4.7 blocked on the Free plan.** Branch `task/cursor-route`, based on `origin/main` at `b0bc462`. Goal: run the same supervised `project:run` workflow used with Claude (plan, code, review, checks, receipts, draft PR) through the owner's Cursor CLI, starting from the existing ACP adapter ([ADR-0011](adr/ADR-0011-cursor-acp-protocol-slice.md), [Cursor driver](cursor-driver.md)). A decision record (ADR-0016) follows Phase 0, as ADR-0014 did for Claude.
 
 ## Owner decisions (2026-10-23)
 
@@ -36,18 +36,53 @@ Same rule as the Claude route: the owner signs in with Cursor's own `cursor-agen
 
 Expected cost: a handful of tiny calls on the Free plan.
 
+## Phase 0 findings (2026-10-23)
+
+Raw evidence stays local under `docs/artifacts/cursor-route/` (gitignored).
+
+1. **Terms.**
+   - Cursor's CLI docs describe print mode for "non-interactive scripting and automation" and document browser login and API keys for scripts.
+   - The [Terms of Service](https://cursor.com/terms-of-service) §1.5 forbid reverse engineering, scraping, resale, model extraction and training competing models, and letting third parties do so. §3 makes the account holder responsible for all activity.
+   - The owner's own account running the owner's tasks on the owner's machine is none of these. Nothing is decompiled: only the shell launcher, which is plain text, was read.
+2. **Profile isolation works.**
+   - `HOME=~/.forgemind/cursor-profile` together with `AGENT_CLI_CREDENTIAL_STORE=file` started out "Not logged in".
+   - The owner ran `cursor-agent login` into it. Status then reported signed in, Free tier.
+   - The credential is `<profile>/.cursor/auth.json`, mode 0600. ForgeMind never reads it.
+   - The owner's normal login is unaffected.
+   - With the file store the launcher skips the system-CA path, so no Keychain access is needed.
+3. **Direct launch.**
+   - The bundled `node` runs `index.js` directly, so no shell is needed.
+   - The version directory is about 623 MB; it holds native modules and worker binaries.
+   - The pin must cover the whole directory, not one file.
+4. **Sandboxed status, no inference.**
+   - `status`, `about` and `models` all work under a deny-default Seatbelt profile.
+   - The profile allows: no fork; reads of system paths and the version directory only; writes to scratch and the profile; `*:443` and DNS egress.
+   - `models` lists 265 entries, including `grok-4.7-high`.
+5. **One tiny call per transport, on `grok-4.7-high`.**
+   - **ACP:**
+     - It offers Grok 4.7 only as `grok-4.7[context=256k,reasoning_effort=high,fast=true]`; `fast=false` forms are rejected as invalid.
+     - On the Free plan it answered "Upgrade your plan to continue" as an ordinary agent message, with stop reason `end_turn` and no error. A plan limit is indistinguishable from an answer.
+   - **Print mode** (`-p --mode ask --trust --model grok-4.7-high --output-format stream-json`, sandboxed, cwd an empty scratch):
+     - It emitted an init event: `apiKeySource: "login"`, `model: "Grok 4.7 256K High"`, `permissionMode: "default"`.
+     - It then failed explicitly with exit 1: `ActionRequiredError: Named models unavailable Free plans can only use Auto.`
+     - `--trust` is required even in ask mode. It applies only to that scratch directory. `--force`/`--yolo` are never used.
+   - **Decision:** print mode. It fails explicitly, reports the model and the login source, and supports the non-fast model. The ACP adapter is not reused for this route.
+6. **Workspace exposure.** Inside the profile, reads of the project, `~/.ssh` and the owner's normal `~/.cursor` all fail with EPERM, and `/bin/sh` cannot be started. The agent sees only the prompt.
+
+**Blocker:** the Free plan allows only `Auto`, which this route refuses because it allows no model substitution. A live Grok 4.7 task needs a paid personal plan or the company seat.
+
 ## Phase 1: supervised Cursor ModelPort
 
 | Change | Files |
 |---|---|
 | Task `provider: "cursor"`; routing: plan/coding/review `grok-4.7-high` | `contracts.ts`, `validation.ts`, `routing-profile.ts` |
 | Owner session: dedicated profile, sandboxed status check, account tier | new `cursor-session.ts` |
-| `NativeCursorModel`: one pinned ACP process per call, ask mode, fixed model, JSON answer validated by the existing plan/coding/review validators, fail closed on anything else | new `cursor-cli-model.ts`, reusing `agent-drivers/cursor*.ts` |
+| `NativeCursorModel`: one pinned print-mode process per call (`-p --mode ask --trust` in scratch, `stream-json`), fixed model checked against the init event, JSON answer validated by the existing plan/coding/review validators, explicit plan-limit and other errors fail closed | new `cursor-cli-model.ts`, `cursor-stream.ts` |
 | Personal-plan guard: refuse workspaces outside an owner allowlist (ForgeMind and test repositories) | `cursor-session.ts`, `live-cli.ts` |
 | CLI: `project:run --provider cursor --cursor <pinned entry> --cursor-profile <dir>` and `probe:cursor` | `live-cli.ts`, new `cursor-probe.ts` |
 | Docs: ADR-0016 and a guide | `docs/` |
 
-Tests: replayed ACP streams for success, refusal, model mismatch, plan-limit errors, malformed JSON, timeout, cancellation and process-tree cleanup; the session and allowlist rules; an end-to-end `runTask` on the Cursor branch. Then one owner-authorized live task on a scratch repository, independent review and a draft PR, as for Claude.
+Tests: replayed print-mode streams (recorded in Phase 0) for success, refusal, model mismatch, plan-limit errors, malformed JSON, timeout, cancellation and process-tree cleanup; the session and allowlist rules; an end-to-end `runTask` on the Cursor branch. Then one owner-authorized live task on a scratch repository, independent review and a draft PR, as for Claude.
 
 ## Known limits (expected)
 
