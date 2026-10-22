@@ -69,7 +69,20 @@ Raw evidence stays local under `docs/artifacts/cursor-route/` (gitignored).
    - **Decision:** print mode. It fails explicitly, reports the model and the login source, and supports the non-fast model. The ACP adapter is not reused for this route.
 6. **Workspace exposure.** Inside the profile, reads of the project, `~/.ssh` and the owner's normal `~/.cursor` all fail with EPERM, and `/bin/sh` cannot be started. The agent sees only the prompt.
 
-**Blocker:** the Free plan allows only `Auto`, which this route refuses because it allows no model substitution. A live Grok 4.7 task needs a paid personal plan or the company seat.
+**Free plan:** only `Auto` works there. A live Grok 4.7 task needs a paid personal plan or the company seat.
+
+The owner chose an explicit, test-only Auto mode to prove the harness end to end now:
+- It is enabled by an owner flag, never by a task or model.
+- The model is recorded as `auto`.
+- Receipts are marked test-only.
+- Draft PRs are refused.
+
+One Auto print-mode call with the prompt on **stdin** succeeded. Its stream was:
+- `system/init` with model "Auto", `apiKeySource: "login"` and `permissionMode: "default"`;
+- `user`, then `assistant` text;
+- `result` with subtype `success`, `is_error: false`, the answer, and `usage` (input, output and cache tokens).
+
+**Retention:** the CLI keeps `chats`, `projects` and `acp-sessions` in the profile, and there is no ephemeral flag. Prompts, including source excerpts, therefore persist in the owner-only profile until removed.
 
 ## Phase 1: supervised Cursor ModelPort
 
