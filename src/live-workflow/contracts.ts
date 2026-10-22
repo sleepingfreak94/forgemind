@@ -60,6 +60,16 @@ export interface ReviewResult {
   findings: string[];
   acceptance: string[];
 }
+/** One tools-mode coding session (ADR-0014 Phase 2). The host owns every tool effect. */
+export interface ToolCodingRequest {
+  instructions: string;
+  input: unknown;
+  tools: readonly { name: string; description: string; inputSchema: object }[];
+  call(name: string, args: unknown): Promise<{ text: string; isError: boolean }>;
+  maxToolCalls: number;
+  /** Throws unless the tree still matches the host's tracked source. */
+  assertCurrent(): void;
+}
 export interface ModelPort {
   complete(
     instructions: string,
@@ -68,6 +78,8 @@ export interface ModelPort {
     signal: AbortSignal,
     phase?: ModelPhase,
   ): Promise<unknown>;
+  /** Only routes that can drive host tools implement this; others refuse tools coding mode. */
+  codeWithTools?(request: ToolCodingRequest, signal: AbortSignal): Promise<{ summary: string }>;
 }
 export interface ActionEnvelope {
   kind: string;

@@ -52,7 +52,9 @@ export function assertPinnedClaudeCli(cli: unknown): asserts cli is ClaudeCli {
  * /usr/bin/security; ForgeMind never reads it. Hostname egress filtering is unavailable.
  * The preference, cfprefs and logging reads are the system base the CLI needs to start;
  * only the Keychain additions were bisected, so the base is a disclosed residual (ADR-0014). */
-export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileDirectory: string, home: string, userCacheDirectory: string): string {
+export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileDirectory: string, home: string, userCacheDirectory: string,
+  mcpPort?: number): string {
+  if (mcpPort !== undefined && (!Number.isSafeInteger(mcpPort) || mcpPort < 1024 || mcpPort > 65535)) throw new Error('Invalid MCP port');
   const mds = join(userCacheDirectory, 'mds');
   return [
     '(version 1)', '(deny default)',
@@ -68,7 +70,8 @@ export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileD
       'com.apple.cfprefsd.agent', 'com.apple.cfprefsd.daemon', 'com.apple.system.notification_center', 'com.apple.logd', 'com.apple.diagnosticd']
       .map(name => `(global-name ${JSON.stringify(name)})`).join(' ') + ')',
     '(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))', '(allow user-preference-read)',
-    '(allow network-outbound (remote tcp "*:443") (remote udp "*:53") (literal "/private/var/run/mDNSResponder"))', '(allow system-socket)',
+    `(allow network-outbound (remote tcp "*:443") (remote udp "*:53") (literal "/private/var/run/mDNSResponder")${mcpPort ? ` (remote ip "localhost:${mcpPort}")` : ''})`,
+    '(allow system-socket)',
   ].join('\n');
 }
 
@@ -82,7 +85,7 @@ export class ClaudeSubscriptionSession {
   get subscriptionType(): string { return this.#state().subscriptionType; }
   /** Child launch for one invocation; the profile is shared, everything writable else is per-call scratch. */
   launch(cli: ClaudeCli, scratch: string, args: string[], input: string, limits: { timeoutMs: number; maxOutputBytes: number },
-    signal: AbortSignal, check: () => void): ProcessRequest {
+    signal: AbortSignal, check: () => void, mcpPort?: number): ProcessRequest {
     const state = this.#state();
     assertPinnedClaudeCli(cli);
     if (cli !== state.cli) throw new Error("Claude CLI differs from the session's pinned build");
@@ -90,7 +93,7 @@ export class ClaudeSubscriptionSession {
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
     return {
       executable: cli.path, executableSha256: cli.sha256, args, cwd: work, input, signal, check, ...limits,
-      profile: claudeInferenceProfile(cli, scratch, state.profileDirectory, state.home, state.userCacheDirectory),
+      profile: claudeInferenceProfile(cli, scratch, state.profileDirectory, state.home, state.userCacheDirectory, mcpPort),
       env: {
         PATH: '/usr/bin:/bin', HOME: state.home, USER: userInfo().username, LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
         TMPDIR: tmp, CLAUDE_CODE_TMPDIR: tmp, CLAUDE_CONFIG_DIR: state.profileDirectory,

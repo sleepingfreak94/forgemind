@@ -46,7 +46,7 @@ const rejections: [string, string, RegExp][] = [
     { name: 'cc-plugin-plugin-authoring', path: 'builtin' }, { name: 'cc-plugin-telemetry', path: 'builtin' }] } }), /configuration differs/],
   ['configured MCP server', claudeStream(sonnet, answer, { init: { mcp_servers: [{ name: 'x', status: 'connected' }] } }), /configuration differs/],
   ['profile skill', claudeStream(sonnet, answer, { init: { skills: ['deploy'] } }), /configuration differs/],
-  ['unreviewed agent', claudeStream(sonnet, answer, { init: { agents: ['claude', 'custom-agent'] } }), /configuration differs/],
+  ['unreviewed agent', claudeStream(sonnet, answer, { init: { agents: ['claude', 'custom-agent'] } }), /configuration differs from the reviewed profile \(agents\)/],
   ['permission mode', claudeStream(sonnet, answer, { init: { permissionMode: 'bypassPermissions' } }), /configuration differs/],
   ['API error status', claudeStream(sonnet, answer, { result: { api_error_status: 429 } }), /did not complete/],
   ['safety stop', claudeStream(sonnet, answer, { result: { safety_stops: 1 } }), /did not complete/],
@@ -66,6 +66,12 @@ test('thinking progress estimates are allowed only as numeric system events afte
   assert.throws(() => parseClaudeStream(textual, expected), /\(system thinking_tokens\)/);
   const fallback = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'model_fallback' }] });
   assert.throws(() => parseClaudeStream(fallback, expected), /\(system model_fallback\)/);
+});
+test('the built-in agent list without --safe-mode is reviewed', () => {
+  const agents = ['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup'];
+  assert.deepEqual(parseClaudeStream(claudeStream(sonnet, answer, { init: { agents } }), expected).output, answer);
+  assert.throws(() => parseClaudeStream(claudeStream(sonnet, answer, { init: { agents, skills: ['x'], permissionMode: 'plan' } }), expected),
+    /\(skills, permissionMode\)$/);
 });
 test('stream parser bounds usage and failure summaries carry status fields only', () => {
   const big = parseClaudeStream(claudeStream(sonnet, answer, { result: { usage: { pad: 'x'.repeat(5000) } } }), expected);
