@@ -196,13 +196,11 @@ effort `low` used `--tools ""`, `--strict-mcp-config`, an inline `--mcp-config` 
 Not done in Phase 1: Claude readiness in `doctor`/`project:inspect`, and an
 extra-usage acknowledgement (replaced by the observed overage gate).
 
-## Phase 2: Claude native route (pending)
+## Phase 2: Claude tools coding mode (implemented)
 
-Claude Code with built-in tools disabled and a ForgeMind MCP endpoint on
-`127.0.0.1`, run by the trusted host, exposing `host_read`, `host_apply`, `host_check`
-backed by existing `nativeTool` authority, checkpoints and receipts. Generalize
-`NativeTask.model` to a reviewed per-provider catalog; the native coding session uses
-`claude-sonnet-5-5`.
+Implemented as `"codingMode": "tools"` in `runTask` ([guide](claude-driver.md#tools-coding-mode)). One `claude-sonnet-5-5` session codes with Claude Code's built-in tools disabled. Its only tools are `host_read`, `host_apply` and `host_check`, served by a ForgeMind MCP endpoint on `127.0.0.1`. The host backs them with the supervised authority, edit validator, check runner and receipts.
+
+It does not use the Codex native executor (`nativeTool`/`NativeTask`), whose runner is bound to the ChatGPT session and Codex app-server. A per-provider native-executor catalog remains possible future work.
 
 ## Tests and acceptance
 
