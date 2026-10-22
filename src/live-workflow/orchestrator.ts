@@ -5,17 +5,14 @@ import { ProjectMemory } from '../memory/service.js';
 import { defaultMemoryDirectory } from '../memory/location.js';
 import { databasePath } from '../memory/database.js';
 import { RunAuthority, privateDirectory } from './authority.js';
-import { NativeCodexModel } from './provider.js';
-import { NativeClaudeModel } from './claude-cli-model.js';
-import { assertClaudeSession, assertPinnedClaudeCli } from './claude-session.js';
-import type { ClaudeCli, ClaudeSubscriptionSession } from './claude-session.js';
+import { assertSingleRoute, routeModel, routeName } from './routes.js';
+import type { RouteOptions } from './routes.js';
 import { readSources, plan, review, sha256, task as validateTask } from './validation.js';
 import { planSchema, codingSchema, reviewSchema } from './contracts.js';
 import type { LiveTask, ModelPort, ActionReceipt } from './contracts.js';
 import { applyEdits } from './edits.js';
 import { runChecks } from './checks.js';
 import { runToolCoding } from './coding-tools.js';
-import type { CheckRuntime } from './check-runtime.js';
 import {
   discoverRepository,
   createTaskWorktree,
@@ -31,8 +28,6 @@ import { prepareVideoDelivery, deliverReviewedVideo } from './video-delivery.js'
 import type { VideoDeliveryOptions, VideoDeliveryResult } from './video-delivery.js';
 import { recordEvidence, validateEvidencePair } from './evidence.js';
 import type { RecordingRequest, ProbeConfiguration, EvidenceManifest } from './evidence.js';
-import { assertChatGPTPlanSession } from './chatgpt-plan.js';
-import type { ChatGPTPlanSession } from './chatgpt-plan.js';
 import { BrowserQaHandoff } from './browser-qa.js';
 import type { BrowserQaSetup } from './browser-qa.js';
 import { AutomaticRunHistory } from './automatic-run-history.js';
@@ -43,32 +38,22 @@ export interface RecordingSetup {
   after: Omit<RecordingRequest, 'phase' | 'sourceIdentity' | 'baselineIdentity'>;
   probe: ProbeConfiguration;
 }
-export interface RunOptions {
+export interface RunOptions extends RouteOptions {
+  /** Trusted host publication inputs; never read from task/project/model data. */
+  publication?: PublishOptions & { author: CommitAuthor };
   workspace: string;
   task: LiveTask;
   stateDirectory: string;
   worktreeDirectory: string;
-  /** Required for the ChatGPT/Codex route only. */
-  codexExecutable?: string;
   confirmPlan: (plan: unknown, digest: string) => Promise<boolean>;
   onProgress?: (message: string) => void;
   recording?: RecordingSetup;
   /** Trusted host automatic handoff; configured adapters are mandatory for both phases. */
   browserQa?: BrowserQaSetup;
   videoDelivery?: Omit<VideoDeliveryOptions, 'authorize' | 'budget'>;
-  /** Trusted host publication inputs; never read from task/project/model data. */
-  publication?: PublishOptions & { author: CommitAuthor };
   /** Explicit trusted-host configuration for automatic receipt-backed history. */
   history?: AutomaticHistoryOptions;
   signal?: AbortSignal;
-  /** Dependency injection for conformance tests; CLI never accepts executable model plugins. */
-  modelFactory?: (authority: RunAuthority, source: () => string) => ModelPort;
-  /** Authenticated owner-reviewed subscription route; never supplied by a task manifest. */
-  planSession?: ChatGPTPlanSession;
-  /** Owner-selected node_modules for ADR-0015 node-project checks; never supplied by a task manifest. */
-  checkRuntime?: CheckRuntime;
-  /** Owner's Claude sign-in plus the pinned CLI (ADR-0014); never supplied by a task manifest. */
-  claude?: { cli: ClaudeCli; session: ClaudeSubscriptionSession };
 }
 async function executeFixtureTask(options: RunOptions, deadline: number): Promise<{
   status: string;
@@ -166,17 +151,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       branch: checkout.branch,
       base: checkout.baseHead,
     });
-    const model =
-      options.modelFactory?.(authority, currentSource) ??
-      (options.claude
-        ? new NativeClaudeModel({ cli: options.claude.cli, task, authority, source: currentSource, session: options.claude.session })
-        : new NativeCodexModel({
-            executable: options.codexExecutable!,
-            task,
-            authority,
-            source: currentSource,
-            ...(options.planSession ? { planSession: options.planSession } : {}),
-          }));
+    const model = routeModel(options, task, authority, currentSource);
     const sources = readSources(
       activeRoot,
       [...new Set([...task.readPaths, ...task.writePaths])],
@@ -324,7 +299,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     currentSource();
     const browserQaReports = browserQa?.assertCurrent();
     browserQaReady = !!browserQa;
-    progress(`Running independent review in a fresh ${options.claude ? 'Claude' : 'Codex'} invocation`);
+    progress(`Running independent review in a fresh ${routeName(options)} invocation`);
     const verdict = review(
       await model.complete(
         'You are the independent reviewer. You did not implement this candidate. Assess correctness, regressions, security, maintainability, policy and evidence. Return pass only if criteria are met; do not repair files. Report blocking findings as revise/blocked.',
@@ -451,27 +426,6 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   }
 }
 
-/** Exactly one of fixture, ChatGPT or Claude routes; the task provider must match a production route. */
-function assertSingleRoute(options: RunOptions, task: LiveTask): void {
-  const routes = [options.modelFactory, options.planSession, options.claude].filter(Boolean).length;
-  if (!routes)
-    throw new Error(
-      'Live requests blocked: subscription-only use is not enforceable. No worktree or provider request was created.',
-    );
-  if (routes > 1) throw new Error('Production and fixture dependencies cannot be combined');
-  if (options.planSession) {
-    assertChatGPTPlanSession(options.planSession);
-    if (task.provider === 'anthropic') throw new Error('Task provider does not match the ChatGPT route');
-    if (!options.codexExecutable) throw new Error('Codex executable required for the ChatGPT route');
-  }
-  if (options.claude) {
-    assertClaudeSession(options.claude.session);
-    assertPinnedClaudeCli(options.claude.cli);
-    if (task.provider !== 'anthropic') throw new Error('Task provider does not match the Claude route');
-  }
-  if (task.checks.some(c => c.profile === 'node-project') && !options.checkRuntime)
-    throw new Error('node-project checks require an owner-selected --node-modules');
-}
 export async function runTask(options: RunOptions) {
   const task = validateTask(options.task);
   assertSingleRoute(options, task);

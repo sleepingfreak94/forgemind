@@ -23,6 +23,7 @@
     "probe:codex": "npm run build && node dist/src/local-runtime/codex-probe.js",
     "probe:host": "npm run build && node dist/src/local-runtime/host-probe.js",
     "probe:claude": "npm run build && node dist/src/local-runtime/claude-probe.js",
+    "probe:cursor": "npm run build && node dist/src/local-runtime/cursor-probe.js",
     "project:inspect": "npm run build && node dist/src/local-runtime/live-cli.js inspect",
     "project:run": "npm run build && node dist/src/local-runtime/live-cli.js run",
     "project:connect": "npm run build && node dist/src/local-runtime/live-cli.js connect",
