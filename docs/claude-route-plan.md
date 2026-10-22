@@ -10,6 +10,9 @@ native owner CLI accept only the Codex/ChatGPT connection.
   CLI. No API-key fallback.
 - Refusals and unavailable models fail closed with a receipt. `--fallback-model`
   and server-side refusal fallbacks are never enabled.
+- Model routing (owner-fixed, not task-selectable): planning uses
+  `claude-opus-5-5`; coding and the fresh review use `claude-sonnet-5-5`. Effort
+  comes from the task. An unavailable model stops the phase; it is never replaced.
 
 ## Credential boundary (Phase 0 step 1 result)
 
@@ -62,7 +65,7 @@ ForgeMind stdio MCP server, with every built-in Claude Code tool disabled.
    default profile plus `--safe-mode`. ForgeMind must not read the credential.
 3. **Isolated invocation.** Verify with the pinned binary:
    `claude -p --output-format stream-json --verbose --json-schema <schema>
-   --model claude-opus-5-5 --effort <effort> --tools "" --strict-mcp-config
+   --model <phase model> --effort <effort> --tools "" --strict-mcp-config
    --mcp-config '{"mcpServers":{}}' --setting-sources "" --disable-slash-commands
    --no-session-persistence --permission-prompts none --system-prompt <text>`,
    input on stdin. Record where structured output appears, and the refusal,
@@ -133,7 +136,8 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
 
 | Change | Files |
 |---|---|
-| Task `provider: "openai" \| "anthropic"` (default `openai`); reviewed Claude model allowlist | `contracts.ts`, `validation.ts` |
+| Task `provider: "openai" \| "anthropic"` (default `openai`); for `anthropic` the per-phase models are fixed by the owner routing below, not by the task | `contracts.ts`, `validation.ts` |
+| Per-phase routing: plan → `claude-opus-5-5`; coding and review → `claude-sonnet-5-5`. The orchestrator currently shares one `ModelPort` across plan (`orchestrator.ts:178`), coding (`:268`) and review (`:307`); it must request a port per phase | `routing-profile.ts`, `orchestrator.ts` |
 | `NativeClaudeModel`: one pinned CLI process per call, schema output, bounded stdout/runtime, source-drift and cancellation checks, fail-closed refusals, receipts with observed usage | new `src/live-workflow/claude-cli-model.ts` |
 | Pin binary by realpath, exact `--version` and SHA-256 (currently `~/.local/share/claude/versions/2.1.308`) | `claude-cli-model.ts`, `host-enforcement/manifest.ts` |
 | Claude Seatbelt profile | `process.ts` |
@@ -147,7 +151,7 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
 Claude Code with built-in tools disabled and a ForgeMind stdio MCP server exposing
 `host_read`, `host_apply`, `host_check` backed by existing `nativeTool` authority,
 checkpoints and receipts. Generalize `NativeTask.model` to a reviewed per-provider
-catalog.
+catalog; the native coding session uses `claude-sonnet-5-5`.
 
 ## Tests and acceptance
 
