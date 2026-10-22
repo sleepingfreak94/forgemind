@@ -79,6 +79,21 @@ test('stream parser bounds usage and failure summaries carry status fields only'
   assert.deepEqual(claudeStreamShape(extra + 'nope\n').slice(4, 7), ['system/status', 'system/unlabelled', 'result/success']);
   assert.equal(claudeStreamShape(extra + 'nope\n').at(-1), 'invalid');
 });
+test('stream parser accepts only the expected connected MCP servers and counts host tool calls', () => {
+  const hostTools = ['mcp__forgemind__host_read', 'mcp__forgemind__host_apply', 'mcp__forgemind__host_check'];
+  const mcp = { ...expected, tools: ['StructuredOutput', ...hostTools], mcpServers: ['forgemind'] };
+  const connected = { name: 'forgemind', status: 'connected' };
+  const stream = (servers: unknown[]) => claudeStream(sonnet, answer, { init: { tools: mcp.tools, mcp_servers: servers } });
+  const calls = claudeStream(sonnet, answer, { init: { tools: mcp.tools, mcp_servers: [connected] }, extra: [{ type: 'assistant',
+    message: { content: hostTools.map((name, i) => ({ type: 'tool_use', id: `toolu_${i}`, name, input: {} })) } }] });
+  const parsed = parseClaudeStream(calls, mcp);
+  assert.deepEqual(parsed.output, answer);
+  assert.equal(parsed.toolCalls, 3);
+  for (const servers of [[{ name: 'forgemind', status: 'failed' }], [], [connected, { name: 'x', status: 'connected' }], ['forgemind']])
+    assert.throws(() => parseClaudeStream(stream(servers), mcp), /configuration differs/);
+  assert.throws(() => parseClaudeStream(claudeStream(sonnet, answer, { init: { mcp_servers: [connected] } }), expected), /configuration differs/);
+  assert.equal(parseClaudeStream(claudeStream(sonnet, answer), expected).toolCalls, 0);
+});
 test('stream parser requires an observed overage status', () => {
   const stream = claudeStream(sonnet, answer).split('\n').filter(line => !line.includes('rate_limit_event')).join('\n');
   assert.throws(() => parseClaudeStream(stream, expected), /overage status unavailable/);
