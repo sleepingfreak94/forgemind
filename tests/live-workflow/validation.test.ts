@@ -15,6 +15,7 @@ import {
   coding,
   plan,
   readSources,
+  task,
 } from "../../src/live-workflow/validation.js";
 test("exact path boundary rejects secrets traversal links and unauthorized model writes", () => {
   for (const p of [
@@ -63,4 +64,54 @@ test("exact path boundary rejects secrets traversal links and unauthorized model
   } finally {
     rmSync(d, { recursive: true, force: true });
   }
+});
+test("check profiles and placeholders are validated", () => {
+  const manifest = (check: unknown) => ({
+    schemaVersion: 1,
+    taskId: "check-profile",
+    objective: "x",
+    readPaths: ["value.txt"],
+    writePaths: ["value.txt"],
+    checks: [check],
+    model: "gpt-test",
+    effort: "low",
+    maxModelRequests: 1,
+    maxPromptBytes: 1000,
+    maxOutputBytes: 1000,
+    maxRuntimeMs: 1000,
+    draftPr: false,
+  });
+  const baseCheck = {
+    id: "c",
+    executable: "/usr/bin/true",
+    args: [] as string[],
+    timeoutMs: 1000,
+  };
+  const placeholderArgs = ["--dir={scratch}", "{nodeModules}/x"];
+  const ok = task(
+    manifest({ ...baseCheck, args: placeholderArgs, profile: "node-project" }),
+  );
+  assert.equal(ok.checks[0]!.profile, "node-project");
+  assert.throws(
+    () => task(manifest({ ...baseCheck, profile: "docker" })),
+    /Invalid check profile/,
+  );
+  assert.throws(
+    () => task(manifest({ ...baseCheck, args: placeholderArgs })),
+    /Check placeholders require the node-project profile/,
+  );
+  assert.throws(
+    () =>
+      task(
+        manifest({
+          ...baseCheck,
+          args: placeholderArgs,
+          profile: "single-process",
+        }),
+      ),
+    /Check placeholders require the node-project profile/,
+  );
+  const plain = task(manifest(baseCheck));
+  assert.deepEqual(plain.checks[0], baseCheck);
+  assert.equal("profile" in plain.checks[0]!, false);
 });

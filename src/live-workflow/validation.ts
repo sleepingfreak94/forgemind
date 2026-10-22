@@ -138,7 +138,7 @@ export function task(raw: unknown): LiveTask {
   )
     throw new Error("Checks required");
   for (const c of raw.checks) {
-    object(c, ["id", "executable", "args", "timeoutMs"]);
+    object(c, ["id", "executable", "args", "timeoutMs", "profile"]);
     text(c.id, 80);
     text(c.executable, 4096);
     if (
@@ -148,6 +148,19 @@ export function task(raw: unknown): LiveTask {
       c.args.some((a) => typeof a !== "string" || a.includes("\0"))
     )
       throw new Error("Exact command required");
+    if (
+      c.profile !== undefined &&
+      c.profile !== "single-process" &&
+      c.profile !== "node-project"
+    )
+      throw new Error("Invalid check profile");
+    if (
+      c.profile !== "node-project" &&
+      (c.args as string[]).some(
+        (a) => a.includes("{scratch}") || a.includes("{nodeModules}"),
+      )
+    )
+      throw new Error("Check placeholders require the node-project profile");
     integer(c.timeoutMs, 300000);
   }
   integer(raw.maxModelRequests, 12);
