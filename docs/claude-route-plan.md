@@ -1,0 +1,117 @@
+# Claude subscription route plan
+
+Status: **planning; Phase 0 in progress.** Branch `task/claude-cli-route`, based on
+`origin/main` at `ba295e9`. No Claude route exists yet: `project:run` and the
+native owner CLI accept only the Codex/ChatGPT connection.
+
+## Owner decisions
+
+- Billing: the owner's own Claude subscription through the unmodified Claude Code
+  CLI. No API-key fallback.
+- Refusals and unavailable models fail closed with a receipt. `--fallback-model`
+  and server-side refusal fallbacks are never enabled.
+
+## Credential boundary (Phase 0 step 1 result)
+
+Anthropic's [Claude Code legal and compliance terms](https://code.claude.com/docs/en/legal-and-compliance)
+permit "an end user signing in to the unmodified Claude Code binary with their own
+Claude subscription", and state that developers "may not collect, store, or
+intermediate Claude.ai credentials or session tokens — sign-in to a Claude account
+must complete through Anthropic's own flow." The binary must not be modified and its
+built-in authentication methods must not be removed or restricted. Pro/Max limits
+assume ordinary, individual use.
+
+Consequences for ForgeMind:
+
+- ForgeMind never reads, copies, stores, injects or logs a Claude OAuth token,
+  including `CLAUDE_CODE_OAUTH_TOKEN` and `setup-token` output. The owner signs in
+  with Claude Code's own flow; Claude Code keeps its own credentials.
+- No proxy is placed on the authenticated request path. The Codex-style broker
+  (`provider.ts`) is **not** reused for this route.
+- Each user brings their own subscription; ForgeMind never shares a seat.
+- `--bare` is unusable: it accepts only API keys and ignores OAuth.
+- Re-check these terms whenever the pinned CLI changes. If they change, the route
+  stays blocked; no automatic switch to another credential happens.
+
+Without a broker, ForgeMind cannot independently count provider requests or bound
+full prompt and raw response bytes. This matches the native executor's documented
+`unavailableNativeMetrics`; the route must report the same limits, not claim them.
+
+## Integration points
+
+ForgeMind has two coding routes on current `main`:
+
+1. **Supervised** `runTask` route: `ModelPort.complete(instructions, input, schema,
+   signal)` returns plan/edit/review JSON. The model has no tools; trusted adapters
+   apply edits. Coupled to `ChatGPTPlanSession` at `orchestrator.ts:59-61, 70,
+   163-169, 433-438`.
+2. **Native executor** route: the agent reasons and calls exactly `host_read`,
+   `host_apply`, `host_check` (`native-executor-tools.ts`). `NativeTask.model` is
+   fixed to `gpt-6.1-sol`.
+
+Phase 1 adds a Claude `ModelPort` (smaller, reuses all supervised gates). Phase 2
+adds a Claude native route that exposes the three host functions through a
+ForgeMind stdio MCP server, with every built-in Claude Code tool disabled.
+
+## Phase 0: spikes (owner-authorized, small subscription usage)
+
+1. ~~Terms~~ — done above.
+2. **Owner sign-in isolation.** Confirm a dedicated `CLAUDE_CONFIG_DIR` signed in
+   by the owner via `claude auth login` (Anthropic's flow) works headless, and where
+   Claude Code keeps that credential on macOS (file vs Keychain). Compare with the
+   default profile plus `--safe-mode`. ForgeMind must not read the credential.
+3. **Isolated invocation.** Verify with the pinned binary:
+   `claude -p --output-format stream-json --verbose --json-schema <schema>
+   --model claude-opus-5-5 --effort <effort> --tools "" --strict-mcp-config
+   --mcp-config '{"mcpServers":{}}' --setting-sources "" --disable-slash-commands
+   --no-session-persistence --permission-prompts none --system-prompt <text>`,
+   input on stdin. Record where structured output appears, and the refusal,
+   quota-exhausted, invalid-schema and cancellation shapes.
+4. **Network and sandbox.** Seatbelt cannot filter by hostname. Determine the
+   minimal profile (binary, config dir, scratch, Keychain/securityd if needed, TLS
+   egress) and which non-inference traffic can be disabled by environment
+   (auto-updater, telemetry, non-essential traffic).
+5. **Extra usage.** Identify the Claude account setting that prevents usage beyond
+   the plan; it becomes a remembered owner acknowledgement, like the ChatGPT
+   credits acknowledgement. ForgeMind cannot inspect it.
+6. **Host tools over MCP (for Phase 2).** Confirm `--tools ""` plus
+   `--allowedTools mcp__forgemind__host_read,...` exposes only those functions.
+
+Evidence goes to `docs/artifacts/claude-route/`. Any failed spike blocks the route
+and is reported; it is not worked around.
+
+## Phase 1: supervised Claude ModelPort
+
+| Change | Files |
+|---|---|
+| Task `provider: "openai" \| "anthropic"` (default `openai`); reviewed Claude model allowlist | `contracts.ts`, `validation.ts` |
+| `NativeClaudeModel`: one pinned CLI process per call, schema output, bounded stdout/runtime, source-drift and cancellation checks, fail-closed refusals, receipts with observed usage | new `src/live-workflow/claude-cli-model.ts` |
+| Pin binary by realpath, exact `--version` and SHA-256 (currently `~/.local/share/claude/versions/2.1.308`) | `claude-cli-model.ts`, `host-enforcement/manifest.ts` |
+| Claude Seatbelt profile | `process.ts` |
+| Owner session: dedicated config dir path, extra-usage acknowledgement, no token access | new `claude-plan.ts` |
+| Orchestrator accepts either session type | `orchestrator.ts` |
+| CLI: `project:run --provider anthropic --claude /canonical/claude --claude-config /private/dir` | `live-cli.ts` |
+| Readiness reporting per provider | `readiness.ts`, `scripts/doctor.mjs` |
+
+## Phase 2: Claude native route
+
+Claude Code with built-in tools disabled and a ForgeMind stdio MCP server exposing
+`host_read`, `host_apply`, `host_check` backed by existing `nativeTool` authority,
+checkpoints and receipts. Generalize `NativeTask.model` to a reviewed per-provider
+catalog.
+
+## Tests and acceptance
+
+- Fake `claude` executable replaying recorded stream-json (no provider requests):
+  schema mismatch, refusal, truncation, quota error, timeout, cancellation and
+  process-tree cleanup, source drift, full `runTask` on the Claude route.
+- `probe:claude`: version/hash pin and sandbox startup, no inference.
+- Existing suites, `typecheck` and `verify:portable` stay green.
+- One owner-authorized live task on a scratch project, before/after evidence,
+  independent review, draft PR per `AGENTS.md`.
+
+## Known limits
+
+- No hard provider request count or full prompt/response byte bound (no broker).
+- No hard spend cap on a subscription; relies on the owner's extra-usage setting.
+- CLI updates require re-running Phase 0 steps 3–6 and the terms check.
