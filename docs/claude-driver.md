@@ -60,6 +60,8 @@ draft publication behave exactly as on the ChatGPT route.
   - at most three turns (also passed as `--max-turns`), with CLI retries off and any
     reported retry rejected;
   - no MCP servers, skills, slash commands or unreviewed plugins or agents;
+  - no `system` events besides the first `init` and numeric `thinking_tokens`
+    progress estimates; fallback, refusal-fallback and other subtypes fail closed;
   - usage from the routed model only;
   - overage reported `rejected` and unused;
   - a single successful final result with no API error or safety stop.

@@ -55,6 +55,18 @@ const rejections: [string, string, RegExp][] = [
 ];
 for (const [name, stream, error] of rejections)
   test(`stream parser fails closed on ${name}`, () => assert.throws(() => parseClaudeStream(stream, expected), error));
+test('thinking progress estimates are allowed only as numeric system events after init', () => {
+  const progress = { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 40, estimated_tokens_delta: 40 };
+  const lines = claudeStream(sonnet, answer).trimEnd().split('\n');
+  const observed = [lines[0], JSON.stringify(progress), JSON.stringify({ ...progress, estimated_tokens: 80 }), ...lines.slice(1)].join('\n') + '\n';
+  assert.deepEqual(parseClaudeStream(observed, expected).output, answer);
+  const first = [JSON.stringify(progress), ...lines].join('\n') + '\n';
+  assert.throws(() => parseClaudeStream(first, expected), /Unreviewed Claude session start$/);
+  const textual = claudeStream(sonnet, answer, { extra: [{ ...progress, estimated_tokens: 'many' }] });
+  assert.throws(() => parseClaudeStream(textual, expected), /\(system thinking_tokens\)/);
+  const fallback = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'model_fallback' }] });
+  assert.throws(() => parseClaudeStream(fallback, expected), /\(system model_fallback\)/);
+});
 test('stream parser bounds usage and failure summaries carry status fields only', () => {
   const big = parseClaudeStream(claudeStream(sonnet, answer, { result: { usage: { pad: 'x'.repeat(5000) } } }), expected);
   assert.equal(big.usage, null);
