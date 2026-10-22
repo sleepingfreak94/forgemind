@@ -47,12 +47,13 @@ On the Free plan only Auto works, so a Grok 4.7 run needs a paid plan or a compa
 
 - One pinned process per call, run as `-p --mode ask --trust --output-format stream-json`, with the prompt on stdin, in an empty per-call scratch directory. `--trust` covers only that scratch; `--force` and `--yolo` are never used.
 - Deny-default Seatbelt sandbox: no fork and no Keychain; reads of system paths and the pinned build; writes to scratch and the profile; `*:443` and DNS egress. The project, `~/.ssh` and your normal `~/.cursor` are unreadable. The profile itself, including the login file, stays readable and writable, because the CLI needs it.
+- Tool lockdown: before every launch, including the status and about checks, the host writes deny-all tool permissions (`CURSOR_DENY_ALL`: Read and Write of relative and absolute paths, Shell, WebFetch, Mcp) into the profile `.cursor/cli-config.json` and the scratch `.cursor/cli.json`. It replaces each file by temporary file and rename, and refuses a symlinked `.cursor`.
 - The stream must show one init with `apiKeySource: login`, text-only answers, thinking events only in their reviewed shape, and one successful result whose text is a JSON object the existing validators accept.
 - Plan-limit errors, upgrade notices, tool calls, unknown events and malformed answers fail closed: the task stops with a receipt.
 
 ## Limits
 
-- **Residual credential risk:** a prompt-injected model with a file-read or web tool in ask mode could read the login in the profile, which the sandbox must leave readable, and send it to any `*:443` host. Tool use is rejected only after the call. Keep this profile dedicated to ForgeMind, and sign out and back in if you suspect misuse.
+- **Credential lockdown and residual risk:** a live canary probe on 2026-10-23 showed that, without the lockdown, ask mode's read tool read a canary file planted in the profile, where the login lives. With the deny-all lockdown, the same probe run through the real route code from an unlocked profile config got "Permission denied" from the read tool, and the canary appeared in no output. This is not a guarantee: it relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process itself with open `*:443` egress, and tool use is rejected by the stream parser only after a call. Keep this profile dedicated to ForgeMind, and sign out and back in if you suspect misuse.
 - Each session is bound to the workspace it was opened for. A personal-plan allowlist check can't be reused for another repository.
 - The CLI keeps chats, projects and ACP sessions in the profile, with no ephemeral mode, so prompts that include source excerpts persist there.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed.

@@ -29,7 +29,11 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
 
   The project, `~/.ssh` and the owner's normal `~/.cursor` are unreadable. ForgeMind sends only the prompt.
 
-  The profile is the exception. The CLI must read its own login (`.cursor/auth.json`) and keeps its state there, so the sandbox can read and write the whole profile, and egress is open to any `*:443` host. If ask mode offers the model a file-read or web tool, a prompt-injected model could read the login and send it out, or leave configuration in the profile for later runs. The stream parser rejects tool events, but only after the call, so it detects such use without preventing it.
+  The profile is the exception. The CLI must read its own login (`.cursor/auth.json`) and keeps its state there, so the sandbox can read and write the whole profile, and egress is open to any `*:443` host. A live canary probe on 2026-10-23 showed that, without the lockdown, ask mode's read tool read a canary file planted in the profile, where the login lives.
+
+  The host therefore locks tools down. Before every launch, including the status and about checks, it writes deny-all permissions (`CURSOR_DENY_ALL`: Read and Write of relative and absolute paths, Shell, WebFetch and Mcp) into the profile `.cursor/cli-config.json` and the scratch `.cursor/cli.json` (in the per-call work directory). It replaces each file by temporary file and rename, so links planted by the sandboxed CLI are never followed, and it refuses a symlinked `.cursor`. With the lockdown, the same probe, run through the real route code from an unlocked profile config, got "Permission denied" from the read tool, and the canary did not appear in any output.
+
+  What remains: the protection relies on Cursor's own permission layer honouring deny rules. The profile stays readable and writable by the CLI process itself, with open `*:443` egress. The stream parser rejects tool events only after the call, so it detects tool use without preventing it.
 - **Routing.** `grok-4.7-high` for plan, coding and review, owner-fixed and checked against the init label. There is no `auto`, no fallback and no substitution.
 - **Fail closed.** The stream must show:
   - one init with `apiKeySource: login`;
@@ -47,8 +51,7 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
 
 ## Consequences and limits
 
-- The readable, writable profile and open `*:443` egress are a residual credential risk (see Sandbox). Possible follow-ups:
-  - deny-all tool permissions in the profile's CLI config, verified by a probe;
+- The deny-all tool lockdown is implemented and was probed (see Sandbox); that follow-up is done. A residual credential risk remains: protection relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process with open `*:443` egress, and tool use is rejected by the stream parser only after a call. Possible follow-up:
   - recorded evidence that ask mode exposes no file or web tool.
 - The CLI keeps chats, projects and ACP sessions in the profile; there is no ephemeral mode. Prompts, which include source excerpts, persist in the owner-only profile.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed. Other Models and usage-based pricing on a company seat are governed by the account, not by ForgeMind.
