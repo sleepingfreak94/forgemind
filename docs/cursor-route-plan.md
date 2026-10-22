@@ -1,6 +1,6 @@
 # Cursor route plan
 
-Status: **Phase 0 complete (2026-10-23); live Grok 4.7 blocked on the Free plan.** Branch `task/cursor-route`, based on `origin/main` at `b0bc462`. Goal: run the same supervised `project:run` workflow used with Claude (plan, code, review, checks, receipts, draft PR) through the owner's Cursor CLI, starting from the existing ACP adapter ([ADR-0011](adr/ADR-0011-cursor-acp-protocol-slice.md), [Cursor driver](cursor-driver.md)). A decision record (ADR-0016) follows Phase 0, as ADR-0014 did for Claude.
+Status: **Phase 0 complete; Phase 1 implemented ([ADR-0016](adr/ADR-0016-cursor-subscription-route.md), [guide](cursor-route.md)) and validated with one live Auto test task on the Free plan. A live Grok 4.7 run needs a paid or company seat.** Branch `task/cursor-route`, based on `origin/main` at `b0bc462`. Goal: run the same supervised `project:run` workflow used with Claude (plan, code, review, checks, receipts, draft PR) through the owner's Cursor CLI, starting from the existing ACP adapter ([ADR-0011](adr/ADR-0011-cursor-acp-protocol-slice.md), [Cursor driver](cursor-driver.md)). Decision record: [ADR-0016](adr/ADR-0016-cursor-subscription-route.md).
 
 ## Owner decisions (2026-10-23)
 
