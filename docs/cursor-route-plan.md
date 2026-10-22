@@ -9,7 +9,7 @@ Status: **plan; Phase 0 not started.** Branch `task/cursor-route`, based on `ori
 | Account | Target: the company Cursor seat, with Other Models allowed when authorized. Now: the personal **Free** plan on this laptop, for testing only. |
 | Scope | Phase 0 checks, then Phase 1: plan, coding and review as single calls in `project:run`. A tools coding mode (as Claude Phase 2) is later work. |
 | Models | `grok-4.7-high` for plan, coding and review. No `auto`, no fallback, no substitution. |
-| Opus planning | At the start of each run ForgeMind asks whether to plan with `claude-opus-5-5-high` through Cursor (Other Models). Only an explicit yes for that run uses it; the default is Grok 4.7. |
+| Opus planning | Deferred (owner, 2026-10-23). Later option: at the start of each run ForgeMind asks whether to plan with `claude-opus-5-5-high` through Cursor (Other Models), used only on an explicit yes for that run. Phase 0 and Phase 1 use Grok 4.7 only. |
 | Code allowed | While signed in to the personal plan: only ForgeMind and test repositories. Company repositories are refused until the company seat is configured. |
 | Data boundary | Company code never goes through the personal Claude subscription or the personal Cursor account. Routes are not mixed within a run. |
 
@@ -31,7 +31,7 @@ Same rule as the Claude route: the owner signs in with Cursor's own `cursor-agen
 2. **Profile isolation.** Find how to give the CLI a private profile (HOME/XDG or a config variable) so ForgeMind never uses the owner's normal `~/.cursor` state. The owner runs `cursor-agent login` into it. Decide between Keychain and the file credential store inside the owner-only profile.
 3. **Pin and direct launch.** Pin the bundled `node`, `index.js` and version files by path, version and hash. Launch `node index.js acp` directly under a deny-default Seatbelt profile: no shell, scratch-only writes, `*:443` egress.
 4. **Sandboxed status, no inference.** `status`, `about` and `models` inside the sandbox: signed in, plan tier, and the model list.
-5. **One tiny ACP call per model.** A read-only ask-mode prompt asking for a fixed JSON answer, on `grok-4.7-high` (and `claude-opus-5-5-high` only if the owner authorizes that call). Record what the stream reports: the model actually used, usage or plan errors, and how Free-plan limits fail.
+5. **One tiny ACP call.** A read-only ask-mode prompt asking for a fixed JSON answer, on `grok-4.7-high` only. Record what the stream reports: the model actually used, usage or plan errors, and how Free-plan limits fail.
 6. **Workspace exposure.** Confirm the agent can see only what ForgeMind puts in the prompt: the session runs in scratch, the sandbox denies project reads, and file, terminal and permission callbacks are rejected.
 
 Expected cost: a handful of tiny calls on the Free plan.
@@ -40,8 +40,8 @@ Expected cost: a handful of tiny calls on the Free plan.
 
 | Change | Files |
 |---|---|
-| Task `provider: "cursor"`; routing: plan/coding/review `grok-4.7-high`, or plan `claude-opus-5-5-high` for an authorized run | `contracts.ts`, `validation.ts`, `routing-profile.ts` |
-| Owner session: dedicated profile, sandboxed status check, account tier, Opus prompt per run | new `cursor-session.ts` |
+| Task `provider: "cursor"`; routing: plan/coding/review `grok-4.7-high` | `contracts.ts`, `validation.ts`, `routing-profile.ts` |
+| Owner session: dedicated profile, sandboxed status check, account tier | new `cursor-session.ts` |
 | `NativeCursorModel`: one pinned ACP process per call, ask mode, fixed model, JSON answer validated by the existing plan/coding/review validators, fail closed on anything else | new `cursor-cli-model.ts`, reusing `agent-drivers/cursor*.ts` |
 | Personal-plan guard: refuse workspaces outside an owner allowlist (ForgeMind and test repositories) | `cursor-session.ts`, `live-cli.ts` |
 | CLI: `project:run --provider cursor --cursor <pinned entry> --cursor-profile <dir>` and `probe:cursor` | `live-cli.ts`, new `cursor-probe.ts` |
