@@ -11,13 +11,13 @@ Add Claude as a coding provider by running the owner's installed, unmodified Cla
 
 The owner signs in through Claude Code's own flow, into a dedicated profile directory outside every checkout (default `~/.forgemind/claude-profile`, owner-only). ForgeMind passes only that directory path to the child. ForgeMind never reads, copies, stores, injects, logs or relays a Claude OAuth token, `setup-token` output or Keychain item. No ForgeMind proxy sits on the authenticated request path, so the ChatGPT-route broker is not reused. Each user brings their own subscription; ForgeMind never shares a seat.
 
-Each invocation disables every built-in tool, all MCP servers except a ForgeMind-supplied one where a route needs host functions, all setting sources, slash commands, session persistence, telemetry, error reporting, auto-update and non-essential traffic. `--bare` is not used because it rejects subscription login. The model has no file, shell or network authority of its own. Repository reads, edits and checks stay with ForgeMind's existing trusted adapters and receipts.
+Each invocation disables every built-in tool, all MCP servers except a ForgeMind-supplied one where a route needs host functions, all setting sources, slash commands, session persistence, telemetry, error reporting, auto-update and non-essential traffic. `--bare` is not used because it rejects subscription login. `--safe-mode` is not used on routes with host tools because it disables MCP servers; isolation relies on the dedicated profile, empty setting sources, strict MCP configuration and a scratch working directory. The model has no file, shell or network authority of its own. Repository reads, edits and checks stay with ForgeMind's existing trusted adapters and receipts.
 
 Model routing is fixed by the owner, not selected by a task: planning uses `claude-opus-5-5`; coding, the native coding session and the fresh review use `claude-sonnet-5-5`. Effort comes from the task.
 
 Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
 
-Two integration points are planned: a Claude `ModelPort` for the supervised `runTask` route, then a Claude native route that exposes exactly `host_read`, `host_apply` and `host_check` over a ForgeMind stdio MCP server.
+Two integration points are planned: a Claude `ModelPort` for the supervised `runTask` route, then a Claude native route that exposes exactly `host_read`, `host_apply` and `host_check` through a ForgeMind MCP endpoint. That endpoint runs in the trusted host over HTTP on `127.0.0.1`, not as a stdio child inside the Claude sandbox.
 
 ## Consequences and limits
 

@@ -1,6 +1,6 @@
 # Claude subscription route plan
 
-Status: **planning; Phase 0 in progress.** Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
+Status: **Phase 0 complete; Phase 1 next.** Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
 `origin/main` at `ba295e9`. No Claude route exists yet: `project:run` and the
 native owner CLI accept only the Codex/ChatGPT connection.
 
@@ -149,7 +149,36 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
   plan. Local evidence: `claude-min.sb` (SHA-256 `ca2624ce…`),
   `step4-sandboxed-sonnet.jsonl` (`11f602d9…`), `step4-sandboxed-opus.jsonl`
   (`65ad2a5b…`).
-- Steps 2 and 4 are done. Remaining in Phase 0: step 6, host tools over MCP.
+- Steps 2 and 4 are done.
+
+### Step 6: host tools over MCP (2026-10-22)
+
+A stub stdio MCP server (plain Node, canned results, every message logged) exposed
+`host_read`, `host_apply` and `host_check`. One sandboxed `claude-sonnet-5-5` call at
+effort `low` used `--tools ""`, `--strict-mcp-config`, an inline `--mcp-config` and
+`--allowedTools` listing the three `mcp__forgemind__*` names.
+
+- `--safe-mode` disables MCP servers, so the server never loaded under it.
+  `--safe-mode` is dropped for MCP routes. Isolation then comes from the dedicated
+  profile, `--setting-sources ""`, `--strict-mcp-config`, `--disable-slash-commands`
+  and a scratch working directory. The profile has no CLAUDE.md, skills or hooks of
+  its own.
+- Stdio servers are spawned by Claude Code inside its sandbox. Homebrew Node first
+  failed to start because it was denied `/opt/homebrew/etc/openssl@3/openssl.cnf`.
+- With that read allowed, the tool list was exactly `StructuredOutput` plus the three
+  host tools, and the server was `connected`. The model called
+  `mcp__forgemind__host_read {"path":"README.md"}`, returned the stub's marker, and
+  finished with `num_turns: 3`, no permission denials, and overage `rejected`/unused.
+- Wire order seen by the stub: `server/discover` probe (answered "method not
+  found"), `initialize`, `notifications/initialized`, `tools/list`, `tools/call`.
+- **Design consequence:** host tools must not run inside the Claude sandbox. Phase 2
+  should run the MCP endpoint in the trusted ForgeMind host over HTTP on `127.0.0.1`,
+  and allow the sandbox outbound access only to that port, mirroring the Codex
+  broker's placement. Stdio was used only to prove tool exposure.
+- Local evidence: `step6-mcp-host-tools.jsonl`, `step6-stub-mcp-log.jsonl`,
+  `step6-stub-host-tools.mjs`.
+
+**Phase 0 is complete.** Phase 1 can start.
 
 ## Phase 1: supervised Claude ModelPort
 
