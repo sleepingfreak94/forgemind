@@ -21,6 +21,9 @@ Add an owner-selected `node-project` check profile alongside the existing behavi
 - `node_modules` is read-only to the check. The host requires the `package-lock.json` beside it to be byte-identical to the worktree's, and records the lockfile hash and directory identity in the command receipt. Package contents are not hashed; that residual is disclosed.
 - All `node-project` checks in one phase share a single private scratch directory, in manifest order, so a build check can be followed by a test check. Arguments may use the literal placeholders `{scratch}` and `{nodeModules}`, which the host substitutes with canonical paths. Other checks may not use them.
 - The scratch directory contains a host-created `node_modules` symlink to the selected directory, so compiled output under `{scratch}` resolves packages.
+- Compilers such as `tsc` resolve packages upward from the source files, so the host also links the selected `node_modules` at the checked tree's root for the phase. It does this only when no `node_modules` exists there, or when the existing one already is the selected directory.
+  - The source identity must be unchanged with the link present, so the project must ignore `/node_modules`; otherwise the phase is refused.
+  - The link is always removed after the phase.
 - Writes stay limited to the scratch directory. Network, source writes, `.git`, `.codex` and `.env*` reads remain denied.
 - `FORGEMIND_NESTED_SANDBOX=1` is set in the check environment. Tests that need their own Seatbelt profile detect it and skip with a reason.
 

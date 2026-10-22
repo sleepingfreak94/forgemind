@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,13 +17,16 @@ const darwin = { skip: process.platform !== 'darwin' || process.env.FORGEMIND_NE
 const authority = { reserve: (_: unknown) => ({ check() {}, finish() {} }) };
 const nodeCheck = (id: string, args: string[]): CheckCommand => ({ id, executable: node, profile: 'node-project', timeoutMs: 60000, args });
 
-function fixture() {
+function fixture(ignore = '/node_modules\n') {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fm-node-project-'))), root = join(dir, 'project'), scratch = join(dir, 'scratch');
   mkdirSync(join(root, 'src'), { recursive: true }); mkdirSync(scratch);
   copyFileSync(join(repo, 'package-lock.json'), join(root, 'package-lock.json'));
   writeFileSync(join(root, 'src/value.ts'), 'export const value: number = 2;\n');
   writeFileSync(join(root, 'src/value.test.ts'),
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { value } from './value.js';\ntest('value', () => assert.equal(value, 2));\n");
+  writeFileSync(join(root, '.gitignore'), ignore);
+  const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=F', '-c', 'user.email=f@example.invalid', ...args], { cwd: root });
+  git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'fixture');
   return { dir, root, scratch, runtime: nodeProjectRuntime(join(repo, 'node_modules')), close: () => rmSync(dir, { recursive: true, force: true }) };
 }
 const signal = () => AbortSignal.timeout(110000);
@@ -39,7 +43,7 @@ test('a node-project phase builds TypeScript and runs its tests in one shared sc
     assert.deepEqual(results.map(r => [r.id, r.passed]), [['build', true], ['test', true], ['nested-flag', true]], JSON.stringify(results));
     assert.match(results[1]!.stdout, /pass 1/);
     assert.equal(results[0]!.stdout, '', 'TypeScript reported no diagnostics');
-    assert.deepEqual(readdirSync(f.root).sort(), ['package-lock.json', 'src']);
+    assert.deepEqual(readdirSync(f.root).sort(), ['.git', '.gitignore', 'package-lock.json', 'src'], 'source untouched and the node_modules link removed');
     assert.equal(readdirSync(f.scratch).length, 1, 'one shared scratch for the phase');
   } finally { f.close(); }
 });
@@ -75,6 +79,21 @@ test('node-project checks are refused without a genuine, matching runtime or wit
     assert.throws(() => nodeProjectRuntime(repo + '/node_modules/../node_modules'), /Canonical node_modules/);
     assert.throws(() => nodeProjectRuntime(join(repo, 'src')), /Canonical node_modules/);
   } finally { f.close(); }
+});
+
+test('the node_modules link must be ignored and must not replace a different node_modules', darwin, async () => {
+  const unignored = fixture('');
+  try {
+    await assert.rejects(runChecks(unignored.root, 'source', [nodeCheck('probe', ['-e', '0'])], unignored.scratch, authority as never, signal(),
+      unignored.runtime), /would change source identity/);
+    assert.equal(existsSync(join(unignored.root, 'node_modules')), false, 'refused link is removed');
+  } finally { unignored.close(); }
+  const foreign = fixture();
+  try {
+    mkdirSync(join(foreign.root, 'node_modules'));
+    await assert.rejects(runChecks(foreign.root, 'source', [nodeCheck('probe', ['-e', '0'])], foreign.scratch, authority as never, signal(),
+      foreign.runtime), /not the selected node_modules/);
+  } finally { foreign.close(); }
 });
 
 test('a task with node-project checks is refused before any worktree without an owner runtime', async () => {
