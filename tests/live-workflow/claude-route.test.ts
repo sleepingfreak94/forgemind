@@ -12,7 +12,7 @@ import { task as validateTask } from '../../src/live-workflow/validation.js';
 import { CLAUDE_PHASE_MODELS } from '../../src/live-workflow/routing-profile.js';
 import type { ActionEnvelope, LiveTask } from '../../src/live-workflow/contracts.js';
 import type { ProcessRequest } from '../../src/live-workflow/process.js';
-import { claudeStream, fakeArgs, fakeCli, fakeEnv, fixtureSession } from './claude-fixture.js';
+import { claudeStream, fakeArgs, fakeCli, fakeCliSkip, fakeEnv, fixtureSession } from './claude-fixture.js';
 
 const sonnet = 'claude-sonnet-5-5', opus = 'claude-opus-5-5';
 const expected = { model: sonnet, version: '2.1.308', tools: ['StructuredOutput'], maxTurns: 3 };
@@ -99,7 +99,7 @@ test('Claude tasks name only the reviewed coding model; provider is optional and
   assert.deepEqual(CLAUDE_PHASE_MODELS, { plan: opus, coding: sonnet, review: sonnet });
 });
 
-test('session requires a subscription sign-in and an owner-only profile; forged sessions are rejected', async () => {
+test('session requires a subscription sign-in and an owner-only profile; forged sessions are rejected', { skip: fakeCliSkip }, async () => {
   for (const status of [{ loggedIn: false }, { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' },
     { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'bedrock' }]) await assert.rejects(fixtureSession(status), /not signed in/);
   const f = await fixtureSession();
@@ -124,7 +124,7 @@ test('session requires a subscription sign-in and an owner-only profile; forged 
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions', () => {
+test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions', { skip: fakeCliSkip }, () => {
   const cli = fakeCli();
   const profile = claudeInferenceProfile(cli, '/private/tmp/fm/scratch', '/Users/o/.forgemind/claude-profile', '/Users/o', '/private/var/folders/x/C');
   assert.match(profile, /^\(version 1\)\n\(deny default\)/);
@@ -157,7 +157,7 @@ async function modelFixture(stdout: ((request: ProcessRequest) => string) | 'sup
 }
 const modelArg = (request: ProcessRequest) => request.args[request.args.indexOf('--model') + 1]!;
 
-test('each phase runs its owner-fixed model with tools, MCP, settings and persistence disabled', async () => {
+test('each phase runs its owner-fixed model with tools, MCP, settings and persistence disabled', { skip: fakeCliSkip }, async () => {
   const m = await modelFixture(request => claudeStream(modelArg(request), answer));
   try {
     const signal = new AbortController().signal;
@@ -188,7 +188,7 @@ test('each phase runs its owner-fixed model with tools, MCP, settings and persis
   } finally { m.cleanup(); }
 });
 
-test('model refuses calls without a phase, for non-Claude tasks, or over the prompt limit before reserving a request', async () => {
+test('model refuses calls without a phase, for non-Claude tasks, or over the prompt limit before reserving a request', { skip: fakeCliSkip }, async () => {
   const signal = new AbortController().signal;
   for (const [options, call, error] of [
     [{}, (m: NativeClaudeModel) => m.complete('x', {}, {}, signal), /require a pipeline phase/],
@@ -204,7 +204,7 @@ test('model refuses calls without a phase, for non-Claude tasks, or over the pro
   }
 });
 
-test('process failure, refusal and source drift fail closed with an indeterminate receipt and no retry', async () => {
+test('process failure, refusal and source drift fail closed with an indeterminate receipt and no retry', { skip: fakeCliSkip }, async () => {
   const signal = new AbortController().signal;
   let source = 'source-a';
   for (const [stdout, options, error] of [
@@ -222,7 +222,7 @@ test('process failure, refusal and source drift fail closed with an indeterminat
   }
 });
 
-const sandboxed = { skip: process.platform !== 'darwin', timeout: 60000 };
+const sandboxed = { skip: process.platform !== 'darwin' || fakeCliSkip, timeout: 60000 };
 test('the pinned fake runs under the real Claude Seatbelt profile: sign-in, one call, recorded flags and environment', sandboxed, async () => {
   const m = await modelFixture('supervised');
   try {

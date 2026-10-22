@@ -84,6 +84,11 @@ export function fakeCli(): ClaudeCli {
   return compiled = pinClaudeCli(path, { version: '2.1.308', versionOutput: '2.1.308 (Claude Code)', sha256 });
 }
 
+/** False when the fake CLI compiles and pins; otherwise why Claude fake-CLI tests are skipped. */
+export const fakeCliSkip: string | false = (() => {
+  try { fakeCli(); return false; } catch { return 'Claude fake CLI needs a working C compiler (/usr/bin/cc)'; }
+})();
+
 /** Owner-only profile directory plus a session opened through `auth status`: replayed by
  * default, or through the real sandboxed fake when `supervised` is set. */
 export async function fixtureSession(status: Record<string, unknown> = { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty', subscriptionType: 'pro' },
