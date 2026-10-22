@@ -1,6 +1,6 @@
 # Claude subscription route plan
 
-Status: **planning; Phase 0 in progress.** Branch `task/claude-cli-route`, based on
+Status: **planning; Phase 0 in progress.** Decision record: [ADR-0014](adr/ADR-0014-claude-subscription-route.md). Branch `task/claude-cli-route`, based on
 `origin/main` at `ba295e9`. No Claude route exists yet: `project:run` and the
 native owner CLI accept only the Codex/ChatGPT connection.
 
@@ -106,6 +106,28 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
   touching credentials. This reading arrives only after a request has started.
 - Usage and notional list-price cost (`costBasis: list`) are reported per run for
   receipts. List price is not a subscription charge.
+
+### Steps 2 and 4 progress (2026-10-22)
+
+- Dedicated profile `~/.forgemind/claude-profile` (mode 700). The owner signed in
+  with `CLAUDE_CONFIG_DIR=… claude auth login`, Anthropic's own browser flow.
+  `auth status` reports `loggedIn: true`, `authMethod: claude.ai`. The owner's default
+  profile is unaffected.
+- Claude Code stores the credential in the macOS login Keychain under a
+  per-profile service name (`Claude Code-credentials-<suffix>`), not in the profile
+  directory. Claude Code reads it by spawning `/usr/bin/security`. ForgeMind must
+  let the child run that executable, and must not read the item itself.
+- Environment that held under Seatbelt: `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_TMPDIR` (the
+  CLI otherwise writes to fixed `/tmp/claude-<uid>`), `DISABLE_TELEMETRY`,
+  `DISABLE_ERROR_REPORTING`, `DISABLE_AUTOUPDATER`,
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. With these, `analytics_disabled` and
+  `product_feedback_disabled` were true, the telemetry plugin did not load, and no
+  messaging socket was opened.
+- With a deny-default profile, the CLI reported "Not logged in" and sent no
+  inference request. `security` inside that profile failed with "A Module Directory
+  Service error". It succeeded once file writes were broadly allowed, so the Keychain
+  stack needs at least one writable path the profile does not grant. **Open:**
+  narrow that to the exact paths. Broad file-write is not acceptable for the route.
 
 ## Phase 1: supervised Claude ModelPort
 
