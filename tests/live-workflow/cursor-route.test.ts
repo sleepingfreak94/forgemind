@@ -31,7 +31,7 @@ test('stream parser returns the JSON answer and usage from the recorded shape', 
   const parsed = parseCursorStream(cursorStream(grokLabel, answer), grok);
   assert.deepEqual(parsed.output, { status: 'ok', n: 2 });
   assert.deepEqual(parsed.usage, { inputTokens: 6286, outputTokens: 10, cacheReadTokens: 3968, cacheWriteTokens: 0 });
-  assert.equal(parsed.requestId, 'r-1');
+  assert.equal(parsed.requestId, 'r-1'); assert.equal(parsed.toolCalls, 0);
   assert.deepEqual(parseCursorStream(cursorStream('Auto', '```json\n' + answer + '\n```'), 'auto').output, { status: 'ok', n: 2 });
 });
 test('thinking deltas before the answer are accepted only in their reviewed shape', () => {
@@ -57,6 +57,57 @@ for (const [name, stream, model, error] of [
   ['empty output', '', grok, /missing/],
 ] as const)
   test(`stream parser fails closed on ${name}`, () => assert.throws(() => parseCursorStream(stream, model), error));
+
+const tools = { server: 'forgemind', names: ['host_echo', 'host_add'] };
+const tc = (subtype: string, id: string, inner: Record<string, unknown>) => ({ type: 'tool_call', subtype, call_id: id,
+  tool_call: { ...inner, hookAdditionalContexts: [], toolCallId: id, startedAtMs: '1' }, session_id: 's', timestamp_ms: 1 });
+const mcp = (id: string, toolName: string, result?: unknown, provider = 'forgemind') => ({ mcpToolCall: { args: { name: `forgemind-${toolName}`, args: {},
+  toolCallId: id, providerIdentifier: provider, toolName, serverIdentifier: provider }, result, description: `Call ${toolName}` } });
+const ok = { success: { content: [{ text: { text: 'fc2c' } }], isError: false, systemReminders: [] } };
+const rejected = { rejected: { reason: 'User rejected MCP: forgemind-host_add', isReadonly: false } };
+const read = (result?: unknown) => ({ readToolCall: { args: { path: '/x' }, result } });
+const denied = { error: { errorMessage: 'Permission denied' } };
+const sentence = 'Checking.', json = '{"status":"ok","n":3}';
+const validEvents = () => [
+  tc('started', 'c1', { getMcpToolsToolCall: { args: { server: 'forgemind', toolCallId: 'c1' } } }),
+  tc('completed', 'c1', { getMcpToolsToolCall: { args: { server: 'forgemind', toolCallId: 'c1' }, result: { success: { content: 'tools' } } } }),
+  tc('started', 'c2', mcp('c2', 'host_echo')), tc('completed', 'c2', mcp('c2', 'host_echo', ok)),
+  tc('completed', 'c3', mcp('c3', 'host_add', ok)), tc('completed', 'c4', mcp('c4', 'host_add', rejected)),
+  tc('started', 'c5', read()), tc('completed', 'c5', read(denied)),
+  tc('completed', 'c6', read({ rejected: { reason: 'no' } })),
+];
+function toolsStream(events: unknown[], assistants: string[] = [sentence, json], final = assistants.join('')): string {
+  return [
+    { type: 'system', subtype: 'init', apiKeySource: 'login', cwd: '/w', session_id: 's', model: 'Auto', permissionMode: 'default' },
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'prompt' }] }, session_id: 's' },
+    ...events,
+    ...assistants.map(text => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, session_id: 's' })),
+    { type: 'result', subtype: 'success', is_error: false, result: final, session_id: 's', request_id: 'r-2' },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n';
+}
+test('tools mode counts only successful forgemind calls and takes the last assistant JSON', () => {
+  const parsed = parseCursorStream(toolsStream(validEvents()), 'auto', tools);
+  assert.deepEqual(parsed.output, { status: 'ok', n: 3 });
+  assert.equal(parsed.toolCalls, 2);
+  assert.equal(parseCursorStream(toolsStream([], [sentence, '```json\n' + json + '\n```']), 'auto', tools).toolCalls, 0);
+  assert.throws(() => parseCursorStream(toolsStream(validEvents()), 'auto'), /Unreviewed Cursor stream event \(tool_call\)/);
+});
+for (const [name, events, assistants, final, error] of [
+  ['another getMcpTools server', [tc('completed', 'a', { getMcpToolsToolCall: { args: { server: 'other' } } })], undefined, undefined, /unreviewed MCP tool/],
+  ['another MCP provider', [tc('completed', 'a', mcp('a', 'host_echo', ok, 'other'))], undefined, undefined, /unreviewed MCP tool/],
+  ['an unlisted tool name', [tc('completed', 'a', mcp('a', 'host_rm', ok))], undefined, undefined, /unreviewed MCP tool/],
+  ['a successful built-in tool', [tc('completed', 'a', read(ok))], undefined, undefined, /built-in tool/],
+  ['a built-in tool without a result', [tc('completed', 'a', read())], undefined, undefined, /built-in tool/],
+  ['a final result that misses the last answer', [], undefined, sentence, /final answer mismatch/],
+  ['a prose last answer', [], [sentence, 'prose'], undefined, /not the required JSON object/],
+  ['a bad tool_call subtype', [tc('weird', 'a', read(denied))], undefined, undefined, /Unreviewed Cursor tool call event/],
+  ['two ToolCall keys', [tc('completed', 'a', { ...read(denied), ...mcp('a', 'host_echo', ok) })], undefined, undefined, /Unreviewed Cursor tool call event/],
+] as const)
+  test(`tools mode fails closed on ${name}`, () => assert.throws(() => parseCursorStream(toolsStream([...events], assistants && [...assistants], final), 'auto', tools), error));
+test('a malformed tools profile is refused, not treated as no tools', () => {
+  for (const bad of [{ server: '', names: [] }, { server: 'forgemind', names: [''] }, { server: 'forgemind' }])
+    assert.throws(() => parseCursorStream(toolsStream([]), 'auto', bad as never), /tools profile is invalid/);
+});
 
 /** A tiny pinned stand-in for the version directory; replayed runners never execute it. */
 function fixture() {
