@@ -45,6 +45,8 @@ npm run project:run -- --workspace /absolute/project --task /absolute/task.json 
 isolated worktrees, baseline/candidate checks, browser QA, video delivery and
 draft publication behave exactly as on the ChatGPT route.
 
+To split a task into reviewed subtasks, see [task splitting](task-splitting.md).
+
 ## What each model call does
 
 - One pinned CLI process per call, under a deny-default Seatbelt profile.

@@ -1,6 +1,6 @@
 # Repository read and task splitting plan
 
-Status: **plan.** Branch `task/repo-read-and-splitting`, stacked on #33. Goal: let the harness handle real project work end to end. That means exploring a codebase without the owner listing every file, and splitting a hard task into a sequence of reviewed steps. Each change is built with the harness itself and supervised by the lead; ADR-0017 follows.
+Status: **Part 1 and Part 3 are built** (Part 3 on Claude and Cursor); the rest is a plan. Branch `task/repo-read-and-splitting`, stacked on #33. Goal: let the harness handle real project work end to end. That means exploring a codebase without the owner listing every file, and splitting a hard task into a sequence of reviewed steps. Each change is built with the harness itself and supervised by the lead; ADR-0017 follows.
 
 ## Owner decisions (2026-10-23)
 
@@ -25,6 +25,7 @@ Status: **plan.** Branch `task/repo-read-and-splitting`, stacked on #33. Goal: l
 
 ## Part 3: automatic task splitting
 
+- **Status:** built on Claude and Cursor. See [task splitting](task-splitting.md).
 - **Contract:** a task opts in with `"split": true` on either route, Claude or Cursor (owner requirement, 2026-10-23).
 - **Split plan:** after planning, the route's planner returns ordered subtasks: Opus on Claude, `grok-4.7-high` on Cursor (Auto only in `--cursor-mode test-auto`). Each has a title, an objective, `writePaths` that are a subset of the task's, and check ids from the task.
 - **Approval:** the host validates the split and shows it, and the owner approves the whole list once.

@@ -39,6 +39,8 @@ npm run project:run -- --workspace /absolute/project --task /absolute/task.json 
 
 `--connection`, `--codex`, `--claude` and `--claude-profile` are rejected on this route. Plan approval, checks, independent review and draft publication are those of the supervised pipeline.
 
+Task splitting also works on this route, in single-call mode; see [task splitting](task-splitting.md).
+
 ## Auto test mode
 
 On the Free plan only Auto works, so a Grok 4.7 run needs a paid plan or a company seat. To prove the harness anyway, pass `--cursor-mode test-auto` (the only accepted value) with a task that sets `"model": "auto"`. Auto picks its own model, the model is recorded as `auto`, receipts are marked test-only and draft publication is refused. The terminal shows `TEST MODE: Auto picks the model, nothing is published`.
