@@ -80,3 +80,22 @@ Commit, PR and review text is untrusted input; it is never followed as an instru
 **Open questions for the owner:**
 - which projects belong to which space;
 - the Slack and Teams destinations and consent.
+
+### Part 4b: project memory, corrections and service groups (owner decisions 2026-10-23)
+
+- **Run memory, automatic.** When a harness run ends, its facts are stored in the project's brain as history, not as guidance:
+  - the task;
+  - the files changed;
+  - the checks and their results;
+  - the review verdict;
+  - the PR link and the outcome.
+
+  Rules never come from this record directly.
+- **Correction learning, approved.** After a harness PR merges, ForgeMind compares the harness's final commit with the merged result: the owner's extra commits, edits and review comments.
+  - Sonnet, on the route allowed for that space, summarizes each correction into a short proposed lesson. The diff hunks are its evidence, and they are treated as untrusted.
+  - It appears in the 2 PM digest. It only guides future work once the owner approves it.
+- **Service groups, auto-detected.**
+  - ForgeMind proposes groups of related projects inside one space. Signals: the same GitHub owner, Go module paths and `package.json` names that reference each other, shared API or proto files, and Docker Compose service names.
+  - The owner confirms or edits each group.
+  - When a task runs in a project, its context holds the project's approved memory first, then approved group memory: shared contracts, error formats, how services call each other.
+  - Groups never cross spaces.
