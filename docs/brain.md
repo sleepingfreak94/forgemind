@@ -16,6 +16,7 @@ npm run brain -- show --workspace /path/to/project --id ID
 npm run brain -- approve --workspace /path/to/project --id ID
 npm run brain -- reject --workspace /path/to/project --id ID [--note N]
 npm run brain -- retire --workspace /path/to/project --id ID
+npm run brain -- learn --workspace /path/to/project [--source git|github|all] [--limit N]
 ```
 
 All commands accept `--brain-dir` (default `~/.forgemind/brain`). `--scope project` (default) limits an entry to the project; `--scope space` makes it space-wide.
@@ -23,6 +24,14 @@ All commands accept `--brain-dir` (default `~/.forgemind/brain`). `--scope proje
 ## Lifecycle
 
 New entries are `proposed`. You `approve` or `reject` them; an approved entry can later be `retire`d. Proposed, rejected and retired items never guide agents; only approved entries are used. Text that looks like a secret is refused.
+
+## Learning from history
+
+```
+npm run brain -- learn --workspace /path/to/project --source all --limit 100
+```
+
+`learn` reads the git log and remote branch names, and merged pull requests through `gh`. It creates only `proposed` entries scoped to the project; you still `approve` or `reject` each one. Proposal text is generated from statistics (for example "4 of 5 commits"), never copied from commit, PR or review text, and evidence holds only identifiers (`git:<hash>`, `branch:<prefix>`, PR URLs). The command prints `{"proposed": [ids], "skipped": [sources]}`; a source that fails (for example `gh` not signed in) is listed in `skipped` and does not stop the others.
 
 ## Output
 

@@ -1,11 +1,22 @@
+import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BrainStore, defaultBrainDirectory } from '../memory/brain.js';
 import type { BrainEntry, BrainKind, BrainSpace, BrainStatus } from '../memory/brain.js';
 import { brainSpaceFor, mapBrainSpace } from '../memory/brain-spaces.js';
+import { learnFromGit, learnFromGitHub } from '../memory/brain-learn.js';
+import type { BrainProposal } from '../memory/brain-learn.js';
 
 class UsageError extends Error {}
+
+export type CliRunner = (tool: 'git' | 'gh', args: string[], cwd: string) => string;
+
+const defaultRunner: CliRunner = (tool, args, cwd) => {
+  const options = { encoding: 'utf8' as const, stdio: ['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore'],
+    maxBuffer: 32 * 1024 * 1024, timeout: 60000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } };
+  return tool === 'git' ? execFileSync('/usr/bin/git', ['-C', cwd, ...args], options) : execFileSync('gh', args, { ...options, cwd });
+};
 
 const commands: Record<string, { required: string[]; optional: string[] }> = {
   map: { required: ['workspace', 'space'], optional: [] },
@@ -14,7 +25,8 @@ const commands: Record<string, { required: string[]; optional: string[] }> = {
   show: { required: ['workspace', 'id'], optional: [] },
   approve: { required: ['workspace', 'id'], optional: [] },
   retire: { required: ['workspace', 'id'], optional: [] },
-  reject: { required: ['workspace', 'id'], optional: ['note'] }
+  reject: { required: ['workspace', 'id'], optional: ['note'] },
+  learn: { required: ['workspace'], optional: ['source', 'limit'] }
 };
 
 function parse(argv: string[]): { command: string; args: Record<string, string> } {
@@ -39,10 +51,12 @@ function parse(argv: string[]): { command: string; args: Record<string, string> 
   if ('scope' in args && args.scope !== 'project' && args.scope !== 'space') throw new UsageError('invalid --scope');
   if ('status' in args && !['proposed', 'approved', 'rejected', 'retired'].includes(args.status!)) throw new UsageError('invalid --status');
   if ('kind' in args && !['convention', 'lesson', 'decision', 'pattern'].includes(args.kind!)) throw new UsageError('invalid --kind');
+  if ('source' in args && !['git', 'github', 'all'].includes(args.source!)) throw new UsageError('invalid --source');
+  if ('limit' in args && (!/^\d+$/.test(args.limit!) || Number(args.limit) < 1 || Number(args.limit) > 1000)) throw new UsageError('invalid --limit');
   return { command, args };
 }
 
-function execute(command: string, args: Record<string, string>): unknown {
+function execute(command: string, args: Record<string, string>, run: CliRunner): unknown {
   const dir = resolve(args['brain-dir'] ?? defaultBrainDirectory());
   let workspace: string;
   try { workspace = realpathSync(resolve(args.workspace!)); } catch { throw new Error('workspace must be an existing directory'); }
@@ -67,17 +81,36 @@ function execute(command: string, args: Record<string, string>): unknown {
       case 'show': return { entry: visible(args.id!) };
       case 'approve': visible(args.id!); store.approve(args.id!); return { ok: true };
       case 'retire': visible(args.id!); store.retire(args.id!); return { ok: true };
+      case 'learn': {
+        const source = args.source ?? 'all';
+        const limit = args.limit ? Number(args.limit) : 100;
+        const proposed: string[] = [], skipped: string[] = [];
+        const sources: [string, () => BrainProposal[]][] = [];
+        if (source === 'git' || source === 'all') sources.push(['git', () => learnFromGit({ run: a => run('git', a, workspace), limit })]);
+        if (source === 'github' || source === 'all') sources.push(['github', () => learnFromGitHub({ run: a => run('gh', a, workspace), limit })]);
+        for (const [name, learn] of sources) {
+          let found: BrainProposal[];
+          try { found = learn(); } catch { skipped.push(name); continue; }
+          for (const p of found) {
+            try {
+              const id = store.propose({ ...p, project: workspace });
+              if (!proposed.includes(id)) proposed.push(id);
+            } catch { /* rejected proposals are dropped */ }
+          }
+        }
+        return { proposed, skipped };
+      }
       default: visible(args.id!); store.reject(args.id!, args.note); return { ok: true };
     }
   } finally { store.close(); }
 }
 
-export function runBrainCli(argv: string[], output: { write(text: string): void }): number {
+export function runBrainCli(argv: string[], output: { write(text: string): void }, options: { run?: CliRunner } = {}): number {
   let code = 0;
   let body: unknown;
   try {
     const { command, args } = parse(argv);
-    body = execute(command, args);
+    body = execute(command, args, options.run ?? defaultRunner);
   } catch (error) {
     code = error instanceof UsageError ? 2 : 1;
     body = { error: error instanceof Error ? error.message : 'brain command failed' };
