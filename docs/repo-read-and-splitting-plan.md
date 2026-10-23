@@ -13,6 +13,7 @@ Status: **Part 1 and Part 3 are built** (Part 3 on Claude and Cursor); the rest 
 
 ## Part 1: repository read in tools mode
 
+- **Status:** built on Claude and Cursor.
 - **Contract:** a task opts in with `"readScope": "repository"`, which is valid only with `"codingMode": "tools"` on the Claude route. `readPaths` then become hints, not a limit.
 - **Readable files:** `host_read` accepts any path that Git tracks (`git ls-files` at the session source), except a reviewed secret denylist:
   - `.git/`, `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `*.keystore`, `.npmrc`, `.netrc`, `credentials*`, `secrets*`;
@@ -31,7 +32,7 @@ Status: **Part 1 and Part 3 are built** (Part 3 on Claude and Cursor); the rest 
 - **Approval:** the host validates the split and shows it, and the owner approves the whole list once.
 - **Each subtask:** one coding session on the same worktree, then that subtask's checks.
   - Claude: a Sonnet tools session (with repository read when the task asks for it).
-  - Cursor: one locked-down Cursor coding call returning edits, as today, since Cursor has no tools mode yet. The host gives it the subtask's `readPaths` and `writePaths`, and the files earlier subtasks changed. Cursor tools mode, and with it repository read on Cursor, is the follow-up.
+  - Cursor: runs each subtask in tools mode or single-call mode, like Claude.
   - The split, approval, stop-on-failure, final checks, review and PR steps are shared code, not per route. Both routes are tested. A failing subtask stops the run with the worktree and receipts kept, and later subtasks don't start.
 - **At the end:** all task checks, one fresh review of the whole diff, and one draft PR.
 - **Budgets:** `maxModelRequests` and runtime bound the whole run.

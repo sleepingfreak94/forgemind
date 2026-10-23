@@ -55,12 +55,25 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
   - draft publication is refused.
 
   It exists to prove the harness on a Free plan.
+- **Tools coding mode (2026-10-23).** With `"codingMode": "tools"`, a Cursor task can explore the repository through host tools.
+  - The process is `cursor-agent -p --mode ask --trust --approve-mcps`.
+  - The work `.cursor/mcp.json` names one server, `forgemind`, at a loopback endpoint (127.0.0.1, secret path).
+  - Both permission files allow only `Mcp(forgemind:<tool>)` for the granted host tools. They deny all built-ins (Read, Write, Shell, WebFetch).
+  - The profile `mcp.json` is always reset to no servers. The sandbox opens only that loopback port.
+  - The stream parser accepts only reviewed `tool_call` events: forgemind MCP calls to granted tools, and built-in calls only if Cursor refused them.
+  - The stream's successful tool-call count must equal the host's.
+  - `readScope: "repository"` and task splitting work with it.
+
+  Phase 0 probes (2026-10-23, Auto test mode, personal Free plan): ask mode called two granted forgemind tools. The built-in read of a canary in the profile got "Permission denied", and the canary appeared in no output. A forgemind tool missing from the allowlist came back "User rejected MCP", even with `--approve-mcps`.
+
+  Live runs (2026-10-23, Auto test mode, test only): the repository-read task, where the rule lives only in `docs/rules/TAX.md`. The planner without the docs guessed 0.18. The tools session set `RATE = 0.125` in 5 host tool calls. Check and review passed, the outcome was completed-local with 3 requests, and the git-ignored `.env` never leaked. The coupon split task ran 2 subtasks, each checked, review pass, completed-local, 4 requests.
 
 ## Consequences and limits
 
 - The deny-all tool lockdown is implemented and was probed (see Sandbox); that follow-up is done. A residual credential risk remains: protection relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process with open `*:443` egress, and tool use is rejected by the stream parser only after a call. The shell, web fetch and MCP probes are recorded (see Sandbox); the MCP catalog listing is a residual that exposes metadata only, with no file or network access.
+- Tools mode has the same residual risk. It relies on Cursor's permission layer honouring the allow and deny rules, and the stream parser detects misuse only after a call. Evidence is from Auto test mode on a Free plan only.
 - The CLI keeps chats, projects and ACP sessions in the profile; there is no ephemeral mode. Prompts, which include source excerpts, persist in the owner-only profile.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed. Other Models and usage-based pricing on a company seat are governed by the account, not by ForgeMind.
 - Print mode has no JSON-schema option. The answer is free text that must parse and validate.
 - A CLI update changes the manifest digest. The route refuses the new build until it is reviewed again.
-- Opus planning through Cursor is deferred. A Cursor tools coding mode, like ADR-0014 Phase 2, is not implemented.
+- Opus planning through Cursor is deferred.

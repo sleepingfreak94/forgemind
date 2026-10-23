@@ -10,7 +10,7 @@ Set `"split": true` in the task manifest. Use the Claude (`anthropic`) or the `c
 { "provider": "anthropic", "model": "claude-sonnet-5-5", "split": true, "codingMode": "tools", "maxToolCalls": 16, "maxModelRequests": 4 }
 ```
 
-On Cursor, use `"provider": "cursor"` and leave out tools mode.
+On Cursor, use `"provider": "cursor"`. Tools mode works there too.
 
 ## The split plan
 
@@ -28,7 +28,7 @@ The host validates the split. The owner approves the split once. This holds even
 Each subtask is one coding pass on the same worktree.
 
 - Claude runs it in tools mode or single-call mode.
-- Cursor runs it in single-call mode.
+- Cursor runs it in tools mode or single-call mode.
 - The pass sees the task's `readPaths`, the subtask's `writePaths` and the files changed by its earlier subtasks as sources. It also gets the titles and summaries of earlier subtasks.
 - A `subtask` receipt phase is recorded.
 - Then the subtask's own checks run. Their results are saved as `subtask-<i>-checks.json`.
@@ -48,7 +48,6 @@ The first failing subtask stops the run. Later subtasks do not start. The worktr
 ## Limits
 
 - There is no resume from a failed subtask yet.
-- Cursor cannot explore the repository itself until Cursor tools mode exists. It sees only the files the host gives it.
 
 ## Live evidence (2026-10-23)
 
@@ -58,6 +57,7 @@ Scenario: a throwaway coupon repo. The task asks for `src/discount.js` with `dis
 |---|---|---|---|---|---|---|
 | Claude (tools mode) | "Create discount module" (src/discount.js, discount); "Apply discount in total" (src/pricing.js, discount + total) | passed | passed | pass | completed-local | 4 |
 | Cursor (Auto test mode, personal Free plan, test only) | "Add discount module" (src/discount.js, discount); "Wire discount into total" (src/pricing.js, discount + total) | passed | passed | pass | completed-local | 4 |
+| Cursor (tools mode, Auto test mode, personal Free plan, test only) | "Implement discount module" (src/discount.js, discount); "Wire discount into total" (src/pricing.js, discount + total) | passed | passed | pass | completed-local | 4 |
 
 Both routes produced the same `discount.js`.
 
