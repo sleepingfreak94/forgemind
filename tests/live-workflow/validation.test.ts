@@ -17,7 +17,11 @@ import {
   readSources,
   task,
 } from "../../src/live-workflow/validation.js";
-import { CLAUDE_PHASE_MODELS } from "../../src/live-workflow/routing-profile.js";
+import {
+  CLAUDE_PHASE_MODELS,
+  CURSOR_PHASE_MODELS,
+  CURSOR_TEST_MODEL,
+} from "../../src/live-workflow/routing-profile.js";
 test("exact path boundary rejects secrets traversal links and unauthorized model writes", () => {
   for (const p of [
     "../x",
@@ -65,6 +69,50 @@ test("exact path boundary rejects secrets traversal links and unauthorized model
   } finally {
     rmSync(d, { recursive: true, force: true });
   }
+});
+test("cursor provider routing is owner-fixed and validated", () => {
+  const common = {
+    schemaVersion: 1,
+    taskId: "cursor-route",
+    objective: "x",
+    readPaths: ["value.txt"],
+    writePaths: ["value.txt"],
+    checks: [
+      { id: "c", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+    ],
+    effort: "low",
+    maxModelRequests: 1,
+    maxPromptBytes: 1000,
+    maxOutputBytes: 1000,
+    maxRuntimeMs: 1000,
+    draftPr: false,
+  };
+  assert.ok(Object.isFrozen(CURSOR_PHASE_MODELS));
+  for (const p of ["plan", "coding", "review"] as const)
+    assert.equal(CURSOR_PHASE_MODELS[p], "grok-4.7-high");
+  assert.equal(CURSOR_TEST_MODEL, "auto");
+  for (const model of [CURSOR_PHASE_MODELS.coding, CURSOR_TEST_MODEL]) {
+    const r = task({ ...common, provider: "cursor", model });
+    assert.equal(r.provider, "cursor");
+    assert.equal(r.model, model);
+  }
+  assert.equal(
+    task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "single-call" }).codingMode,
+    "single-call",
+  );
+  for (const model of ["gpt-test", CLAUDE_PHASE_MODELS.coding, "grok-4.7"])
+    assert.throws(() => task({ ...common, provider: "cursor", model }), /Invalid model routing/);
+  for (const model of ["grok-4.7-high", "auto"])
+    for (const provider of [undefined, "openai", "anthropic"])
+      assert.throws(() => task({ ...common, provider, model }), /Invalid model routing/);
+  for (const provider of ["xai", "Cursor", null])
+    assert.throws(() => task({ ...common, provider, model: "gpt-test" }), /Invalid provider/);
+  assert.throws(
+    () => task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "tools", maxToolCalls: 8 }),
+    /Invalid coding mode/,
+  );
+  assert.equal(task({ ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding }).provider, "anthropic");
+  assert.equal(task({ ...common, provider: "openai", model: "gpt-test" }).provider, "openai");
 });
 test("check profiles and placeholders are validated", () => {
   const manifest = (check: unknown) => ({

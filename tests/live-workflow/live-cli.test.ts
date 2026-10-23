@@ -32,8 +32,20 @@ test('Claude route tuple is all-or-none and excludes the ChatGPT connection opti
   assert.throws(() => parseLiveArguments([...common, ...claude, '--connection', '/account']), /does not accept connection/);
   assert.throws(() => parseLiveArguments([...common, ...claude, '--codex', '/codex']), /does not accept connection/);
   assert.throws(() => parseLiveArguments([...common, '--claude', '/claude', '--claude-profile', '/profile']), /require --provider anthropic/);
-  assert.throws(() => parseLiveArguments([...common, '--provider', 'bedrock']), /openai or anthropic/);
+  assert.throws(() => parseLiveArguments([...common, '--provider', 'bedrock']), /openai, anthropic or cursor/);
   assert.throws(() => parseLiveArguments([...common, ...claude.slice(0, 2), '--claude', 'relative/claude']), /absolute paths/);
+});
+test('Cursor route tuple is all-or-none, stays separate from other providers and accepts only the test-auto mode', () => {
+  const common = ['run', '--workspace', '/repo', '--task', '/task.json'];
+  const cursor = ['--provider', 'cursor', '--cursor', '/cli/2026.10.22-27dcf5f', '--cursor-profile', '/profile', '--state-root', '/runs', '--worktree-root', '/trees'];
+  assert.equal(parseLiveArguments([...common, ...cursor]).values['--cursor-profile'], '/profile');
+  assert.equal(parseLiveArguments([...common, ...cursor, '--cursor-mode', 'test-auto']).values['--cursor-mode'], 'test-auto');
+  assert.throws(() => parseLiveArguments([...common, ...cursor, '--cursor-mode', 'real']), /Cursor mode must be test-auto/);
+  assert.throws(() => parseLiveArguments([...common, '--provider', 'cursor', '--cursor', '/cli']), /Cursor, cursor-profile, state-root and worktree-root must be supplied together/);
+  for (const extra of [['--claude', '/claude'], ['--connection', '/account'], ['--codex', '/codex']])
+    assert.throws(() => parseLiveArguments([...common, ...cursor, ...extra]), /cannot be combined with --provider cursor/);
+  assert.throws(() => parseLiveArguments([...common, '--cursor', '/cli', '--cursor-profile', '/profile']), /cannot be combined with --provider openai/);
+  assert.throws(() => parseLiveArguments([...common, '--provider', 'anthropic', '--cursor-mode', 'test-auto']), /cannot be combined/);
 });
 test('node-modules option is accepted for run only', () => {
   const values = parseLiveArguments(['run', '--workspace', '/absolute/project', '--task', '/absolute/task.json',

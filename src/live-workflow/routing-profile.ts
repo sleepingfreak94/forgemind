@@ -3,6 +3,12 @@ import type { ModelPhase } from './contracts.js';
 export const CLAUDE_PHASE_MODELS: Readonly<Record<ModelPhase, string>> = Object.freeze({
   plan: 'claude-opus-5-5', coding: 'claude-sonnet-5-5', review: 'claude-sonnet-5-5',
 });
+/** Owner-fixed Cursor routing: Grok 4.7 high plans, codes and reviews. Never task-selected. */
+export const CURSOR_PHASE_MODELS: Readonly<Record<ModelPhase, string>> = Object.freeze({
+  plan: 'grok-4.7-high', coding: 'grok-4.7-high', review: 'grok-4.7-high',
+});
+/** Owner-enabled test mode only. Auto picks the model itself, so it is never real work. */
+export const CURSOR_TEST_MODEL = 'auto' as const;
 export type OwnerRole = 'coder' | 'debugger' | 'tester' | 'reviewer' | 'architect' | 'classifier' | 'weekly-summary';
 /** Policy preference, never an availability or billing authorization claim. */
 export function ownerRouting(role: OwnerRole, options: { highTried?: boolean; architecturePurpose?: string; hostQualified?: boolean } = {}) {
