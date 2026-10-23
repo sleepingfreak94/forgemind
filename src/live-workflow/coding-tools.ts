@@ -37,7 +37,7 @@ export class CodingToolHost {
   readonly #summaries: string[] = [];
   constructor(readonly options: {
     root: string; task: LiveTask; source: string; checkDirectory: string;
-    /** Receipts for every effect; `phase` records each apply against the session source. */
+    /** Receipts for every effect; `phase` records each apply, and each check against the tree it ran on. */
     authority: ActionAuthority & { phase(name: string, source: string, data: unknown): void };
     checkRuntime?: CheckRuntime; signal: AbortSignal; boundary: () => void;
   }) {
@@ -98,10 +98,13 @@ export class CodingToolHost {
     if (name === 'host_apply') {
       const before = this.#current;
       const applied = applyEdits(root, this.#session, task.writePaths, a, authority, () => { this.options.boundary(); this.#assertCurrent(); });
-      this.#current = sourceIdentity(root);
-      authority.phase('tool-apply', this.#session, { call: this.#calls, before, after: this.#current,
-        summary: applied.summary.slice(0, 500), paths: applied.edits.map(e => e.path) });
-      this.#edits.push(...applied.edits); this.#summaries.push(applied.summary);
+      // The edit is on disk now: failing to record or keep it must end the session.
+      try {
+        this.#current = sourceIdentity(root);
+        authority.phase('tool-apply', this.#session, { call: this.#calls, before, after: this.#current,
+          summary: applied.summary.slice(0, 500), paths: applied.edits.map(e => e.path) });
+        this.#edits.push(...applied.edits); this.#summaries.push(applied.summary);
+      } catch (error) { throw this.#stop(error); }
       return JSON.stringify({ applied: applied.edits.map(e => e.path), source: this.#current });
     }
     if (name === 'host_check') {
@@ -110,6 +113,11 @@ export class CodingToolHost {
       const results = await runChecks(root, this.#session, task.checks.slice(0, index + 1), this.options.checkDirectory, authority,
         this.options.signal, this.options.checkRuntime);
       this.#assertCurrent();
+      try {
+        authority.phase('tool-check', this.#session, { call: this.#calls, tree: this.#current,
+          checks: task.checks.slice(0, index + 1).map(c => c.id),
+          results: results.map(r => ({ id: r.id, passed: r.passed, exitCode: r.exitCode })) });
+      } catch (error) { throw this.#stop(error); }
       return JSON.stringify(results.map(r => ({ id: r.id, passed: r.passed, exitCode: r.exitCode, stdout: tail(r.stdout), stderr: tail(r.stderr) })));
     }
     throw new Error('Unknown host tool');

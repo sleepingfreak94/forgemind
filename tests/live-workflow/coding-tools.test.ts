@@ -31,8 +31,9 @@ function repo() {
 }
 const reserved: string[] = [];
 const phases: string[] = [];
+const phaseData: [string, any][] = [];
 const authority = { reserve: (e: { kind: string }) => { reserved.push(e.kind); return { check() {}, finish() {} }; },
-  phase: (name: string) => { phases.push(name); } };
+  phase: (name: string, _source?: string, data?: unknown) => { phases.push(name); phaseData.push([name, data]); } };
 const host = (f: ReturnType<typeof repo>, signal = new AbortController().signal) => new CodingToolHost({ root: f.work, task: f.task,
   source: sourceIdentity(f.work), authority: authority as never, checkDirectory: join(f.root, 'checks'), signal, boundary: () => signal.throwIfAborted() });
 const parse = (r: { text: string }) => JSON.parse(r.text);
@@ -52,16 +53,23 @@ test('host tools read, apply and check within the exact grants; rejected calls l
       const r = await h.call(name, args);
       assert.equal(r.isError, true, name); assert.match(parse(r).error, error);
     }
+    const start = h.source;
     assert.equal(parse(await h.call('host_check', { id: 'value' }))[0].passed, false);
     const applied = parse(await h.call('host_apply', { summary: 'Set value', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] }));
     assert.deepEqual(applied.applied, ['value.txt']);
     assert.equal(applied.source, h.source); assert.equal(sourceIdentity(f.work), h.source);
     assert.equal(parse(await h.call('host_check', { id: 'value' }))[0].passed, true);
+    const checks = phaseData.filter(([n]) => n === 'tool-check').map(([, d]) => d);
+    assert.equal(checks.length, 2);
+    assert.deepEqual(checks[0].tree, start); assert.deepEqual(checks[1].tree, h.source);
+    assert.deepEqual(checks.map(c => c.checks), [['value'], ['value']]);
+    assert.deepEqual(checks[0].results, [{ id: 'value', passed: false, exitCode: 1 }]);
+    assert.deepEqual(checks[1].results, [{ id: 'value', passed: true, exitCode: 0 }]);
     assert.equal(h.calls, 8);
     assert.deepEqual(h.result('done').edits.map(e => e.path), ['value.txt']);
     assert.equal(readFileSync(join(f.work, 'notes.txt'), 'utf8'), 'notes');
     assert.ok(reserved.includes('artifact') && reserved.includes('command'));
-    assert.deepEqual(phases, ['tool-apply']);
+    assert.deepEqual(phases, ['tool-check', 'tool-apply', 'tool-check']);
   } finally { f.close(); }
 });
 
@@ -82,6 +90,24 @@ test('budget exhaustion, outside source changes and cancellation end the session
     assert.throws(() => new CodingToolHost({ root: f.work, task: { ...f.task, codingMode: 'single-call' }, source: 'x', authority: authority as never,
       checkDirectory: f.root, signal: controller.signal, boundary() {} }), /not granted/);
   } finally { f.close(); }
+});
+
+test('a failure to record an applied edit or a check ends the session', darwin, async () => {
+  for (const failing of ['tool-apply', 'tool-check']) {
+    const f = repo();
+    try {
+      const local = { reserve: () => ({ check() {}, finish() {} }),
+        phase: (name: string) => { if (name === failing) throw new Error('record failed'); } };
+      const signal = new AbortController().signal;
+      const h = new CodingToolHost({ root: f.work, task: f.task, source: sourceIdentity(f.work), authority: local as never,
+        checkDirectory: join(f.root, 'checks'), signal, boundary: () => signal.throwIfAborted() });
+      if (failing === 'tool-apply')
+        await assert.rejects(h.call('host_apply', { summary: 'x', edits: [{ path: 'value.txt', beforeSha256: sha256('before'), content: 'after' }] }), /record failed/);
+      else await assert.rejects(h.call('host_check', { id: 'value' }), /record failed/);
+      assert.match(h.fatal?.message ?? '', /record failed/);
+      await assert.rejects(h.call('host_read', { path: 'value.txt' }), /record failed/);
+    } finally { f.close(); }
+  }
 });
 
 /** Stands in for Claude: plans and reviews with complete(), codes by calling host tools. */
