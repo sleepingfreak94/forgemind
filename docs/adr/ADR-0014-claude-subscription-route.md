@@ -15,7 +15,7 @@ Each invocation disables every built-in tool, all MCP servers except a ForgeMind
 
 Model routing is fixed by the owner, not selected by a task: planning uses `claude-opus-5-5`; coding, the native coding session and the fresh review use `claude-sonnet-5-5`. Effort comes from the task.
 
-Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each call passes `--max-turns` and turns CLI retries off, and a reported retry is rejected. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
+Refusals, unavailable models, schema mismatches, quota exhaustion and errors stop the task with a receipt. `--fallback-model` and server-side fallbacks are never enabled. Each call passes `--max-turns` and turns CLI retries off, and a reported retry is rejected. On a 401 the CLI emitted two `api_retry` events despite `CLAUDE_CODE_MAX_RETRIES=0`, so that setting is not fully honoured; the parser's rejection of `api_retry` is the guard. Each run must observably report subscription overage as rejected and unused. Otherwise the result is discarded and the task stops.
 
 Two integration points exist: a Claude `ModelPort` for the supervised `runTask` route, and a tools coding mode in that same pipeline (Phase 2), where one Sonnet session drives exactly `host_read`, `host_apply` and `host_check` through a ForgeMind MCP endpoint. That endpoint runs in the trusted host over HTTP on `127.0.0.1` with a random port and secret path, not as a stdio child inside the Claude sandbox. The sandbox may reach only that loopback port besides the CLI's own HTTPS. Planning, plan approval, candidate checks, the fresh review and publication are unchanged.
 
@@ -63,5 +63,11 @@ Phase 2 is covered by:
 - MCP endpoint tests: protocol, loopback host and origin refusal, size and batch limits, and stop on fatal;
 - `codeWithTools` tests: arguments, loopback-only egress, tool-call accounting, and failure paths;
 - one owner-authorized live tools-mode task: Opus plan, a Sonnet session with 5 turns and 3 host calls, Sonnet review, 3 requests, overage rejected.
+
+Owner-run live re-pin evidence, 2026-10-23, for Claude Code 2.1.309:
+- all route flags are present;
+- sandboxed calls complete with `apiKeySource` `none` and overage rejected;
+- both 2.1.308 and 2.1.309 intermittently emit `system/ui_invalidate` `{event: "ui.render"}` before init, and the parser accepts it only in that exact shape;
+- on a 401 the CLI emitted two `api_retry` events despite `CLAUDE_CODE_MAX_RETRIES=0`, so the parser rejection of `api_retry` is the guard.
 
 Independent review and draft PRs follow `AGENTS.md`.
