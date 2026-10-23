@@ -7,8 +7,8 @@ Spike evidence: [route plan](claude-route-plan.md). macOS only.
 ## Owner setup
 
 1. Install Claude Code. The route accepts only the reviewed build: version
-   `2.1.308`, SHA-256 `ca923c86…4dd37`. Pass its canonical versioned path, for
-   example `~/.local/share/claude/versions/2.1.308`. A different build is refused
+   `2.1.309`, SHA-256 `5eadc000…0619c`. Pass its canonical versioned path, for
+   example `~/.local/share/claude/versions/2.1.309`. A different build is refused
    until it has been reviewed.
 2. Create an owner-only profile outside every checkout and sign in yourself, using
    Anthropic's own flow:
@@ -60,8 +60,9 @@ draft publication behave exactly as on the ChatGPT route.
   - at most three turns (also passed as `--max-turns`), with CLI retries off and any
     reported retry rejected;
   - no MCP servers, skills, slash commands or unreviewed plugins or agents;
-  - no `system` events besides the first `init` and numeric `thinking_tokens`
-    progress estimates; fallback, refusal-fallback and other subtypes fail closed;
+  - no `system` events besides the first `init` (the first event other than
+    content-free `ui_invalidate` render hints, accepted anywhere only in their exact
+    reviewed shape) and numeric `thinking_tokens` progress estimates; fallback, refusal-fallback and other subtypes fail closed;
   - usage from the routed model only;
   - overage reported `rejected` and unused;
   - a single successful final result with no API error or safety stop.

@@ -8,9 +8,9 @@ import type { ProcessRequest } from './process.js';
 
 /** Reviewed Claude Code build (ADR-0014). A different binary needs a new Phase 0 review. */
 export const REVIEWED_CLAUDE_CLI = Object.freeze({
-  version: '2.1.308',
-  versionOutput: '2.1.308 (Claude Code)',
-  sha256: 'ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37',
+  version: '2.1.309',
+  versionOutput: '2.1.309 (Claude Code)',
+  sha256: '5eadc0009cdcdbc0d06e58110d7b2baf88ced6088b1c33a60a21217fe410619c',
 });
 export type ReviewedClaudeBuild = { readonly version: string; readonly versionOutput: string; readonly sha256: string };
 /** Only `pinClaudeCli` and `pinClaudeConformanceCli` create one; plain objects are refused at launch. */

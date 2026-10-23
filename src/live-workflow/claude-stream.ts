@@ -22,7 +22,7 @@ export interface ClaudeStreamResult {
 
 const MAX_LINES = 4096;
 const MAX_USAGE_BYTES = 4096;
-/** Built-ins the reviewed 2.1.308 reports under `--safe-mode`; none is callable without tools. */
+/** Built-ins the reviewed 2.1.309 reports under `--safe-mode`; none is callable without tools. */
 const REVIEWED_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring'];
 // Without --safe-mode (MCP routes) the CLI also lists statusline-setup. No agent is callable: the tool inventory is exact.
 const REVIEWED_AGENTS = new Set(['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup']);
@@ -46,9 +46,14 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
   // Sonnet emits thinking progress estimates (observed live in a coding call); they carry no content.
   const progress = (e: Record<string, unknown>) => e.subtype === 'thinking_tokens'
     && [e.estimated_tokens, e.estimated_tokens_delta].every(n => typeof n === 'number' && Number.isFinite(n));
+  // Content-free render hint seen intermittently from 2.1.308/2.1.309, including before init; exact shape only.
+  const uiInvalidate = (e: Record<string, unknown>) => e.type === 'system' && e.subtype === 'ui_invalidate'
+    && isDeepStrictEqual(Object.keys(e).sort(), ['event', 'session_id', 'subtype', 'type', 'uuid'])
+    && e.event === 'ui.render' && typeof e.uuid === 'string' && typeof e.session_id === 'string';
+  const substantive = events.filter(e => !uiInvalidate(e));
   const init = system.filter(e => e.subtype === 'init');
-  const extra = system.find(e => e.subtype !== 'init' && !progress(e));
-  if (init.length !== 1 || events[0] !== init[0] || extra)
+  const extra = system.find(e => e.subtype !== 'init' && !progress(e) && !uiInvalidate(e));
+  if (init.length !== 1 || substantive[0] !== init[0] || extra)
     throw new Error(`Unreviewed Claude session start${extra ? ` (system ${label(extra.subtype)})` : ''}`);
   const session = init[0]!;
   if (session.model !== expected.model) throw new Error('Claude model mismatch; no substitution');
@@ -90,7 +95,7 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
       throw new Error('Claude usage beyond the plan is not observably disabled');
   }
   const results = events.filter(e => e.type === 'result');
-  if (results.length !== 1 || events[events.length - 1] !== results[0]) throw new Error('Claude run has no single final result');
+  if (results.length !== 1 || substantive[substantive.length - 1] !== results[0]) throw new Error('Claude run has no single final result');
   const result = results[0]!;
   if (result.subtype !== 'success' || result.is_error !== false || result.terminal_reason !== 'completed' || result.stop_reason === 'refusal'
     || result.api_error_status !== null || result.safety_stops !== 0)

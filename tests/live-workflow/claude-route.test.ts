@@ -67,6 +67,25 @@ test('thinking progress estimates are allowed only as numeric system events afte
   const fallback = claudeStream(sonnet, answer, { extra: [{ type: 'system', subtype: 'model_fallback' }] });
   assert.throws(() => parseClaudeStream(fallback, expected), /\(system model_fallback\)/);
 });
+test('ui_invalidate render hints are accepted only in the exact reviewed shape, before init or later', () => {
+  const ui = { type: 'system', subtype: 'ui_invalidate', event: 'ui.render', uuid: 'u-1', session_id: 's-1' };
+  const progress = { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 40, estimated_tokens_delta: 40 };
+  const lines = claudeStream(sonnet, answer).trimEnd().split('\n');
+  const join = (...parts: unknown[]) => parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join('\n') + '\n';
+  assert.deepEqual(parseClaudeStream(join(ui, ...lines), expected).output, answer);
+  assert.deepEqual(parseClaudeStream(join(ui, ui, ...lines), expected).output, answer);
+  assert.deepEqual(parseClaudeStream(claudeStream(sonnet, answer, { extra: [ui] }), expected).output, answer);
+  const mixed = join(ui, lines[0]!, progress, ...lines.slice(1, -1), { ...ui, uuid: 'u-2' }, lines.at(-1)!);
+  assert.deepEqual(parseClaudeStream(mixed, expected).output, answer);
+  const bad = /Unreviewed Claude session start \(system ui_invalidate\)$/;
+  const { uuid: _u, ...noUuid } = ui, { session_id: _s, ...noSession } = ui, { event: _e, ...noEvent } = ui;
+  for (const variant of [{ ...ui, content: 'x' }, noUuid, noSession, { ...ui, uuid: 7 }, { ...ui, session_id: 7 }, { ...ui, event: 'ui.other' }, noEvent]) {
+    assert.throws(() => parseClaudeStream(join(variant, ...lines), expected), bad);
+    assert.throws(() => parseClaudeStream(claudeStream(sonnet, answer, { extra: [variant] }), expected), bad);
+  }
+  assert.throws(() => parseClaudeStream(join(ui, progress, ...lines), expected), /Unreviewed Claude session start$/);
+  assert.throws(() => parseClaudeStream(join(lines[0]!, ui, lines[0]!, ...lines.slice(1)), expected), /Unreviewed Claude session start$/);
+});
 test('the built-in agent list without --safe-mode is reviewed', () => {
   const agents = ['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup'];
   assert.deepEqual(parseClaudeStream(claudeStream(sonnet, answer, { init: { agents } }), expected).output, answer);
