@@ -25,10 +25,13 @@ Status: **plan.** Branch `task/repo-read-and-splitting`, stacked on #33. Goal: l
 
 ## Part 3: automatic task splitting
 
-- **Contract:** a task opts in with `"split": true`, which requires the Claude route in tools mode.
-- **Split plan:** after planning, Opus returns ordered subtasks. Each has a title, an objective, `writePaths` that are a subset of the task's, and check ids from the task.
+- **Contract:** a task opts in with `"split": true` on either route, Claude or Cursor (owner requirement, 2026-10-23).
+- **Split plan:** after planning, the route's planner returns ordered subtasks: Opus on Claude, `grok-4.7-high` on Cursor (Auto only in `--cursor-mode test-auto`). Each has a title, an objective, `writePaths` that are a subset of the task's, and check ids from the task.
 - **Approval:** the host validates the split and shows it, and the owner approves the whole list once.
-- **Each subtask:** one Sonnet tools session on the same worktree, then that subtask's checks. A failing subtask stops the run with the worktree and receipts kept, and later subtasks don't start.
+- **Each subtask:** one coding session on the same worktree, then that subtask's checks.
+  - Claude: a Sonnet tools session (with repository read when the task asks for it).
+  - Cursor: one locked-down Cursor coding call returning edits, as today, since Cursor has no tools mode yet. The host gives it the subtask's `readPaths` and `writePaths`, and the files earlier subtasks changed. Cursor tools mode, and with it repository read on Cursor, is the follow-up.
+  - The split, approval, stop-on-failure, final checks, review and PR steps are shared code, not per route. Both routes are tested. A failing subtask stops the run with the worktree and receipts kept, and later subtasks don't start.
 - **At the end:** all task checks, one fresh review of the whole diff, and one draft PR.
 - **Budgets:** `maxModelRequests` and runtime bound the whole run.
 - **Resume:** resuming from the failed subtask is the next step after this. It can build on the existing continuation checkpoints (`docs/continuation.md`).
