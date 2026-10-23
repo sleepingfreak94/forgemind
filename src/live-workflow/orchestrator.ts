@@ -252,11 +252,12 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const tools = task.codingMode === 'tools';
     progress(tools ? 'Coding with host tools' : 'Generating bounded code edits');
     let changes: ReturnType<typeof applyEdits>;
+    let consulted: readonly string[] = [];
     if (tools) {
       const coded = await runToolCoding(model, { root: activeRoot, task, source: current, authority, checkDirectory: directory, signal,
         boundary: () => signal.throwIfAborted(), input: { task, plan: generated, sources, memory: context ?? null, beforeChecks },
         ...(options.checkRuntime ? { checkRuntime: options.checkRuntime } : {}) });
-      ({ changes, source: current } = coded);
+      ({ changes, source: current, consulted } = coded);
       currentSource(); memory?.assertCurrent(context!);
     } else {
       const raw = await model.complete(
@@ -315,7 +316,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
           videos: { before: beforeVideo ?? null, after: afterVideo ?? null },
           source: readSources(
             activeRoot,
-            [...new Set([...task.readPaths, ...task.writePaths])],
+            [...new Set([...task.readPaths, ...task.writePaths, ...consulted])],
             task.maxPromptBytes,
           ),
         },

@@ -57,6 +57,7 @@ export class CodingToolHost {
   #queue: Promise<unknown> = Promise.resolve();
   readonly #edits: ProposedEdit[] = [];
   readonly #summaries: string[] = [];
+  readonly #consulted: string[] = [];
   constructor(readonly options: {
     root: string; task: LiveTask; source: string; checkDirectory: string;
     /** Receipts for every effect; `phase` records each apply, and each check against the tree it ran on. */
@@ -74,6 +75,8 @@ export class CodingToolHost {
   get source(): string { return this.#current; }
   get calls(): number { return this.#calls; }
   get fatal(): Error | undefined { return this.#fatal; }
+  /** Paths host_read returned successfully, in first-read order without duplicates. */
+  get consulted(): readonly string[] { return [...this.#consulted]; }
   /** Applied edits in call order, for the run record; the reviewed result is the Git diff. */
   result(summary: string): CodingResult { return { summary: [summary, ...this.#summaries].join('\n').slice(0, 4000), edits: [...this.#edits] }; }
 
@@ -120,6 +123,7 @@ export class CodingToolHost {
       receipt.check();
       const digest = content ? sha256(content) : null;
       receipt.finish('completed', digest ?? sha256('absent'));
+      if (!this.#consulted.includes(a.path)) this.#consulted.push(a.path);
       return JSON.stringify({ path: a.path, sha256: digest, content: content ? content.toString('utf8') : null });
     }
     if (name === 'host_list' && this.#readable) {
@@ -220,7 +224,7 @@ function toolsInstructions(tools: readonly { name: string }[]): string {
 
 /** Run one tools-mode coding session and return its applied changes and resulting source. */
 export async function runToolCoding(model: ModelPort, options: ConstructorParameters<typeof CodingToolHost>[0] & { input: unknown }):
-  Promise<{ changes: CodingResult; source: string }> {
+  Promise<{ changes: CodingResult; source: string; consulted: readonly string[] }> {
   if (!model.codeWithTools) throw new Error('Tools coding mode requires a route that can drive host tools');
   const host = new CodingToolHost(options);
   const tools = codingToolsFor(options.task);
@@ -231,5 +235,5 @@ export async function runToolCoding(model: ModelPort, options: ConstructorParame
   if (host.fatal) throw host.fatal;
   const changes = host.result(summary);
   if (!changes.edits.length) throw new Error('Tools coding session applied no edits');
-  return { changes, source: host.source };
+  return { changes, source: host.source, consulted: host.consulted };
 }

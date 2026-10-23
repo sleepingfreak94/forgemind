@@ -193,6 +193,52 @@ test('a tools-mode task codes through host tools inside the real pipeline and is
   } finally { f.close(); }
 });
 
+test('consulted lists successfully read paths in first-read order without duplicates', darwin, async () => {
+  const f = repo();
+  try {
+    mkdirSync(join(f.work, 'docs/rules'), { recursive: true });
+    writeFileSync(join(f.work, 'docs/rules/TAX.md'), 'RULE: value must be after');
+    f.git('add', '.'); f.git('commit', '-q', '-m', 'rule');
+    const h = host({ ...f, task: { ...f.task, readScope: 'repository', maxToolCalls: 10 } });
+    assert.deepEqual(h.consulted, []);
+    for (const path of ['value.txt', 'docs/rules/TAX.md', 'value.txt', 'config/secrets.json', 'notes.txt']) await h.call('host_read', { path });
+    assert.deepEqual(h.consulted, ['value.txt', 'docs/rules/TAX.md', 'notes.txt']);
+    (h.consulted as string[]).push('x');
+    assert.deepEqual(h.consulted, ['value.txt', 'docs/rules/TAX.md', 'notes.txt']);
+  } finally { f.close(); }
+});
+
+test('the review input includes tracked files the tools session consulted under repository scope', darwin, async () => {
+  const f = repo();
+  const inputs: Record<string, any> = {};
+  try {
+    mkdirSync(join(f.work, 'docs/rules'), { recursive: true });
+    writeFileSync(join(f.work, 'docs/rules/TAX.md'), 'RULE: value must be after');
+    f.git('add', '.'); f.git('commit', '-q', '-m', 'rule');
+    const answers = [{ objective: 'Change value to after', paths: ['value.txt'], steps: ['Edit value'], acceptanceCriteria: ['value is after'], risks: [] },
+      { verdict: 'pass', findings: [], acceptance: ['value is after'] }];
+    const result = await runTask({ workspace: f.work, task: { ...f.task, readScope: 'repository' }, stateDirectory: join(f.root, 'state'),
+      worktreeDirectory: join(f.root, 'worktrees'), confirmPlan: async () => false,
+      modelFactory: (runAuthority, source) => ({
+        complete: (async (_i: string, input: unknown, _s: unknown, _g: unknown, phase: string) => { inputs[phase] = input; return answers.shift(); }) as never,
+        codeWithTools: async request => {
+          const provider = runAuthority.reserve({ kind: 'provider', source: source(), detail: { phase: 'coding' } });
+          provider.check();
+          await request.call('host_read', { path: 'docs/rules/TAX.md' });
+          const read = JSON.parse((await request.call('host_read', { path: 'value.txt' })).text);
+          await request.call('host_apply', { summary: 'Set value', edits: [{ path: 'value.txt', beforeSha256: read.sha256, content: 'after' }] });
+          await request.call('host_check', { id: 'value' });
+          request.assertCurrent(); provider.check(); provider.finish('completed', sha256('session'));
+          return { summary: 'Set value to after' };
+        } }) });
+    assert.equal(result.status, 'completed-local');
+    const review = JSON.stringify(inputs.review.source);
+    assert.ok(review.includes('docs/rules/TAX.md') && review.includes('RULE: value must be after'));
+    assert.ok(review.includes('notes.txt') && review.includes('value.txt'));
+    assert.ok(!JSON.stringify(inputs.plan.sources).includes('docs/rules/TAX.md'));
+  } finally { f.close(); }
+});
+
 test('tools mode is refused for a model that cannot drive host tools, and an edit-free session fails', darwin, async () => {
   const f = repo();
   try {
