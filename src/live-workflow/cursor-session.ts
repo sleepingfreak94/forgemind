@@ -67,13 +67,19 @@ export function assertPinnedCursorCli(cli: unknown): asserts cli is CursorCli {
 export const CURSOR_DENY_ALL: readonly string[] = Object.freeze(
   ['Read(**)', 'Read(/**)', 'Write(**)', 'Write(/**)', 'Shell(*)', 'WebFetch(*)', 'Mcp(*:*)']);
 
-function cursorConfigDirectory(parent: string): string {
+interface CheckedDirectory { readonly dir: string; readonly dev: number; readonly ino: number }
+function cursorConfigDirectory(parent: string): CheckedDirectory {
   const dir = join(parent, '.cursor');
   let stat = lstatSync(dir, { throwIfNoEntry: false });
   if (!stat) { mkdirSync(dir, { mode: 0o700 }); stat = lstatSync(dir); }
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.())
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o022) !== 0)
     throw new Error(`Cursor ${dir} (.cursor) must be a real directory owned by the current user`);
-  return dir;
+  return { dir, dev: stat.dev, ino: stat.ino };
+}
+function assertSameDirectory(checked: CheckedDirectory): void {
+  const stat = lstatSync(checked.dir, { throwIfNoEntry: false });
+  if (!stat || !stat.isDirectory() || stat.dev !== checked.dev || stat.ino !== checked.ino)
+    throw new Error('Cursor .cursor directory changed while it was locked');
 }
 function replaceFile(dir: string, name: string, data: string): void {
   const tmp = join(dir, `.${name}.${randomBytes(8).toString('hex')}.tmp`);
@@ -88,10 +94,12 @@ function replaceFile(dir: string, name: string, data: string): void {
 /** Write deny-all permission configs into the profile and work `.cursor` directories. The sandboxed CLI can write
  * in its profile, so the host never follows links: directories must be real, files are replaced by rename. */
 export function lockCursorPermissions(profileDirectory: string, workDirectory: string): void {
-  const profileDir = cursorConfigDirectory(profileDirectory), workDir = cursorConfigDirectory(workDirectory);
-  replaceFile(profileDir, 'cli-config.json', JSON.stringify({ version: 1, editor: { vimMode: false }, approvalMode: 'allowlist',
+  const profile = cursorConfigDirectory(profileDirectory), work = cursorConfigDirectory(workDirectory);
+  replaceFile(profile.dir, 'cli-config.json', JSON.stringify({ version: 1, editor: { vimMode: false }, approvalMode: 'allowlist',
     permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
-  replaceFile(workDir, 'cli.json', JSON.stringify({ permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
+  replaceFile(work.dir, 'cli.json', JSON.stringify({ permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
+  assertSameDirectory(profile);
+  assertSameDirectory(work);
 }
 
 /** Deny-default profile from Phase 0: no fork, no Keychain (file credential store), reads of the system

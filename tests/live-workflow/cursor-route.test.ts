@@ -170,6 +170,49 @@ test('a symlinked profile .cursor is refused', async () => {
   } finally { f.close(); }
 });
 
+test('a group- or world-writable profile .cursor is refused', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), dir = join(f.profile, '.cursor');
+    for (const mode of [0o720, 0o702, 0o770, 0o777]) {
+      chmodSync(dir, mode);
+      assert.throws(() => launchIn(f, session), /\.cursor/);
+      assert.throws(() => lockCursorPermissions(f.profile, join(f.scratch, 'x')), /\.cursor/);
+    }
+    chmodSync(dir, 0o700);
+    assert.doesNotThrow(() => launchIn(f, session));
+  } finally { f.close(); }
+});
+
+test('a group- or world-writable work .cursor is refused', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), work = join(f.scratch, 'call', 'work'), dir = join(work, '.cursor');
+    mkdirSync(dir, { recursive: true });
+    for (const mode of [0o720, 0o702]) {
+      chmodSync(dir, mode);
+      assert.throws(() => launchIn(f, session, 'call'), /\.cursor/);
+      assert.ok(!existsSync(join(dir, 'cli.json')));
+    }
+  } finally { f.close(); }
+});
+
+test('a .cursor that is a regular file is refused', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free');
+    const work = join(f.scratch, 'call2', 'work');
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, '.cursor'), '');
+    assert.throws(() => launchIn(f, session, 'call2'), /\.cursor/);
+    assert.throws(() => lockCursorPermissions(f.profile, work), /\.cursor/);
+    const dir = join(f.profile, '.cursor');
+    rmSync(dir, { recursive: true }); writeFileSync(dir, '');
+    assert.throws(() => launchIn(f, session), /\.cursor/);
+    assert.throws(() => lockCursorPermissions(f.profile, join(f.scratch, 'x')), /\.cursor/);
+  } finally { f.close(); }
+});
+
 function cursorTask(model = grok): LiveTask {
   return validateTask({ schemaVersion: 1, taskId: 'cursor-task', objective: 'x', readPaths: ['v.txt'], writePaths: ['v.txt'],
     checks: [{ id: 'c', executable: process.execPath, args: [], timeoutMs: 5000 }], model, provider: 'cursor', effort: 'low',
