@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,12 +20,28 @@ if (flags.some(flag => !['--json', '--require-host'].includes(flag)) || new Set(
   if (nodeSupported) { try { const sqlite = await import('node:sqlite'); sqliteAvailable = typeof sqlite.DatabaseSync === 'function'; } catch { /* report unavailable */ } }
   const posixIdentity = process.platform !== 'win32' && typeof process.getuid === 'function';
   const hostPrerequisitesPresent = process.platform === 'darwin' && posixIdentity && existsSync('/usr/bin/sandbox-exec');
+  const reviewed = (file, name, route) => {
+    const version = new RegExp(name + "\\s*=\\s*Object\\.freeze\\(\\{[^}]*?\\bversion:\\s*'([^']+)'").exec(readFileSync(join(root, 'src/live-workflow', file), 'utf8'))?.[1];
+    if (!version || !/^[A-Za-z0-9._-]+$/.test(version)) throw new Error(`Reviewed ${route} CLI version not found`);
+    return version;
+  };
+  const st = path => { try { return lstatSync(path, { throwIfNoEntry: false }); } catch { return undefined; } };
+  const ownerOnly = path => { const s = st(path); return s?.isDirectory() === true && typeof process.getuid === 'function' && s.uid === process.getuid() && (s.mode & 0o077) === 0; };
+  const home = homedir(), claudeVersion = reviewed('claude-session.ts', 'REVIEWED_CLAUDE_CLI', 'Claude'), cursorVersion = reviewed('cursor-session.ts', 'REVIEWED_CURSOR_CLI', 'Cursor');
+  const cursorDir = join(home, '.local/share/cursor-agent/versions', cursorVersion);
+  const routes = {
+    claude: { reviewedVersion: claudeVersion, buildPresent: st(join(home, '.local/share/claude/versions', claudeVersion))?.isFile() === true,
+      profileReady: ownerOnly(join(home, '.forgemind/claude-profile')),
+      probeCommand: `npm run probe:claude -- ~/.local/share/claude/versions/${claudeVersion} ~/.forgemind/claude-profile` },
+    cursor: { reviewedVersion: cursorVersion, buildPresent: st(cursorDir)?.isDirectory() === true && ['node', 'index.js'].every(name => st(join(cursorDir, name))?.isFile() === true),
+      profileReady: ownerOnly(join(home, '.forgemind/cursor-profile')), personalAllowlistPresent: st(join(home, '.forgemind/cursor-route.json'))?.isFile() === true,
+      probeCommand: `npm run probe:cursor -- ~/.local/share/cursor-agent/versions/${cursorVersion} ~/.forgemind/cursor-profile <workspace>` } };
   const report = { platform: process.platform, architecture: process.arch, nodeVersion: process.versions.node,
     requiredNode: pkg.engines.node, nodeSupported, dependenciesInstalled, sqliteAvailable,
     portableSetupReady: nodeSupported && dependenciesInstalled && sqliteAvailable,
     localPolicyIdentityAvailable: posixIdentity, hostBackend: process.platform === 'darwin' ? 'macos-seatbelt' : 'unimplemented',
     hostPrerequisitesPresent, hostVerified: false, liveCodingEnabled: false,
-    liveBlockReason: 'Subscription-only spending cannot currently be enforced for ChatGPT login',
+    liveBlockReason: 'Subscription-only spending cannot currently be enforced for ChatGPT login', routes,
     nextCommand: nodeSupported && dependenciesInstalled ? 'npm run verify:portable' : 'Install the required Node version, then run npm ci.',
     limitations: process.platform === 'win32' ? ['Windows ACL/SID policy and enforced sandbox backend are not implemented.', 'Portable fixture checks do not certify native Cursor/Codex or live coding.'] :
       ['Host prerequisites are diagnostic only; run the native suite to verify enforcement.', 'Live provider, spend and write gates remain closed.'] };

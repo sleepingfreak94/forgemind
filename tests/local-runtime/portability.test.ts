@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { REVIEWED_CLAUDE_CLI } from '../../src/live-workflow/claude-session.js';
+import { REVIEWED_CURSOR_CLI } from '../../src/live-workflow/cursor-session.js';
 import { testSuite } from '../../src/local-runtime/test-suites.js';
 
 test('portable routing includes fixtures and leaves POSIX/native verification explicit', () => {
@@ -27,6 +30,14 @@ test('setup doctor is credential-free and never certifies an untested host', () 
   assert.equal(report.liveCodingEnabled, false); assert.equal(report.hostVerified, false);
   assert.equal(report.localPolicyIdentityAvailable, process.platform !== 'win32' && typeof process.getuid === 'function');
   assert.ok(!result.stdout.includes('doctor-synthetic-secret'));
+  const { claude, cursor } = report.routes;
+  assert.equal(claude.reviewedVersion, REVIEWED_CLAUDE_CLI.version); assert.equal(cursor.reviewedVersion, REVIEWED_CURSOR_CLI.version);
+  for (const route of [claude, cursor]) { assert.equal(route.buildPresent, false); assert.equal(route.profileReady, false); }
+  assert.equal(cursor.personalAllowlistPresent, false);
+  assert.equal(claude.probeCommand, `npm run probe:claude -- ~/.local/share/claude/versions/${REVIEWED_CLAUDE_CLI.version} ~/.forgemind/claude-profile`);
+  assert.equal(cursor.probeCommand, `npm run probe:cursor -- ~/.local/share/cursor-agent/versions/${REVIEWED_CURSOR_CLI.version} ~/.forgemind/cursor-profile <workspace>`);
+  const source = readFileSync(sourceScript, 'utf8');
+  assert.ok(!/child_process/.test(source) && !/\b(execFile|execSync|spawn|fork)\b/.test(source));
 });
 test('verification scripts reject unsupported arguments without running tests or agent diagnostics', () => {
   for (const [file, args] of [['doctor.mjs', ['--unsafe']], ['run-tests.mjs', ['unknown']]] as const) {
