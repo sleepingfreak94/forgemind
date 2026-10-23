@@ -104,6 +104,7 @@ export function task(raw: unknown): LiveTask {
     "provider",
     "codingMode",
     "maxToolCalls",
+    "readScope",
   ]);
   if (raw.schemaVersion !== 1 || typeof raw.draftPr !== "boolean")
     throw new Error("Invalid task version/preferences");
@@ -140,6 +141,11 @@ export function task(raw: unknown): LiveTask {
       : raw.maxToolCalls !== undefined
   )
     throw new Error("Invalid tool-call budget");
+  if (
+    raw.readScope !== undefined &&
+    (raw.readScope !== "repository" || raw.codingMode !== "tools")
+  )
+    throw new Error("Invalid read scope");
   for (const key of ["readPaths", "writePaths"] as const) {
     const list = raw[key];
     if (

@@ -1,9 +1,9 @@
 import { lstatSync, readFileSync } from 'node:fs';
 import { applyEdits } from './edits.js';
 import { runChecks } from './checks.js';
-import { sourceIdentity } from './repository.js';
+import { sourceIdentity, trackedPaths } from './repository.js';
 import { codingSchema } from './contracts.js';
-import { safePath, sha256 } from './validation.js';
+import { safePath, sha256, sourcePath } from './validation.js';
 import type { CheckRuntime } from './check-runtime.js';
 import type { ActionAuthority, CodingResult, LiveTask, ModelPort, ProposedEdit } from './contracts.js';
 
@@ -16,6 +16,26 @@ export const codingTools = Object.freeze([
   { name: 'host_check', description: 'Run one predefined check by id, after the checks listed before it in the task. Returns each check result.',
     inputSchema: { type: 'object', additionalProperties: false, required: ['id'], properties: { id: { type: 'string' } } } },
 ]);
+const hostListTool = Object.freeze({ name: 'host_list',
+  description: 'List tracked, readable repository files whose path starts with prefix (all files if omitted). Returns {paths, truncated}; at most 2000 paths, sorted.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: { prefix: { type: 'string' } } } });
+const hostSearchTool = Object.freeze({ name: 'host_search',
+  description: 'Literal (not regex) case-sensitive substring search, 2-200 characters, over tracked readable text files, optionally only under a path prefix. Returns {matches:[{path,line,text}], truncated}; at most 200 matches, lines trimmed to 200 characters; large (>512 KiB) and binary files are skipped.',
+  inputSchema: { type: 'object', additionalProperties: false, required: ['text'], properties: { text: { type: 'string' }, path: { type: 'string' } } } });
+/** The tools for one task: read-only list and search are added only with repository read scope. */
+export function codingToolsFor(task: LiveTask): readonly { name: string; description: string; inputSchema: object }[] {
+  return task.readScope === 'repository' ? Object.freeze([...codingTools, hostListTool, hostSearchTool]) : codingTools;
+}
+/** Whether a tracked path may be read through repository scope. The name rules apply to every
+ * path segment (stricter: `secrets/x.ts` is also denied). Case-insensitive. */
+export function repositoryReadable(path: string): boolean {
+  return !path.split('/').some(part => {
+    const p = part.toLowerCase();
+    return p === '.git' || /^\.env(\..*)?$/.test(p) || /\.(pem|key|p12|pfx|keystore)$/.test(p) ||
+      /^(id_rsa|id_ecdsa|id_ed25519)/.test(p) || p === '.npmrc' || p === '.netrc' || /^(credentials|secrets)/.test(p);
+  });
+}
+const MAX_LIST = 2000, MAX_MATCHES = 200, MAX_FILE = 512 * 1024, MAX_SCANNED = 32 * 1024 * 1024;
 export type CodingToolName = typeof codingTools[number]['name'];
 export interface CodingToolResult { text: string; isError: boolean }
 const MAX_CHECK_TEXT = 16384;
@@ -28,6 +48,8 @@ const tail = (text: string) => text.length > MAX_CHECK_TEXT ? '…' + text.slice
  * source, which the host verifies before every call. The orchestrator advances the authority after. */
 export class CodingToolHost {
   readonly #session: string;
+  /** Tracked readable paths, computed once at construction (later applied files are readable via writePaths only). */
+  readonly #readable: ReadonlySet<string> | undefined;
   #current: string;
   #calls = 0;
   #resultBytes = 0;
@@ -43,6 +65,11 @@ export class CodingToolHost {
   }) {
     if (options.task.codingMode !== 'tools' || !options.task.maxToolCalls) throw new Error('Tools coding mode is not granted');
     this.#session = this.#current = options.source;
+    if (options.task.readScope === 'repository') {
+      // Also require sourcePath validity so every listed path can pass safePath (excludes dist/, build/, ...).
+      const valid = (p: string) => { try { sourcePath(p); return true; } catch { return false; } };
+      this.#readable = new Set(trackedPaths(options.root).filter(p => repositoryReadable(p) && valid(p)));
+    }
   }
   get source(): string { return this.#current; }
   get calls(): number { return this.#calls; }
@@ -82,7 +109,7 @@ export class CodingToolHost {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Malformed tool arguments');
     const a = args as Record<string, unknown>;
     if (name === 'host_read') {
-      if (Object.keys(a).join() !== 'path' || typeof a.path !== 'string' || ![...task.readPaths, ...task.writePaths].includes(a.path))
+      if (Object.keys(a).join() !== 'path' || typeof a.path !== 'string' || !([...task.readPaths, ...task.writePaths].includes(a.path) || this.#readable?.has(a.path)))
         throw new Error('Read outside the exact grant');
       const path = safePath(root, a.path, true);
       let content: Buffer | null = null;
@@ -94,6 +121,49 @@ export class CodingToolHost {
       const digest = content ? sha256(content) : null;
       receipt.finish('completed', digest ?? sha256('absent'));
       return JSON.stringify({ path: a.path, sha256: digest, content: content ? content.toString('utf8') : null });
+    }
+    if (name === 'host_list' && this.#readable) {
+      if (!Object.keys(a).every(k => k === 'prefix') || (a.prefix !== undefined && (typeof a.prefix !== 'string' || Buffer.byteLength(a.prefix) > 1024)))
+        throw new Error('Invalid list arguments');
+      const prefix = (a.prefix as string | undefined) ?? '';
+      const all = [...this.#readable].filter(p => p.startsWith(prefix)).sort((x, y) => Buffer.compare(Buffer.from(x), Buffer.from(y)));
+      const receipt = authority.reserve({ kind: 'artifact', source: this.#session, detail: { operation: 'coding.list', tree: this.#current } });
+      receipt.check();
+      const out = JSON.stringify({ paths: all.slice(0, MAX_LIST), truncated: all.length > MAX_LIST });
+      receipt.finish('completed', sha256(out));
+      return out;
+    }
+    if (name === 'host_search' && this.#readable) {
+      if (!Object.keys(a).every(k => k === 'text' || k === 'path') || typeof a.text !== 'string' || a.text.length < 2 || a.text.length > 200 ||
+          (a.path !== undefined && (typeof a.path !== 'string' || Buffer.byteLength(a.path) > 1024)))
+        throw new Error('Invalid search arguments');
+      const needle = a.text, prefix = (a.path as string | undefined) ?? '';
+      const paths = [...this.#readable].filter(p => p.startsWith(prefix)).sort((x, y) => Buffer.compare(Buffer.from(x), Buffer.from(y)));
+      const matches: { path: string; line: number; text: string }[] = [];
+      let truncated = false, scanned = 0;
+      scan: for (const p of paths) {
+        let buffer: Buffer;
+        try {
+          const file = safePath(root, p);
+          const stat = lstatSync(file);
+          if (!stat.isFile() || stat.size > MAX_FILE) continue;
+          if (scanned + stat.size > MAX_SCANNED) { truncated = true; break; }
+          scanned += stat.size;
+          buffer = readFileSync(file);
+        } catch { continue; }
+        if (buffer.includes(0)) continue;
+        const lines = buffer.toString('utf8').split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i]!.includes(needle)) continue;
+          if (matches.length >= MAX_MATCHES) { truncated = true; break scan; }
+          matches.push({ path: p, line: i + 1, text: lines[i]!.slice(0, 200) });
+        }
+      }
+      const receipt = authority.reserve({ kind: 'artifact', source: this.#session, detail: { operation: 'coding.search', tree: this.#current } });
+      receipt.check();
+      const out = JSON.stringify({ matches, truncated });
+      receipt.finish('completed', sha256(out));
+      return out;
     }
     if (name === 'host_apply') {
       const before = this.#current;
@@ -143,12 +213,18 @@ const TOOLS_INSTRUCTIONS = [
   'Do not change unrelated paths or weaken tests. When done, answer with a short summary of the change.',
 ].join('\n');
 
+function toolsInstructions(tools: readonly { name: string }[]): string {
+  if (!tools.some(t => t.name === 'host_list' || t.name === 'host_search')) return TOOLS_INSTRUCTIONS;
+  return TOOLS_INSTRUCTIONS + '\nhost_list lists tracked readable repository files by path prefix and host_search finds a literal string in them; use them to explore before editing. host_read accepts any listed path. Writes remain limited to the granted write paths.';
+}
+
 /** Run one tools-mode coding session and return its applied changes and resulting source. */
 export async function runToolCoding(model: ModelPort, options: ConstructorParameters<typeof CodingToolHost>[0] & { input: unknown }):
   Promise<{ changes: CodingResult; source: string }> {
   if (!model.codeWithTools) throw new Error('Tools coding mode requires a route that can drive host tools');
   const host = new CodingToolHost(options);
-  const { summary } = await model.codeWithTools({ instructions: TOOLS_INSTRUCTIONS, input: options.input, tools: codingTools,
+  const tools = codingToolsFor(options.task);
+  const { summary } = await model.codeWithTools({ instructions: toolsInstructions(tools), input: options.input, tools,
     call: (name, args) => host.call(name, args), maxToolCalls: options.task.maxToolCalls!,
     assertCurrent: () => { if (host.fatal) throw host.fatal; if (sourceIdentity(options.root) !== host.source) throw new Error('Source changed outside host tools'); } },
     options.signal);

@@ -26,6 +26,8 @@ export interface LiveTask {
   codingMode?: "single-call" | "tools";
   /** Host tool calls allowed in a tools-mode coding session. */
   maxToolCalls?: number;
+  /** Omitted means reads are limited to readPaths and writePaths. "repository" (tools coding mode only) lets host tools read, list and search every tracked, non-secret file. Writes stay limited to writePaths. */
+  readScope?: "repository";
 }
 /** Pipeline stage of one model call; routes that pin a model per stage require it. */
 export type ModelPhase = "plan" | "coding" | "review";

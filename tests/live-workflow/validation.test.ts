@@ -164,6 +164,43 @@ test("check profiles and placeholders are validated", () => {
   assert.deepEqual(plain.checks[0], baseCheck);
   assert.equal("profile" in plain.checks[0]!, false);
 });
+test("read scope requires repository value and tools coding mode", () => {
+  const common = {
+    schemaVersion: 1,
+    taskId: "read-scope",
+    objective: "x",
+    readPaths: ["value.txt"],
+    writePaths: ["value.txt"],
+    checks: [
+      { id: "c", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+    ],
+    effort: "low",
+    maxModelRequests: 1,
+    maxPromptBytes: 1000,
+    maxOutputBytes: 1000,
+    maxRuntimeMs: 1000,
+    draftPr: false,
+  };
+  const anthropic = { ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding };
+  const tools = { ...anthropic, codingMode: "tools", maxToolCalls: 8 };
+  assert.equal(task({ ...tools, readScope: "repository" }).readScope, "repository");
+  assert.equal("readScope" in task(tools), false);
+  for (const s of ["all", "Repository", null])
+    assert.throws(() => task({ ...tools, readScope: s }), /Invalid read scope/);
+  assert.throws(() => task({ ...anthropic, readScope: "repository" }), /Invalid read scope/);
+  assert.throws(
+    () => task({ ...anthropic, codingMode: "single-call", readScope: "repository" }),
+    /Invalid read scope/,
+  );
+  assert.throws(
+    () => task({ ...common, model: "gpt-test", readScope: "repository" }),
+    /Invalid read scope/,
+  );
+  assert.throws(
+    () => task({ ...common, model: "gpt-test", codingMode: "tools", maxToolCalls: 8, readScope: "repository" }),
+    /Invalid coding mode/,
+  );
+});
 test("coding mode and tool-call budget are validated", () => {
   const common = {
     schemaVersion: 1,

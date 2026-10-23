@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodingToolHost, codingTools, runToolCoding } from '../../src/live-workflow/coding-tools.js';
+import { CodingToolHost, codingTools, codingToolsFor, repositoryReadable, runToolCoding } from '../../src/live-workflow/coding-tools.js';
 import { sourceIdentity } from '../../src/live-workflow/repository.js';
 import { runTask } from '../../src/live-workflow/orchestrator.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
@@ -108,6 +108,53 @@ test('a failure to record an applied edit or a check ends the session', darwin, 
       await assert.rejects(h.call('host_read', { path: 'value.txt' }), /record failed/);
     } finally { f.close(); }
   }
+});
+
+test('codingToolsFor and repositoryReadable follow the read scope rules', () => {
+  const base = repo().task;
+  assert.deepEqual(codingToolsFor(base).map(t => t.name), ['host_read', 'host_apply', 'host_check']);
+  assert.deepEqual(codingToolsFor({ ...base, readScope: 'repository' }).map(t => t.name),
+    ['host_read', 'host_apply', 'host_check', 'host_list', 'host_search']);
+  for (const p of ['.git/config', 'a/.env.local', '.ENV', 'k.PEM', 'id_ed25519.pub', '.npmrc', 'Credentials.txt', 'secrets.yml'])
+    assert.equal(repositoryReadable(p), false, p);
+  for (const p of ['src/app.ts', '.envrc-docs/readme.md', 'docs/environment.md'])
+    assert.equal(repositoryReadable(p), true, p);
+});
+
+test('repository read scope reads, lists and searches tracked readable files only', darwin, async () => {
+  const f = repo();
+  try {
+    mkdirSync(join(f.work, 'src/deep'), { recursive: true });
+    writeFileSync(join(f.work, 'src/deep/util.ts'), 'NEEDLE_VALUE\n');
+    writeFileSync(join(f.work, 'config/secrets.json'), 'NEEDLE_VALUE\n');
+    writeFileSync(join(f.work, 'release.keystore'), 'NEEDLE_VALUE\n');
+    writeFileSync(join(f.work, '.npmrc'), 'fund=false\n');
+    writeFileSync(join(f.work, '.gitignore'), '.env\n');
+    f.git('add', '.'); f.git('commit', '-q', '-m', 'tree');
+    writeFileSync(join(f.work, '.env'), 'NEEDLE_VALUE\n');
+    writeFileSync(join(f.work, 'scratch.txt'), 'NEEDLE_VALUE\n');
+    const h = host({ ...f, task: { ...f.task, readScope: 'repository', maxToolCalls: 20 } });
+    const read = await h.call('host_read', { path: 'src/deep/util.ts' });
+    assert.equal(read.isError, false); assert.equal(parse(read).content, 'NEEDLE_VALUE\n');
+    for (const path of ['.env', 'scratch.txt', 'missing.txt', 'config/secrets.json']) {
+      const r = await h.call('host_read', { path });
+      assert.equal(r.isError, true, path); assert.match(parse(r).error, /outside the exact grant/);
+    }
+    const list = parse(await h.call('host_list', {}));
+    for (const p of ['value.txt', 'notes.txt', 'src/deep/util.ts']) assert.ok(list.paths.includes(p), p);
+    for (const p of ['.env', '.npmrc', 'config/secrets.json', 'release.keystore', 'scratch.txt']) assert.ok(!list.paths.includes(p), p);
+    assert.equal(list.truncated, false);
+    assert.deepEqual(parse(await h.call('host_list', { prefix: 'src/' })).paths, ['src/deep/util.ts']);
+    const search = parse(await h.call('host_search', { text: 'NEEDLE_VALUE' }));
+    assert.deepEqual(search, { matches: [{ path: 'src/deep/util.ts', line: 1, text: 'NEEDLE_VALUE' }], truncated: false });
+    assert.equal((await h.call('host_search', { text: 'x' })).isError, true);
+    assert.ok(reserved.includes('artifact'));
+    const plain = host(f);
+    for (const name of ['host_list', 'host_search']) {
+      const r = await plain.call(name, { text: 'ab' });
+      assert.equal(r.isError, true); assert.match(parse(r).error, /Unknown host tool/);
+    }
+  } finally { f.close(); }
 });
 
 /** Stands in for Claude: plans and reviews with complete(), codes by calling host tools. */

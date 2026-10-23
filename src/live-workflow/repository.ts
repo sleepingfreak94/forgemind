@@ -104,6 +104,13 @@ function regularFile(root: string, path: string): string | undefined {
   if (relative(root, realpathSync(current)).startsWith(`..${sep}`)) throw new Error('Source path escaped repository');
   return current;
 }
+/** Sorted tracked paths only; untracked and ignored files are never listed. */
+export function trackedPaths(workspace: string): string[] {
+  const root = rootOf(workspace);
+  const paths = sorted(names(git(root, 'ls-files', '--cached', '-z')));
+  paths.forEach(snapshotSourcePath);
+  return paths;
+}
 export function parseGitHubRemote(remoteUrl: string): { owner: string; repo: string } {
   const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(remoteUrl);
   if (!match || !match[2] || ['.', '..'].includes(match[2])) throw new Error('Only GitHub HTTPS or git SSH owner/repo remotes are supported');
