@@ -128,7 +128,7 @@ test('repository read scope reads, lists and searches tracked readable files onl
     writeFileSync(join(f.work, 'src/deep/util.ts'), 'NEEDLE_VALUE\n');
     writeFileSync(join(f.work, 'config/secrets.json'), 'NEEDLE_VALUE\n');
     writeFileSync(join(f.work, 'release.keystore'), 'NEEDLE_VALUE\n');
-    writeFileSync(join(f.work, '.npmrc'), 'fund=false\n');
+    writeFileSync(join(f.work, '.npmrc'), 'ignore-scripts=true\n');
     writeFileSync(join(f.work, '.gitignore'), '.env\n');
     f.git('add', '.'); f.git('commit', '-q', '-m', 'tree');
     writeFileSync(join(f.work, '.env'), 'NEEDLE_VALUE\n');
