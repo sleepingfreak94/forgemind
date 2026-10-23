@@ -66,6 +66,17 @@ export function assertPinnedCursorCli(cli: unknown): asserts cli is CursorCli {
  * over allow, so this closes the ADR-0016 risk that ask mode's read tool can read the login in the profile. */
 export const CURSOR_DENY_ALL: readonly string[] = Object.freeze(
   ['Read(**)', 'Read(/**)', 'Write(**)', 'Write(/**)', 'Shell(*)', 'WebFetch(*)', 'Mcp(*:*)']);
+/** The one MCP server Cursor may use in tools mode: the loopback ForgeMind host tools. */
+export const CURSOR_MCP_SERVER = 'forgemind';
+const MCP_URL = /^http:\/\/127\.0\.0\.1:\d{1,5}\/mcp\/[A-Za-z0-9_-]{16,}$/, MCP_TOOL = /^[a-z_]{1,40}$/;
+const CURSOR_DENY_ALL_BUT_MCP: readonly string[] = Object.freeze(CURSOR_DENY_ALL.filter(rule => rule !== 'Mcp(*:*)'));
+function checkMcpGrant(mcp: unknown): { url: string; tools: string[] } {
+  const grant = mcp as { url?: unknown; tools?: unknown } | null;
+  if (!grant || typeof grant !== 'object' || typeof grant.url !== 'string' || !MCP_URL.test(grant.url)
+    || !Array.isArray(grant.tools) || grant.tools.length < 1 || grant.tools.length > 16
+    || !grant.tools.every(t => typeof t === 'string' && MCP_TOOL.test(t))) throw new Error('Invalid Cursor MCP grant');
+  return { url: grant.url, tools: [...grant.tools] };
+}
 
 interface CheckedDirectory { readonly dir: string; readonly dev: number; readonly ino: number }
 function cursorConfigDirectory(parent: string): CheckedDirectory {
@@ -93,18 +104,25 @@ function replaceFile(dir: string, name: string, data: string): void {
 }
 /** Write deny-all permission configs into the profile and work `.cursor` directories. The sandboxed CLI can write
  * in its profile, so the host never follows links: directories must be real, files are replaced by rename. */
-export function lockCursorPermissions(profileDirectory: string, workDirectory: string): void {
+export function lockCursorPermissions(profileDirectory: string, workDirectory: string, mcp?: { url: string; tools: readonly string[] }): void {
+  const grant = mcp === undefined ? undefined : checkMcpGrant(mcp);
   const profile = cursorConfigDirectory(profileDirectory), work = cursorConfigDirectory(workDirectory);
+  const allow = grant ? grant.tools.map(t => `Mcp(${CURSOR_MCP_SERVER}:${t})`) : [];
+  const deny = grant ? CURSOR_DENY_ALL_BUT_MCP : CURSOR_DENY_ALL;
   replaceFile(profile.dir, 'cli-config.json', JSON.stringify({ version: 1, editor: { vimMode: false }, approvalMode: 'allowlist',
-    permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
-  replaceFile(work.dir, 'cli.json', JSON.stringify({ permissions: { allow: [], deny: CURSOR_DENY_ALL } }, null, 2) + '\n');
+    permissions: { allow, deny } }, null, 2) + '\n');
+  replaceFile(work.dir, 'cli.json', JSON.stringify({ permissions: { allow, deny } }, null, 2) + '\n');
+  // The profile can never add MCP servers; only the per-call work directory names the granted one.
+  replaceFile(profile.dir, 'mcp.json', JSON.stringify({ mcpServers: {} }, null, 2) + '\n');
+  if (grant) replaceFile(work.dir, 'mcp.json', JSON.stringify({ mcpServers: { [CURSOR_MCP_SERVER]: { url: grant.url } } }, null, 2) + '\n');
   assertSameDirectory(profile);
   assertSameDirectory(work);
 }
 
 /** Deny-default profile from Phase 0: no fork, no Keychain (file credential store), reads of the system
  * and the pinned build only, writes to per-call scratch and the owner's Cursor profile. */
-export function cursorProfile(cli: CursorCli, scratch: string, profileDirectory: string): string {
+export function cursorProfile(cli: CursorCli, scratch: string, profileDirectory: string, mcpPort?: number): string {
+  if (mcpPort !== undefined && (!Number.isSafeInteger(mcpPort) || mcpPort < 1024 || mcpPort > 65535)) throw new Error('Invalid MCP port');
   return [
     '(version 1)', '(deny default)',
     `(allow process-exec ${literal(cli.node)})`,
@@ -114,7 +132,7 @@ export function cursorProfile(cli: CursorCli, scratch: string, profileDirectory:
     '(allow mach-lookup ' + ['com.apple.system.opendirectoryd.libinfo', 'com.apple.dnssd.service', 'com.apple.mDNSResponder', 'com.apple.trustd',
       'com.apple.trustd.agent', 'com.apple.SecurityServer', 'com.apple.cfprefsd.agent', 'com.apple.cfprefsd.daemon']
       .map(name => `(global-name ${JSON.stringify(name)})`).join(' ') + ')',
-    '(allow network-outbound (remote tcp "*:443") (remote udp "*:53") (literal "/private/var/run/mDNSResponder"))', '(allow system-socket)',
+    `(allow network-outbound (remote tcp "*:443") (remote udp "*:53") (literal "/private/var/run/mDNSResponder")${mcpPort ? ` (remote ip "localhost:${mcpPort}")` : ''})`, '(allow system-socket)',
   ].join('\n');
 }
 
@@ -129,17 +147,18 @@ export class CursorSubscriptionSession {
   get company(): boolean { return this.#state().company; }
   /** Child launch for one invocation; the pinned build is re-verified and everything writable is per-call scratch or the profile. */
   launch(cli: CursorCli, scratch: string, args: string[], input: string, limits: { timeoutMs: number; maxOutputBytes: number },
-    signal: AbortSignal, check: () => void): ProcessRequest {
+    signal: AbortSignal, check: () => void, mcp?: { url: string; port: number; tools: readonly string[] }): ProcessRequest {
     const state = this.#state();
     assertPinnedCursorCli(cli);
     if (cli !== state.cli) throw new Error("Cursor CLI differs from the session's pinned build");
     if (cursorBuildManifest(cli.directory) !== cli.manifestSha256) throw new Error('Cursor CLI changed since it was pinned');
+    if (mcp !== undefined && (typeof mcp.url !== 'string' || !mcp.url.startsWith(`http://127.0.0.1:${mcp.port}/mcp/`))) throw new Error('Invalid Cursor MCP grant');
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
-    lockCursorPermissions(state.profileDirectory, work);
+    lockCursorPermissions(state.profileDirectory, work, mcp && { url: mcp.url, tools: mcp.tools });
     return {
       executable: cli.node, args: [cli.entry, ...args], dependencies: [cli.entry], cwd: work, input, signal, check, ...limits,
-      profile: cursorProfile(cli, scratch, state.profileDirectory),
+      profile: cursorProfile(cli, scratch, state.profileDirectory, mcp?.port),
       env: {
         PATH: '/usr/bin:/bin', HOME: state.profileDirectory, USER: process.env.USER || String(process.getuid?.() ?? ''), LANG: 'en_US.UTF-8',
         TMPDIR: tmp, AGENT_CLI_CREDENTIAL_STORE: 'file', NO_OPEN_BROWSER: '1',

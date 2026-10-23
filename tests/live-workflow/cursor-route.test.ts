@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseCursorStream } from '../../src/live-workflow/cursor-stream.js';
-import { CURSOR_DENY_ALL, lockCursorPermissions, assertCursorSession, cursorBuildManifest, cursorProfile, openCursorSubscriptionSession, pinCursorCli, pinCursorConformanceCli }
+import { CURSOR_DENY_ALL, CURSOR_MCP_SERVER, lockCursorPermissions, assertCursorSession, cursorBuildManifest, cursorProfile, openCursorSubscriptionSession, pinCursorCli, pinCursorConformanceCli }
   from '../../src/live-workflow/cursor-session.js';
 import type { CursorCli, CursorRunner } from '../../src/live-workflow/cursor-session.js';
 import { NativeCursorModel } from '../../src/live-workflow/cursor-cli-model.js';
@@ -166,8 +166,69 @@ test('launch re-verifies the pinned build and the profile denies fork, Keychain 
 
 const lockedProfile = { version: 1, editor: { vimMode: false }, approvalMode: 'allowlist', permissions: { allow: [], deny: [...CURSOR_DENY_ALL] } };
 const lockedWork = { permissions: { allow: [], deny: [...CURSOR_DENY_ALL] } };
-const launchIn = (f: ReturnType<typeof fixture>, session: Awaited<ReturnType<typeof open>>, name = 'call') =>
-  session.launch(f.cli, join(f.scratch, name), ['-p'], '', { timeoutMs: 1000, maxOutputBytes: 1000 }, new AbortController().signal, () => {});
+const launchIn = (f: ReturnType<typeof fixture>, session: Awaited<ReturnType<typeof open>>, name = 'call', grant?: { url: string; port: number; tools: readonly string[] }) =>
+  session.launch(f.cli, join(f.scratch, name), ['-p'], '', { timeoutMs: 1000, maxOutputBytes: 1000 }, new AbortController().signal, () => {}, grant);
+const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
+
+test('launch without a grant leaves an empty profile mcp.json and no work mcp.json', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), file = join(f.profile, '.cursor', 'mcp.json');
+    writeFileSync(file, JSON.stringify({ mcpServers: { evil: { url: 'http://x' } } }));
+    const request = launchIn(f, session);
+    assert.deepEqual(readJson(file), { mcpServers: {} }); assert.equal(lstatSync(file).mode & 0o777, 0o600);
+    assert.ok(!existsSync(join(f.scratch, 'call', 'work', '.cursor', 'mcp.json')));
+    assert.deepEqual(readJson(join(f.profile, '.cursor', 'cli-config.json')), lockedProfile);
+    assert.deepEqual(readJson(join(f.scratch, 'call', 'work', '.cursor', 'cli.json')), lockedWork);
+    assert.ok(!request.profile!.includes('localhost'));
+    assert.ok(!cursorProfile(f.cli, f.scratch, f.profile).includes('localhost'));
+  } finally { f.close(); }
+});
+
+test('launch with an MCP grant opens only the granted forgemind tools', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), url = 'http://127.0.0.1:43123/mcp/' + 'a'.repeat(24);
+    const request = launchIn(f, session, 'call', { url, port: 43123, tools: ['host_echo', 'host_add'] });
+    const allow = ['Mcp(forgemind:host_echo)', 'Mcp(forgemind:host_add)'], deny = CURSOR_DENY_ALL.filter(r => r !== 'Mcp(*:*)');
+    assert.equal(CURSOR_MCP_SERVER, 'forgemind');
+    for (const file of [join(f.profile, '.cursor', 'cli-config.json'), join(f.scratch, 'call', 'work', '.cursor', 'cli.json')]) {
+      const permissions = readJson(file).permissions;
+      assert.deepEqual(permissions.allow, allow); assert.deepEqual(permissions.deny, deny);
+    }
+    assert.equal(deny.length, 6);
+    assert.deepEqual(readJson(join(f.profile, '.cursor', 'mcp.json')), { mcpServers: {} });
+    assert.deepEqual(readJson(join(f.scratch, 'call', 'work', '.cursor', 'mcp.json')), { mcpServers: { forgemind: { url } } });
+    assert.ok(request.profile!.includes('(remote ip "localhost:43123")'));
+    assert.deepEqual([...CURSOR_DENY_ALL], ['Read(**)', 'Read(/**)', 'Write(**)', 'Write(/**)', 'Shell(*)', 'WebFetch(*)', 'Mcp(*:*)']);
+    assert.ok(!cursorProfile(f.cli, f.scratch, f.profile).includes('localhost'));
+  } finally { f.close(); }
+});
+
+test('an invalid Cursor MCP grant is refused before anything is written', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), good = 'http://127.0.0.1:43123/mcp/' + 'a'.repeat(24);
+    const urls = ['https://127.0.0.1:43123/mcp/' + 'a'.repeat(24), 'http://localhost:43123/mcp/' + 'a'.repeat(24), 'http://127.0.0.2:43123/mcp/' + 'a'.repeat(24),
+      'http://127.0.0.1:43123/mcp/' + 'a'.repeat(15), 'http://127.0.0.1:43123/mcp/' + 'a'.repeat(10) + '/' + 'a'.repeat(10),
+      'http://127.0.0.1:123456/mcp/' + 'a'.repeat(24), good + '/x'];
+    const toolLists = [[], Array.from({ length: 17 }, () => 'host_a'), ['Host_echo'], ['host-echo'], ['a'.repeat(41)], [''], [5 as unknown as string]];
+    const grants = [...urls.map(url => ({ url, tools: ['host_echo'] })), ...toolLists.map(tools => ({ url: good, tools }))];
+    let n = 0;
+    for (const grant of grants) {
+      const work = mkdtempSync(join(f.root, 'wk-'));
+      assert.throws(() => lockCursorPermissions(f.profile, work, grant), /Invalid Cursor MCP grant/);
+      assert.ok(!existsSync(join(work, '.cursor')));
+      const name = `bad${n++}`, port = Number(/:(\d+)\//.exec(grant.url)![1]);
+      assert.throws(() => launchIn(f, session, name, { ...grant, port }), /Invalid Cursor MCP grant/);
+      assert.ok(!existsSync(join(f.scratch, name, 'work', '.cursor', 'cli.json')));
+      assert.ok(!existsSync(join(f.scratch, name, 'work', '.cursor', 'mcp.json')));
+    }
+    assert.throws(() => launchIn(f, session, 'mismatch', { url: good, port: 43124, tools: ['host_echo'] }), /Invalid Cursor MCP grant/);
+    assert.ok(!existsSync(join(f.scratch, 'mismatch', 'work', '.cursor')));
+    for (const port of [80, 1.5]) assert.throws(() => cursorProfile(f.cli, f.scratch, f.profile, port), /Invalid MCP port/);
+  } finally { f.close(); }
+});
 
 test('launch writes both lock files with exactly CURSOR_DENY_ALL', async () => {
   const f = fixture();
