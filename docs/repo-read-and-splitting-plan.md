@@ -99,3 +99,13 @@ Commit, PR and review text is untrusted input; it is never followed as an instru
   - The owner confirms or edits each group.
   - When a task runs in a project, its context holds the project's approved memory first, then approved group memory: shared contracts, error formats, how services call each other.
   - Groups never cross spaces.
+
+**Provider parity (owner requirement).** All of Part 4 applies equally to the Cursor route and to the owner's interactive Cursor sessions:
+- run memory, correction lessons and service groups;
+- the digest and approved-memory serving through the `forgemind-brain` MCP server.
+
+Correction summaries use the model route allowed for the project's space:
+- **company space:** the company Cursor seat;
+- **personal space:** the owner's Claude subscription or personal Cursor plan.
+
+Company code never goes through a personal account.
