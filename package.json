@@ -17,6 +17,7 @@
     "project:plan": "npm run build && node dist/src/local-runtime/project-cli.js plan",
     "project:prepare": "npm run build && node dist/src/local-runtime/project-cli.js prepare",
     "memory": "npm run build && node dist/src/local-runtime/memory-cli.js",
+    "brain": "npm run build && node dist/src/local-runtime/brain-cli.js",
     "demo:policy": "npm run build && node dist/src/local-runtime/policy-demo.js",
     "demo:context": "npm run build && node dist/src/local-runtime/context-demo.js",
     "demo:codex": "npm run build && node dist/src/local-runtime/codex-demo.js",
