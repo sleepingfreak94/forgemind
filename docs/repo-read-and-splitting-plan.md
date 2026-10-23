@@ -42,3 +42,41 @@ Status: **plan.** Branch `task/repo-read-and-splitting`, stacked on #33. Goal: l
 ## Not in scope
 
 Linux sandboxing and running Go, Ruby or Docker tests inside checks. Those need a different containment model; containment on Linux is the likely route.
+
+## Part 4: central brain (owner decisions 2026-10-23)
+
+One owner-wide memory for every project, usable from harness runs and from the owner's own Claude Code and Cursor sessions. It learns how the owner pushes code, and only owner-approved items guide agents.
+
+| Decision | Choice |
+|---|---|
+| Store | ForgeMind central memory, owner-only, under `~/.forgemind/brain/` |
+| Separation | Two walled spaces, **personal** and **company**. A project belongs to exactly one space, mapped in an owner config; unmapped projects are refused. Nothing crosses spaces unless the owner copies it. |
+| Learns from | Commit and branch style (git history), PR and review habits (GitHub) |
+| Approval | A daily digest at **14:00 Asia/Kolkata** to **Slack and Teams**: what it learned, what it wants to change and why, each item with evidence links. The owner approves or rejects afterwards (CLI or by asking an agent). Proposed items never guide agents. |
+
+**Entries.** Each entry has:
+- a kind: convention, lesson, decision or pattern;
+- a space;
+- an optional project;
+- text;
+- evidence: commit SHAs, PR URLs and source hashes;
+- a status: proposed, approved, rejected or retired;
+- timestamps.
+
+Commit, PR and review text is untrusted input; it is never followed as an instruction. Secrets are redacted before anything is stored.
+
+**Phases:**
+1. **Store and CLI:** spaces, the project-to-space map, and the commands add, list, approve, reject and retire.
+2. **Learners:** these read history read-only, through `git log` and `gh`, and turn it into proposals with evidence. Sources:
+   - commit message format, branch names and commit size from git;
+   - PR titles and descriptions, review comments, and what gets sent back from GitHub.
+3. **Daily digest:** reuse the existing Slack and Teams delivery (outbox, destination binding, consent), plus a 14:00 IST local schedule that the owner installs.
+4. **Serving:**
+   - a local MCP server (`forgemind-brain`) gives Claude Code and Cursor read access to **approved** entries for the current project's space, plus a tool that can only *propose*;
+   - harness runs add approved entries to the plan, coding and review prompts as cited, untrusted evidence.
+
+**Reuse:** project memory (`src/memory/`), run history, weekly delivery, and the Slack and Teams adapters.
+
+**Open questions for the owner:**
+- which projects belong to which space;
+- the Slack and Teams destinations and consent.
