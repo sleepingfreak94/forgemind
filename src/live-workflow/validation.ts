@@ -6,6 +6,7 @@ import type {
   GeneratedPlan,
   CodingProposal,
   ReviewResult,
+  SubtaskPlan,
 } from "./contracts.js";
 import { CLAUDE_PHASE_MODELS, CURSOR_PHASE_MODELS, CURSOR_TEST_MODEL } from "./routing-profile.js";
 export const sha256 = (value: string | Uint8Array): string =>
@@ -105,6 +106,7 @@ export function task(raw: unknown): LiveTask {
     "codingMode",
     "maxToolCalls",
     "readScope",
+    "split",
   ]);
   if (raw.schemaVersion !== 1 || typeof raw.draftPr !== "boolean")
     throw new Error("Invalid task version/preferences");
@@ -146,6 +148,12 @@ export function task(raw: unknown): LiveTask {
     (raw.readScope !== "repository" || raw.codingMode !== "tools")
   )
     throw new Error("Invalid read scope");
+  if (
+    raw.split !== undefined &&
+    (raw.split !== true ||
+      (raw.provider !== "anthropic" && raw.provider !== "cursor"))
+  )
+    throw new Error("Invalid split");
   for (const key of ["readPaths", "writePaths"] as const) {
     const list = raw[key];
     if (
@@ -207,6 +215,34 @@ export function plan(raw: unknown, allowed: string[]): GeneratedPlan {
   if ((raw.paths as string[]).some((p) => !allowed.includes(p)))
     throw new Error("Plan expands write scope");
   return raw as unknown as GeneratedPlan;
+}
+export function subtasks(raw: unknown, task: LiveTask): SubtaskPlan[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 8)
+    throw new Error("Invalid split plan");
+  const ids = task.checks.map((c) => c.id);
+  for (const entry of raw) {
+    object(entry, ["title", "objective", "writePaths", "checks"]);
+    for (const key of ["title", "objective", "writePaths", "checks"])
+      if (!(key in entry)) throw new Error("Invalid split plan");
+    text(entry.title, 200);
+    text(entry.objective);
+    const w = entry.writePaths;
+    if (
+      !Array.isArray(w) ||
+      !w.length ||
+      new Set(w).size !== w.length ||
+      w.some((p) => typeof p !== "string" || !task.writePaths.includes(p))
+    )
+      throw new Error("Subtask expands write scope");
+    const c = entry.checks;
+    if (
+      !Array.isArray(c) ||
+      new Set(c).size !== c.length ||
+      c.some((id) => typeof id !== "string" || !ids.includes(id))
+    )
+      throw new Error("Subtask names an unknown check");
+  }
+  return structuredClone(raw) as SubtaskPlan[];
 }
 export function coding(raw: unknown, allowed: string[]): CodingProposal {
   object(raw, ["summary", "edits"]);

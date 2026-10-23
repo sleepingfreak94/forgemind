@@ -28,6 +28,8 @@ export interface LiveTask {
   maxToolCalls?: number;
   /** Omitted means reads are limited to readPaths and writePaths. "repository" (tools coding mode only) lets host tools read, list and search every tracked, non-secret file. Writes stay limited to writePaths. */
   readScope?: "repository";
+  /** Omitted means one coding pass; true means the planner also returns ordered subtasks that are coded and checked in turn on one worktree (Claude and Cursor routes). */
+  split?: true;
 }
 /** Pipeline stage of one model call; routes that pin a model per stage require it. */
 export type ModelPhase = "plan" | "coding" | "review";
@@ -37,6 +39,12 @@ export interface GeneratedPlan {
   steps: string[];
   acceptanceCriteria: string[];
   risks: string[];
+}
+export interface SubtaskPlan {
+  title: string;
+  objective: string;
+  writePaths: string[];
+  checks: string[];
 }
 export interface ProposedEdit {
   path: string;
@@ -113,6 +121,27 @@ export const planSchema = {
     steps: { type: "array", items: { type: "string" } },
     acceptanceCriteria: { type: "array", items: { type: "string" } },
     risks: { type: "array", items: { type: "string" } },
+  },
+};
+export const splitPlanSchema = {
+  ...planSchema,
+  required: [...planSchema.required, "subtasks"],
+  properties: {
+    ...planSchema.properties,
+    subtasks: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "objective", "writePaths", "checks"],
+        properties: {
+          title: { type: "string" },
+          objective: { type: "string" },
+          writePaths: { type: "array", items: { type: "string" } },
+          checks: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
   },
 };
 export const codingSchema = {
