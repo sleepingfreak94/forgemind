@@ -109,10 +109,15 @@ test("cursor provider routing is owner-fixed and validated", () => {
       assert.throws(() => task({ ...common, provider, model }), /Invalid model routing/);
   for (const provider of ["xai", "Cursor", null])
     assert.throws(() => task({ ...common, provider, model: "gpt-test" }), /Invalid provider/);
-  assert.throws(
-    () => task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "tools", maxToolCalls: 8 }),
-    /Invalid coding mode/,
-  );
+  const cursorTools = task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "tools", maxToolCalls: 8, readScope: "repository" });
+  assert.equal(cursorTools.codingMode, "tools");
+  assert.equal(cursorTools.maxToolCalls, 8);
+  assert.equal(cursorTools.readScope, "repository");
+  for (const provider of [undefined, "openai"])
+    assert.throws(
+      () => task({ ...common, provider, model: "gpt-test", codingMode: "tools", maxToolCalls: 8 }),
+      /Invalid coding mode/,
+    );
   assert.equal(task({ ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding }).provider, "anthropic");
   assert.equal(task({ ...common, provider: "openai", model: "gpt-test" }).provider, "openai");
 });

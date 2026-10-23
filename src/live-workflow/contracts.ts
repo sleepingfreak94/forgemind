@@ -22,11 +22,11 @@ export interface LiveTask {
   draftPr: boolean;
   /** Omitted means the reviewed ChatGPT/Codex route. */
   provider?: "openai" | "anthropic" | "cursor";
-  /** Omitted means today's single structured coding call; "tools" selects the agentic tool-use coding session. */
+  /** Omitted means today's single structured coding call; "tools" selects the agentic tool-use coding session (Claude and Cursor routes). */
   codingMode?: "single-call" | "tools";
   /** Host tool calls allowed in a tools-mode coding session. */
   maxToolCalls?: number;
-  /** Omitted means reads are limited to readPaths and writePaths. "repository" (tools coding mode only) lets host tools read, list and search every tracked, non-secret file. Writes stay limited to writePaths. */
+  /** Omitted means reads are limited to readPaths and writePaths. "repository" (tools coding mode only, Claude and Cursor routes) lets host tools read, list and search every tracked, non-secret file. Writes stay limited to writePaths. */
   readScope?: "repository";
   /** Omitted means one coding pass; true means the planner also returns ordered subtasks that are coded and checked in turn on one worktree (Claude and Cursor routes). */
   split?: true;

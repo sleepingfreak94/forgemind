@@ -12,20 +12,7 @@ import { assertSingleRoute } from '../../src/live-workflow/routes.js';
 import { task as validateTask } from '../../src/live-workflow/validation.js';
 import type { ActionEnvelope, LiveTask } from '../../src/live-workflow/contracts.js';
 import type { ProcessRequest } from '../../src/live-workflow/process.js';
-
-/** Recorded Phase 0 print-mode shape (docs/artifacts/cursor-route/step5-print-auto-stdin.jsonl). */
-function cursorStream(label: string, answer: string, patch: { init?: Record<string, unknown>; result?: Record<string, unknown>; extra?: unknown[];
-  content?: unknown[] } = {}): string {
-  return [
-    { type: 'system', subtype: 'init', apiKeySource: 'login', cwd: '/scratch/work', session_id: 's', model: label, permissionMode: 'default', ...patch.init },
-    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'prompt' }] }, session_id: 's' },
-    { type: 'assistant', message: { role: 'assistant', content: patch.content ?? [{ type: 'text', text: answer }] }, session_id: 's' },
-    ...(patch.extra ?? []),
-    { type: 'result', subtype: 'success', duration_ms: 3083, is_error: false, result: answer, session_id: 's', request_id: 'r-1',
-      usage: { inputTokens: 6286, outputTokens: 10, cacheReadTokens: 3968, cacheWriteTokens: 0 }, ...patch.result },
-  ].map(e => JSON.stringify(e)).join('\n') + '\n';
-}
-const grok = 'grok-4.7-high', grokLabel = 'Grok 4.7 256K High', answer = '{"status":"ok","n":2}';
+import { answer, cursorStream, cursorTask, fixture, grok, grokLabel, open, signal, statusRunner } from './cursor-fixture.js';
 
 test('stream parser returns the JSON answer and usage from the recorded shape', () => {
   const parsed = parseCursorStream(cursorStream(grokLabel, answer), grok);
@@ -109,20 +96,6 @@ test('a malformed tools profile is refused, not treated as no tools', () => {
     assert.throws(() => parseCursorStream(toolsStream([]), 'auto', bad as never), /tools profile is invalid/);
 });
 
-/** A tiny pinned stand-in for the version directory; replayed runners never execute it. */
-function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-cursor-'))), build = join(root, 'fake-build-1');
-  mkdirSync(build); writeFileSync(join(build, 'node'), '#!/bin/sh\n'); chmodSync(join(build, 'node'), 0o755); writeFileSync(join(build, 'index.js'), '');
-  const cli = pinCursorConformanceCli(build, { version: 'fake-build-1', manifestSha256: cursorBuildManifest(build) });
-  const profile = realpathSync(mkdtempSync(join(root, 'p-'))); chmodSync(profile, 0o700);
-  const scratch = realpathSync(mkdtempSync(join(root, 's-'))), workspace = realpathSync(mkdtempSync(join(root, 'w-')));
-  return { root, build, cli, profile, scratch, workspace, close: () => rmSync(root, { recursive: true, force: true }) };
-}
-const statusRunner = (tier: string, signedIn = true): CursorRunner => async request => ({ code: 0, stderr: '',
-  stdout: request.args.includes('status') ? (signedIn ? '✓ Logged in as owner@example.invalid\n' : 'Not logged in\n') : `About Cursor CLI\n\nSubscription Tier   ${tier}\n` });
-const open = (f: ReturnType<typeof fixture>, tier: string, extra: Partial<Parameters<typeof openCursorSubscriptionSession>[0]> = {}) =>
-  openCursorSubscriptionSession({ profileDirectory: f.profile, cli: f.cli, scratchRoot: f.scratch, workspace: f.workspace,
-    personalWorkspaces: [f.workspace], runner: statusRunner(tier), ...extra });
 
 test('sessions need the owner login, an owner-only profile and, on a personal plan, an allowlisted workspace', async () => {
   const f = fixture();
@@ -325,11 +298,6 @@ test('a .cursor that is a regular file is refused', async () => {
   } finally { f.close(); }
 });
 
-function cursorTask(model = grok): LiveTask {
-  return validateTask({ schemaVersion: 1, taskId: 'cursor-task', objective: 'x', readPaths: ['v.txt'], writePaths: ['v.txt'],
-    checks: [{ id: 'c', executable: process.execPath, args: [], timeoutMs: 5000 }], model, provider: 'cursor', effort: 'low',
-    maxModelRequests: 3, maxPromptBytes: 65536, maxOutputBytes: 262144, maxRuntimeMs: 60000, draftPr: false });
-}
 async function model(f: ReturnType<typeof fixture>, stdout: (r: ProcessRequest) => string, options: { code?: number; testAuto?: boolean; task?: LiveTask } = {}) {
   const session = await open(f, 'Free');
   const state = join(f.root, 'state'); mkdirSync(state, { recursive: true, mode: 0o700 });
@@ -341,7 +309,6 @@ async function model(f: ReturnType<typeof fixture>, stdout: (r: ProcessRequest) 
     runner: async request => { launches.push(request); return { stdout: stdout(request), stderr: 'ActionRequiredError: plan limit', code: options.code ?? 0 }; } });
   return { m, reserved, finished, phases, launches };
 }
-const signal = () => new AbortController().signal;
 
 test('each phase runs grok-4.7-high in read-only ask mode with the prompt on stdin and an owner-login receipt', async () => {
   const f = fixture();

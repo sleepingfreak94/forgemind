@@ -132,7 +132,7 @@ export function task(raw: unknown): LiveTask {
   if (
     raw.codingMode !== undefined &&
     ((raw.codingMode !== "single-call" && raw.codingMode !== "tools") ||
-      (raw.codingMode === "tools" && raw.provider !== "anthropic"))
+      (raw.codingMode === "tools" && raw.provider !== "anthropic" && raw.provider !== "cursor"))
   )
     throw new Error("Invalid coding mode");
   if (
