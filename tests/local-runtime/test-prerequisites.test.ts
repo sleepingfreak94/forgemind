@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TestContext } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,11 +20,11 @@ function temporary(t: TestContext): string {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
-function invoke(mode: string, env: NodeJS.ProcessEnv, root: string) {
+async function invoke(mode: string, env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Platform = 'darwin', posixIdentity = true) {
   let stderr = '', dispatches = 0;
-  const status = runTests([mode], { env, root, platform: 'darwin', posixIdentity: true,
+  const status = await runTests([mode], { env, root, platform, posixIdentity,
     stderr: (message: string) => { stderr += message; },
-    spawn: () => { dispatches++; return { status: 0 }; } });
+    run: async () => { dispatches++; return { status: 0, timedOut: false }; } });
   return { status, stderr, dispatches };
 }
 function compiledFixtures(root: string, mode: string): void {
@@ -49,10 +49,10 @@ test('legacy imports delegate to the exact shared resolver', () => {
   assert.equal(legacyFixture, reviewedCodexFixture);
 });
 
-test('missing selectors and nonexistent paths fail before discovery or worker dispatch', t => {
+test('missing selectors and nonexistent paths fail before discovery or worker dispatch', async t => {
   const root = temporary(t); // No compiled test directories: prerequisite failure must come first.
   for (const env of [{}, { [first]: join(root, 'private-missing'), [second]: join(root, 'private-missing') }]) {
-    const result = invoke('all', env, root);
+    const result = await invoke('all', env, root);
     assert.equal(result.status, 2);
     assert.equal(result.dispatches, 0);
     assert.match(result.stderr, /FORGEMIND_TEST_CODEX_0161/);
@@ -63,9 +63,9 @@ test('missing selectors and nonexistent paths fail before discovery or worker di
   }
 });
 
-test('wrong versions from the actual Node executable cannot dispatch native test workers', t => {
+test('wrong versions from the actual Node executable cannot dispatch native test workers', async t => {
   const root = temporary(t);
-  const result = invoke('all', { [first]: process.execPath, [second]: process.execPath }, root);
+  const result = await invoke('all', { [first]: process.execPath, [second]: process.execPath }, root);
   assert.equal(result.status, 2);
   assert.equal(result.dispatches, 0);
   assert.match(result.stderr, /reviewed Codex 0\.161\.0/);
@@ -83,18 +83,18 @@ test('CLI rejects missing prerequisites without TAP output or starting fixture s
   assert.match(result.stderr, /FORGEMIND_TEST_CODEX_0162/);
 });
 
-test('host and portable dispatch without resolving any Codex selector', t => {
+test('host and portable dispatch without resolving any Codex selector', async t => {
   const root = temporary(t);
   compiledFixtures(root, 'portable');
   for (const mode of ['host', 'portable']) {
-    const result = invoke(mode, { [first]: 'invalid\npath', [second]: 'relative-path' }, root);
+    const result = await invoke(mode, { [first]: 'invalid\npath', [second]: 'relative-path' }, root);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.dispatches, 1);
     assert.equal(result.stderr, '');
   }
 });
 
-test('actual bounded local version fixtures validate before synthetic dispatch', { skip: process.platform === 'win32' }, t => {
+test('actual bounded local version fixtures validate before synthetic dispatch', { skip: process.platform === 'win32' }, async t => {
   const root = temporary(t), env: NodeJS.ProcessEnv = {
     [first]: versionFixture(root, '0.161.0'), [second]: versionFixture(root, '0.162.1'),
     HOME: 'synthetic-secret', CODEX_HOME: 'synthetic-secret', OPENAI_API_KEY: 'synthetic-secret'
@@ -102,25 +102,78 @@ test('actual bounded local version fixtures validate before synthetic dispatch',
   compiledFixtures(root, 'all');
   assert.equal(reviewedCodexFixture('0.161.0', env), realpathSync(env[first]!));
   assert.equal(reviewedCodexFixture('0.162.1', env), realpathSync(env[second]!));
-  const result = invoke('all', env, root);
+  const result = await invoke('all', env, root);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.dispatches, 1); // The injected dispatcher never starts native workers.
   assert.equal(result.stderr, '');
   for (const missing of [first, second]) {
     const partial = { ...env }; delete partial[missing];
-    const denied = invoke('all', partial, root);
+    const denied = await invoke('all', partial, root);
     assert.equal(denied.status, 2);
     assert.equal(denied.dispatches, 0);
     assert.ok(denied.stderr.includes(missing));
   }
 });
 
-test('failed version subprocess output and executable paths are sanitized', { skip: process.platform === 'win32' }, t => {
+test('failed version subprocess output and executable paths are sanitized', { skip: process.platform === 'win32' }, async t => {
   const root = temporary(t), executable = join(root, 'private-executable');
   writeFileSync(executable, '#!/bin/sh\nprintf synthetic-private-output >&2\nexit 9\n', { mode: 0o700 });
-  const result = invoke('all', { [first]: executable, [second]: executable }, root);
+  const result = await invoke('all', { [first]: executable, [second]: executable }, root);
   assert.equal(result.status, 2);
   assert.equal(result.dispatches, 0);
   assert.doesNotMatch(result.stderr, /synthetic-private-output|private-executable/);
   assert.ok(!result.stderr.includes(root));
+});
+
+test('local dispatches without fixtures and names the skipped Codex versions', { skip: process.platform === 'win32' }, async t => {
+  const root = temporary(t);
+  compiledFixtures(root, 'local');
+  const none = await invoke('local', {}, root);
+  assert.equal(none.status, 0, none.stderr);
+  assert.equal(none.dispatches, 1);
+  assert.equal(none.stderr.split('\n').filter(Boolean).length, 1);
+  assert.ok(none.stderr.includes('0.161.0') && none.stderr.includes('0.162.1') && none.stderr.includes('skipped'));
+  assert.ok(!none.stderr.includes(root));
+  const partial = await invoke('local', { [first]: versionFixture(root, '0.161.0'), HOME: 'synthetic-secret' }, root);
+  assert.equal(partial.status, 0, partial.stderr);
+  assert.equal(partial.dispatches, 1);
+  assert.ok(partial.stderr.includes('0.162.1') && !partial.stderr.includes('0.161.0') && partial.stderr.includes('skipped'));
+  assert.ok(!partial.stderr.includes(root) && !partial.stderr.includes('synthetic-secret'));
+  const both = await invoke('local', { [first]: versionFixture(root, '0.161.0'), [second]: versionFixture(root, '0.162.1') }, root);
+  assert.equal(both.status, 0, both.stderr);
+  assert.equal(both.dispatches, 1);
+  assert.equal(both.stderr, '');
+  for (const [platform, identity] of [['win32', true], ['linux', false]] as const) {
+    const denied = await invoke('local', {}, root, platform, identity);
+    assert.equal(denied.status, 2);
+    assert.equal(denied.dispatches, 0);
+    assert.match(denied.stderr, /POSIX identity/);
+  }
+});
+
+test('a run over its limit is stopped with its whole process group', { skip: process.platform === 'win32', timeout: 20000 }, async t => {
+  const root = temporary(t), pidFile = join(root, 'pids.txt');
+  compiledFixtures(root, 'portable');
+  const directory = join(root, testSuite('portable', 'darwin', true).directories[0]!);
+  writeFileSync(join(directory, 'sentinel.test.js'), `const { spawn } = require('node:child_process');
+const { appendFileSync } = require('node:fs');
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+appendFileSync(process.env.FM_PID_FILE, process.pid + '\\n' + child.pid + '\\n');
+setInterval(() => {}, 1000);\n`);
+  let pids: number[] = [];
+  t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } });
+  let stderr = '';
+  const started = Date.now();
+  const status = await runTests(['portable'], { root, env: { FM_PID_FILE: pidFile, PATH: process.env.PATH }, maxRunMs: 2000,
+    stderr: (message: string) => { stderr += message; } });
+  assert.equal(status, 2);
+  assert.ok(Date.now() - started < 10000);
+  assert.match(stderr, /test run exceeded .* minutes and was stopped\. Run a narrower suite or the single slow test file\./);
+  assert.ok(existsSync(pidFile));
+  pids = readFileSync(pidFile, 'utf8').split('\n').filter(Boolean).map(Number);
+  assert.ok(pids.length >= 2);
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; } };
+  const deadline = Date.now() + 3000;
+  while (pids.some(alive) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  for (const pid of pids) assert.equal(alive(pid), false);
 });

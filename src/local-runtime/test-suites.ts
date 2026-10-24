@@ -7,21 +7,35 @@ export interface TestSuite {
   files: string[];
   requiredCodexFixtures: ReviewedCodexVersion[];
   timeoutMs?: number;
+  /** Wall-clock limit for the whole run, in milliseconds. */
+  maxRunMs: number;
 }
+export const REVIEWED_CODEX_VERSIONS = ['0.161.0', '0.162.1'] as const;
+
+/** Versions whose reviewed binary cannot be resolved. Never returns paths or error text. */
+export function missingCodexFixtures(env: NodeJS.ProcessEnv = process.env): ReviewedCodexVersion[] {
+  const missing: ReviewedCodexVersion[] = [];
+  for (const version of REVIEWED_CODEX_VERSIONS) {
+    try { reviewedCodexFixture(version, env); } catch { missing.push(version); }
+  }
+  return missing;
+}
+
 export function testSuite(mode: string, platform: NodeJS.Platform, posixIdentity: boolean): TestSuite {
   const portable = ['dist/tests/context-engine', 'dist/tests/agent-drivers', 'dist/tests/local-runtime', 'dist/tests/project-workflow', 'dist/tests/memory'];
-  if (mode === 'portable') return { directories: portable, files: [], requiredCodexFixtures: [] };
-  if (mode === 'all') {
+  if (mode === 'portable') return { directories: portable, files: [], requiredCodexFixtures: [], maxRunMs: 300000 };
+  if (mode === 'all' || mode === 'local') {
     if (platform === 'win32' || !posixIdentity) throw new Error('Full policy tests require POSIX identity. Use npm run test:portable for deterministic fixtures.');
     return { directories: [...portable, 'dist/tests/policy', 'dist/tests/live-workflow'],
-      files: ['dist/tests/host-enforcement/manifest.test.js'], requiredCodexFixtures: ['0.161.0', '0.162.1'] };
+      files: ['dist/tests/host-enforcement/manifest.test.js'],
+      requiredCodexFixtures: mode === 'all' ? ['0.161.0', '0.162.1'] : [], maxRunMs: 1800000 };
   }
   if (mode === 'host') {
     if (platform !== 'darwin' || !posixIdentity) throw new Error('Enforced host tests require macOS Seatbelt; no unsandboxed fallback is available.');
     return { directories: [], files: ['dist/tests/host-enforcement/native.test.js', 'dist/tests/host-enforcement/cursor-native.test.js'],
-      timeoutMs: 15000, requiredCodexFixtures: [] };
+      timeoutMs: 15000, requiredCodexFixtures: [], maxRunMs: 600000 };
   }
-  throw new Error('Unknown test suite. Expected portable, all or host.');
+  throw new Error('Unknown test suite. Expected portable, all, local or host.');
 }
 
 /** Check every prerequisite before discovering tests or starting any test worker. */

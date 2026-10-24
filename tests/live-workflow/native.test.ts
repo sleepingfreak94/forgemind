@@ -1,4 +1,4 @@
-import { reviewedCodexFixture } from './reviewed-codex-fixture.js';
+import { codexMissing, reviewedCodexFixture } from './reviewed-codex-fixture.js';
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -17,7 +17,7 @@ test(
   "native 0.161.0 worker completes JSON through loopback fixture under no-fork Seatbelt",
   {
     skip:
-      process.platform !== "darwin",
+      process.platform !== "darwin" || codexMissing('0.161.0'),
     timeout: 65000,
   },
   async () => {

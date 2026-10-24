@@ -1,4 +1,4 @@
-import { reviewedCodexFixture } from './reviewed-codex-fixture.js';
+import { codexMissing, reviewedCodexFixture } from './reviewed-codex-fixture.js';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -268,7 +268,7 @@ for (const verdict of ["pass", "revise"] as const)
   );
 
 test('real native fixture drives plan, edit and independent review end to end without provider access',{
- skip:process.platform!=='darwin',timeout:90000},async()=>{
+ skip:process.platform!=='darwin'||codexMissing('0.161.0'),timeout:90000},async()=>{
  const f=fixture();f.task.model='gpt-6.1-sol';f.task.maxPromptBytes=262144;let calls=0;
  const outputs=[{objective:f.task.objective,paths:['value.txt'],steps:['Fix value'],acceptanceCriteria:['Value is after'],risks:[]},{summary:'Correct value',edits:[{path:'value.txt',beforeSha256:sha256('before'),format:'text-replacements-v1',replacements:[{before:'before',after:'after'}]}]},{verdict:'pass',findings:[],acceptance:['Value is after']}];
  try{const result=await runTask({...f.options,modelFactory:(authority,source)=>new NativeCodexModel({executable:reviewedCodexFixture('0.161.0'),task:f.task,authority,source,credentials:()=>({accessToken:'fixture',accountId:'fixture'}),transport:async(_url,init)=>{const body=JSON.parse(String(init?.body));assert.deepEqual(body.tools,[]);assert.ok(body.input.every((item:{type?:string})=>item.type==='message'||item.type===undefined));return fixtureResponse(f.task.model,outputs[calls++]);}})});
@@ -358,7 +358,7 @@ test('plan contents precede owner approval and rejection prevents code and check
 });
 
 test('authenticated public-route pipeline uses real sandboxed Codex with synthetic OAuth responses', {
-  skip: process.platform !== 'darwin', timeout: 90000,
+  skip: process.platform !== 'darwin' || codexMissing('0.161.0'), timeout: 90000,
 }, async () => {
   const f = fixture(), nativeFetch = globalThis.fetch, directory = join(f.root, 'account');
   const store = new ChatGPTStore(directory, f.repo, true);
