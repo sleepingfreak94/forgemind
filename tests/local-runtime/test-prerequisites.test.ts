@@ -153,13 +153,16 @@ test('local dispatches without fixtures and names the skipped Codex versions', {
 
 test('a run over its limit is stopped with its whole process group', { skip: process.platform === 'win32', timeout: 20000 }, async t => {
   const root = temporary(t), pidFile = join(root, 'pids.txt');
-  compiledFixtures(root, 'portable');
-  const directory = join(root, testSuite('portable', 'darwin', true).directories[0]!);
-  writeFileSync(join(directory, 'sentinel.test.js'), `const { spawn } = require('node:child_process');
+  for (const [index, relative] of testSuite('portable', 'darwin', true).directories.entries()) {
+    const directory = join(root, relative);
+    mkdirSync(directory, { recursive: true });
+    if (index !== 0) { writeFileSync(join(directory, 'sentinel.test.js'), 'require("node:test")("noop", () => {});\n'); continue; }
+    writeFileSync(join(directory, 'sentinel.test.js'), `const { spawn } = require('node:child_process');
 const { appendFileSync } = require('node:fs');
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
 appendFileSync(process.env.FM_PID_FILE, process.pid + '\\n' + child.pid + '\\n');
 setInterval(() => {}, 1000);\n`);
+  }
   let pids: number[] = [];
   t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } });
   let stderr = '';
