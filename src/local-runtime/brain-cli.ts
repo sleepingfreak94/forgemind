@@ -26,8 +26,10 @@ const commands: Record<string, { required: string[]; optional: string[] }> = {
   approve: { required: ['workspace', 'id'], optional: [] },
   retire: { required: ['workspace', 'id'], optional: [] },
   reject: { required: ['workspace', 'id'], optional: ['note'] },
-  learn: { required: ['workspace'], optional: ['source', 'limit'] }
+  learn: { required: ['workspace'], optional: ['source', 'limit'] },
+  history: { required: ['workspace'], optional: ['limit'] }
 };
+// Usage: history --workspace PATH [--limit 1-200]
 
 function parse(argv: string[]): { command: string; args: Record<string, string> } {
   if (!Array.isArray(argv) || argv.length === 0) throw new UsageError('missing command');
@@ -53,6 +55,7 @@ function parse(argv: string[]): { command: string; args: Record<string, string> 
   if ('kind' in args && !['convention', 'lesson', 'decision', 'pattern'].includes(args.kind!)) throw new UsageError('invalid --kind');
   if ('source' in args && !['git', 'github', 'all'].includes(args.source!)) throw new UsageError('invalid --source');
   if ('limit' in args && (!/^\d+$/.test(args.limit!) || Number(args.limit) < 1 || Number(args.limit) > 1000)) throw new UsageError('invalid --limit');
+  if (command === 'history' && 'limit' in args && Number(args.limit) > 200) throw new UsageError('invalid --limit');
   return { command, args };
 }
 
@@ -78,6 +81,7 @@ function execute(command: string, args: Record<string, string>, run: CliRunner):
       case 'add':
         return { id: store.propose({ kind: args.kind as BrainKind, text: args.text!, reason: args.reason!,
           evidence: args.evidence ? [args.evidence] : [], project: args.scope === 'space' ? null : workspace }) };
+      case 'history': return { space, history: store.history(workspace, args.limit ? Number(args.limit) : 20) };
       case 'show': return { entry: visible(args.id!) };
       case 'approve': visible(args.id!); store.approve(args.id!); return { ok: true };
       case 'retire': visible(args.id!); store.retire(args.id!); return { ok: true };

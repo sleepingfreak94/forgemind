@@ -94,3 +94,65 @@ test('permissions, links and schema version', { skip: process.platform === 'win3
   const raw = new DatabaseSync(file); raw.exec('PRAGMA user_version = 99'); raw.close();
   assert.throws(() => new BrainStore(dir, 'personal'), /unsupported/);
 }));
+
+const run = { source: 'harness' as const, project: '/repo/a', key: 'run-1', title: 'T', summary: 'did it', files: ['a.ts'], outcome: 'completed', evidence: ['task-1'] };
+
+test('record is idempotent and history is newest first', () => withDir(dir => {
+  const s = new BrainStore(dir, 'personal');
+  const id = s.record(run);
+  assert.match(id, /^[0-9a-f]{16}$/);
+  assert.equal(s.record(run), id);
+  assert.deepEqual(s.audit().map(a => a.action), ['record']);
+  s.record({ ...run, key: 'run-2', title: 'second' });
+  s.record({ ...run, key: 'run-3', title: 'third' });
+  s.record({ ...run, key: 'other', project: '/repo/b' });
+  const rows = s.history('/repo/a');
+  assert.deepEqual(rows.map(r => r.title), ['third', 'second', 'T']);
+  assert.deepEqual(rows[2]!.files, ['a.ts']);
+  assert.deepEqual(rows[2]!.evidence, ['task-1']);
+  assert.equal(s.history('/repo/a', 2).length, 2);
+  assert.throws(() => s.history('/repo/a', 0), /limit/);
+  assert.throws(() => s.history('/repo/a', 201), /limit/);
+  assert.throws(() => s.history('/repo/a', 1.5), /limit/);
+  assert.equal(s.list().length, 0);
+  assert.equal(s.approved('/repo/a').length, 0);
+  s.close();
+}));
+
+test('record validates limits and refuses secrets', () => withDir(dir => {
+  const s = new BrainStore(dir, 'personal');
+  assert.throws(() => s.record({ ...run, source: 'x' as never }), /source/);
+  assert.throws(() => s.record({ ...run, project: 'rel' }), /absolute/);
+  assert.throws(() => s.record({ ...run, title: '' }), /title/);
+  assert.throws(() => s.record({ ...run, title: 'x'.repeat(301) }), /title/);
+  assert.throws(() => s.record({ ...run, summary: 'x'.repeat(4001) }), /summary/);
+  assert.throws(() => s.record({ ...run, outcome: '' }), /outcome/);
+  assert.throws(() => s.record({ ...run, key: 'k'.repeat(201) }), /key/);
+  assert.throws(() => s.record({ ...run, files: Array(201).fill('a') }), /files/);
+  assert.throws(() => s.record({ ...run, files: ['x'.repeat(1025)] }), /files/);
+  assert.throws(() => s.record({ ...run, evidence: Array(21).fill('a') }), /evidence/);
+  assert.throws(() => s.record({ ...run, evidence: ['x'.repeat(301)] }), /evidence/);
+  s.record({ ...run, summary: '', files: [] });
+  const bad = 'password=hunter2';
+  const before = s.audit().length;
+  for (const field of ['title', 'summary', 'outcome', 'key']) assert.throws(() => s.record({ ...run, key: 'z', [field]: bad }), /secret/);
+  assert.throws(() => s.record({ ...run, key: 'z', files: [bad] }), /secret/);
+  assert.throws(() => s.record({ ...run, key: 'z', evidence: [bad] }), /secret/);
+  assert.equal(s.audit().length, before);
+  s.close();
+}));
+
+test('version 1 database migrates to 2; version 3 is refused', { skip: process.platform === 'win32' }, () => withDir(dir => {
+  const first = new BrainStore(dir, 'personal');
+  const id = first.propose(base); first.close();
+  const file = join(dir, 'personal', 'brain.sqlite');
+  const raw = new DatabaseSync(file); raw.exec('DROP TABLE history; PRAGMA user_version = 1'); raw.close();
+  const s = new BrainStore(dir, 'personal');
+  assert.equal(s.list()[0]!.id, id);
+  s.record(run); assert.equal(s.history('/repo/a').length, 1);
+  s.close();
+  const check = new DatabaseSync(file);
+  assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 2);
+  check.exec('PRAGMA user_version = 3'); check.close();
+  assert.throws(() => new BrainStore(dir, 'personal'), /unsupported/);
+}));

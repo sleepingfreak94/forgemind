@@ -100,6 +100,23 @@ test('secrets refused without echo', () => {
   assert.notEqual(r.code, 0); assert.ok(!r.out.includes('hunter2'));
 });
 
+test('history lists this workspace only', () => {
+  const { brain, ws, ws2 } = setup();
+  run(brain, ['map', '--workspace', ws, '--space', 'personal']);
+  run(brain, ['map', '--workspace', ws2, '--space', 'personal']);
+  const store = new BrainStore(brain, 'personal');
+  const base = { source: 'harness' as const, summary: '', files: [], outcome: 'completed', evidence: [] };
+  store.record({ ...base, project: ws, key: 'r1', title: 'first' });
+  store.record({ ...base, project: ws, key: 'r2', title: 'second' });
+  store.record({ ...base, project: ws2, key: 'r3', title: 'elsewhere' });
+  store.close();
+  const all = run(brain, ['history', '--workspace', ws]);
+  assert.equal(all.code, 0); assert.equal(all.json.space, 'personal');
+  assert.deepEqual(all.json.history.map((h: any) => h.title), ['second', 'first']);
+  assert.equal(run(brain, ['history', '--workspace', ws, '--limit', '1']).json.history.length, 1);
+  for (const bad of ['0', '201', 'abc']) assert.equal(run(brain, ['history', '--workspace', ws, '--limit', bad]).code, 2);
+});
+
 test('map file validation', () => {
   const { brain, ws, base } = setup();
   mapBrainSpace(ws, 'personal', brain);

@@ -13,6 +13,12 @@ export interface BrainEntry {
   reason: string; status: BrainStatus; createdAt: number; reviewedAt: number | null; reviewNote: string | null;
 }
 
+export type BrainSource = 'harness' | 'claude-code' | 'cursor';
+export interface BrainHistory {
+  id: string; project: string; source: BrainSource; title: string; summary: string; files: string[];
+  outcome: string; evidence: string[]; at: number;
+}
+const sources: readonly string[] = ['harness', 'claude-code', 'cursor'];
 const spaces: readonly string[] = ['personal', 'company'];
 const kinds: readonly string[] = ['convention', 'lesson', 'decision', 'pattern'];
 const statuses: readonly string[] = ['proposed', 'approved', 'rejected', 'retired'];
@@ -23,8 +29,9 @@ const secrets = [/gh[po]_[A-Za-z0-9]{20,}/, /github_pat_[A-Za-z0-9_]{20,}/, /\bs
 /** Local owner state; never a directory under the repository. */
 export function defaultBrainDirectory(): string { return join(homedir(), '.forgemind', 'brain'); }
 
+export function containsSecret(value: string): boolean { return secrets.some(pattern => pattern.test(value)); }
 function noSecret(value: string): void {
-  if (secrets.some(pattern => pattern.test(value))) throw new Error('refusing to store a secret');
+  if (containsSecret(value)) throw new Error('refusing to store a secret');
 }
 function limited(value: unknown, min: number, max: number, name: string): string {
   if (typeof value !== 'string' || value.length < min || value.length > max) throw new Error(`invalid ${name}`);
@@ -59,7 +66,7 @@ export class BrainStore {
     this.db = new DatabaseSync(path, { timeout: 1000, enableForeignKeyConstraints: true });
     try {
       const version = this.db.prepare('PRAGMA user_version').get()?.user_version;
-      if (version !== 0 && version !== 1) throw new Error('unsupported brain schema');
+      if (version !== 0 && version !== 1 && version !== 2) throw new Error('unsupported brain schema');
       this.db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;');
       this.transaction(() => {
         this.db.exec(`
@@ -69,8 +76,11 @@ export class BrainStore {
             status TEXT NOT NULL CHECK(status IN ('proposed','approved','rejected','retired')),
             created_at INTEGER NOT NULL, reviewed_at INTEGER, review_note TEXT) STRICT;
           CREATE TABLE IF NOT EXISTS audit (sequence INTEGER PRIMARY KEY, action TEXT NOT NULL, entry TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
+          CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, project TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('harness','claude-code','cursor')), title TEXT NOT NULL,
+            summary TEXT NOT NULL, files TEXT NOT NULL, outcome TEXT NOT NULL, evidence TEXT NOT NULL, at INTEGER NOT NULL) STRICT;
         `);
-        if (version === 0) this.db.exec('PRAGMA user_version = 1');
+        if (version !== 2) this.db.exec('PRAGMA user_version = 2');
       });
     } catch (error) { this.db.close(); throw error; }
   }
@@ -97,6 +107,38 @@ export class BrainStore {
       this.db.prepare('INSERT INTO audit (action, entry, at) VALUES (?, ?, ?)').run('propose', id, now);
       return id;
     });
+  }
+  record(input: { project: string; source: BrainSource; key: string; title: string; summary: string; files: string[];
+    outcome: string; evidence: string[] }): string {
+    const rawSource: unknown = input.source, rawFiles: unknown = input.files, rawEvidence: unknown = input.evidence;
+    if (typeof rawSource !== 'string' || !sources.includes(rawSource)) throw new Error('invalid source');
+    const project = limited(absolute(input.project), 1, 4096, 'project');
+    const key = limited(input.key, 1, 200, 'key');
+    const title = limited(input.title, 1, 300, 'title');
+    const summary = limited(input.summary, 0, 4000, 'summary');
+    const outcome = limited(input.outcome, 1, 200, 'outcome');
+    if (!Array.isArray(rawFiles) || rawFiles.length > 200) throw new Error('invalid files');
+    const files = (rawFiles as unknown[]).map(item => limited(item, 0, 1024, 'files'));
+    if (!Array.isArray(rawEvidence) || rawEvidence.length > 20) throw new Error('invalid evidence');
+    const evidence = (rawEvidence as unknown[]).map(item => limited(item, 0, 300, 'evidence'));
+    const id = createHash('sha256').update(JSON.stringify([rawSource, project, key])).digest('hex').slice(0, 16);
+    return this.transaction(() => {
+      if (this.db.prepare('SELECT 1 FROM history WHERE id = ?').get(id)) return id;
+      const now = Date.now();
+      this.db.prepare('INSERT INTO history VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, project, rawSource, title, summary, JSON.stringify(files), outcome, JSON.stringify(evidence), now);
+      this.db.prepare('INSERT INTO audit (action, entry, at) VALUES (?, ?, ?)').run('record', id, now);
+      return id;
+    });
+  }
+  history(project: string, limit = 20): BrainHistory[] {
+    const where = absolute(project);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('invalid limit');
+    return this.db.prepare('SELECT * FROM history WHERE project = ? ORDER BY at DESC, rowid DESC LIMIT ?').all(where, limit).map(row => ({
+      id: row.id as string, project: row.project as string, source: row.source as BrainSource, title: row.title as string,
+      summary: row.summary as string, files: JSON.parse(row.files as string) as string[], outcome: row.outcome as string,
+      evidence: JSON.parse(row.evidence as string) as string[], at: row.at as number
+    }));
   }
   private rows(sql: string, params: string[]): BrainEntry[] {
     return this.db.prepare(sql).all(...params).map(row => ({
