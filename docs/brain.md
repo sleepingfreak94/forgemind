@@ -62,6 +62,28 @@ Token caps: `brain_context` is at most 3200 characters (about 800 tokens), dropp
 
 Agents should call `brain_context` at the start of a session and `brain_record` at the end. In a project that is not mapped, every tool returns an error with the mapping hint: `npm run brain -- map --workspace <path> --space personal|company`.
 
+## Automatic capture and recall (hooks)
+
+Hooks close the memory loop in your own Claude Code and Cursor sessions. Run `npm run build` first.
+
+Claude Code, in `~/.claude/settings.json`:
+
+```
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-start --source claude-code"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-end --source claude-code"}]}]}}
+```
+
+Cursor, in `~/.cursor/hooks.json`:
+
+```
+{"version":1,"hooks":{"sessionStart":[{"command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-start --source cursor"}],"sessionEnd":[{"command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-end --source cursor"}]}}
+```
+
+Session start injects the `brain_context` packet (at most 3200 characters) plus a reminder to call `brain_record` before finishing. Session end records one fallback fact per session (key `session:<id>`): the title comes from the first user prompt, files come from `git status`, secret-like values become `[redacted]`, and nothing is recorded when there is no prompt and no change. The session's own agent writes the rich summary through `brain_record`.
+
+Hooks never call a model. Unmapped projects are ignored: nothing is injected or recorded. Errors go to stderr as one line; the hook always exits 0 and never blocks a session. History facts are recalled at once; rules still wait for your approval.
+
+To remove the hooks, delete the `SessionStart` and `SessionEnd` entries from `~/.claude/settings.json` and the `sessionStart` and `sessionEnd` entries from `~/.cursor/hooks.json` (or the files, if they hold nothing else). Existing history stays in the brain.
+
 ## Output
 
 Every command prints one JSON object. Exit codes: 0 success, 1 failure, 2 usage error.
