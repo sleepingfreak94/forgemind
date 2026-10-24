@@ -70,16 +70,24 @@ export function contextText(store: BrainStore, space: string, project: string): 
 
 const words = (value: string): Set<string> => new Set(value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
 
+const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'are', 'was', 'were', 'has', 'have', 'how', 'what',
+  'when', 'why', 'who', 'use', 'used', 'using', 'should', 'would', 'could', 'can', 'not', 'but', 'all', 'any', 'our', 'your', 'its',
+  'their', 'about', 'after', 'before', 'then', 'than', 'also', 'only', 'more', 'most', 'some', 'such', 'each', 'other', 'over',
+  'under', 'report', 'reported', 'show', 'shown', 'new', 'make', 'made']);
+const terms = (value: string): Set<string> => new Set([...words(value)].filter(w => w.length >= 3 && !STOPWORDS.has(w)));
+
 // shortcut: lexical ranking, upgrade to src/memory/local-embedding.ts when memory grows past a few hundred items
 function rank(store: BrainStore, project: string, query: string, limit: number): string {
-  const wanted = [...words(query)];
+  const wanted = [...terms(query)];
+  if (wanted.length === 0) return 'No matches.';
+  const need = Math.max(1, Math.ceil(wanted.length / 2));
   const candidates: (Item & { text: string })[] = [
     ...store.approved(project).map((e: BrainEntry) => ({ ts: e.createdAt, text: e.text, line: `[${e.kind}] ${e.id} ${flat(e.text)}` })),
     ...store.history(project, 200).map((h: BrainHistory) => ({ ts: h.at, text: `${h.title} ${h.summary} ${h.outcome}`,
       line: `${historyLine(h)} — ${flat(h.summary)}` })),
   ];
-  const scored = candidates.map(c => { const set = words(c.text); return { c, score: wanted.filter(w => set.has(w)).length }; })
-    .filter(s => s.score > 0).sort((a, b) => b.score - a.score || b.c.ts - a.c.ts).slice(0, limit);
+  const scored = candidates.map(c => { const set = terms(c.text); return { c, score: wanted.filter(w => set.has(w)).length }; })
+    .filter(s => s.score >= need).sort((a, b) => b.score - a.score || b.c.ts - a.c.ts).slice(0, limit);
   if (scored.length === 0) return 'No matches.';
   const out: string[] = [];
   let total = 0;

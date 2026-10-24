@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrainStore } from '../../src/memory/brain.js';
 import { mapBrainSpace } from '../../src/memory/brain-spaces.js';
-import { runBrainHook } from '../../src/memory/brain-hook.js';
+import { cleanPrompt, runBrainHook } from '../../src/memory/brain-hook.js';
 
 const LINE = 'Before you finish, call the forgemind-brain tool brain_record with a short title, summary, files changed and outcome.';
 const NOW = Date.parse('2026-10-24T10:00:00Z');
@@ -75,15 +75,34 @@ test('claude session-end records from transcript', async () => {
   assert.ok(l.title.length - 'Session (auto): '.length <= 160);
 });
 
-test('cursor session-end with null transcript, and duplicates', async () => {
-  const input = JSON.stringify({ conversation_id: 'dup', workspace_roots: [ws], transcript_path: null });
+const WRAPPED = '<timestamp>Saturday, Oct 24, 2026, 11:11 PM (UTC+5:30)</timestamp>\n<user_query>\nAnswer in 4 short lines...\n</user_query>';
+
+test('cleanPrompt', () => {
+  assert.equal(cleanPrompt(WRAPPED), 'Answer in 4 short lines...');
+  assert.equal(cleanPrompt('  Fix   the\nbug '), 'Fix the bug');
+  assert.equal(cleanPrompt('<timestamp>x</timestamp>'), '');
+  assert.equal(cleanPrompt('<context>hi'), 'hi');
+});
+
+test('cursor session-end with null transcript records nothing; wrapped prompt dedups', async () => {
   const before = history().length;
+  await runBrainHook(['session-end', '--source', 'cursor'], JSON.stringify({ conversation_id: 'nul', workspace_roots: [ws], transcript_path: null }), opts(['z.ts']));
+  assert.equal(history().length, before);
+  const t = transcript([{ role: 'user', content: [{ type: 'text', text: WRAPPED }] }]);
+  const input = JSON.stringify({ conversation_id: 'dup', workspace_roots: [ws], transcript_path: t });
   await runBrainHook(['session-end', '--source', 'cursor'], input, opts(['z.ts']));
   await runBrainHook(['session-end', '--source', 'cursor'], input, opts(['z.ts']));
   const h = history();
   assert.equal(h.length, before + 1);
   const e = h.find(x => x.source === 'cursor')!;
-  assert.equal(e.title, 'Session (auto) 2026-10-24');
+  assert.equal(e.title, 'Session (auto): Answer in 4 short lines...');
+});
+
+test('claude session without a user prompt records nothing even with files', async () => {
+  const before = history().length;
+  const t = transcript([{ type: 'summary', summary: 's' }]);
+  assert.equal(await runBrainHook(['session-end', '--source', 'claude-code'], JSON.stringify({ session_id: sid(), cwd: ws, transcript_path: t }), opts(['a.ts'])), '');
+  assert.equal(history().length, before);
 });
 
 test('secrets become [redacted]', async () => {

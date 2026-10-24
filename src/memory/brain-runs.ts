@@ -22,6 +22,13 @@ function clean(value: string, max: number): string {
   return containsSecret(text) ? '[redacted]' : text;
 }
 
+function firstSentence(objective: string): string {
+  const text = objective.trim();
+  const cuts = ['. ', ': ', '\n'].map(d => text.indexOf(d)).filter(i => i >= 0);
+  const first = (cuts.length ? text.slice(0, Math.min(...cuts)) : text).trim();
+  return first.length > 120 ? first.slice(0, 119).trimEnd() + '…' : first;
+}
+
 export function recordHarnessRun(input: { brainDirectory: string; workspace: string; taskId: string; objective: string; artifacts: string;
   status: string; prUrl?: string }): { recorded: true; space: BrainSpace; id: string } | { recorded: false; reason: string } {
   try {
@@ -52,7 +59,7 @@ export function recordHarnessRun(input: { brainDirectory: string; workspace: str
     }
     const joined = parts.join(' ').slice(0, 4000);
     const summary = containsSecret(joined) ? '[redacted]' : joined;
-    const title = clean(input.objective, 300) || clean(input.taskId, 300) || 'harness run';
+    const title = clean(firstSentence(input.objective), 300) || clean(input.taskId, 300) || 'harness run';
     const files = [...new Set(paths.map(p => clean(p, 1024)))].slice(0, 200);
     const message = isObject(failure) && typeof failure.message === 'string' ? failure.message.trim().slice(0, 180) : '';
     const outcome = clean(input.status === 'failed' && message ? `failed: ${message}` : input.status, 200) || 'unknown';

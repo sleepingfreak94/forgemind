@@ -83,6 +83,18 @@ test('brain_search ranks and caps', async () => {
   assert.equal(call('brain_search', { query: 'qqqqqq' }).text, 'No matches.');
 });
 
+test('brain_search stopwords and threshold', async () => {
+  await addApproved('nightly kumquat sync reported done');
+  await addApproved('kumquat quokka pairing');
+  assert.equal(call('brain_search', { query: 'billing failures reported' }).text, 'No matches.');
+  const two = call('brain_search', { query: 'kumquat zebrafish' }).text;
+  assert.ok(two.includes('nightly kumquat sync') && two.includes('kumquat quokka pairing'));
+  const four = call('brain_search', { query: 'kumquat zebrafish quokka narwhal' }).text;
+  assert.ok(four.includes('kumquat quokka pairing') && !four.includes('nightly kumquat sync'));
+  assert.equal(call('brain_search', { query: 'the and for with' }).text, 'No matches.');
+  assert.equal(call('brain_search', { query: 'is it' }).text, 'No matches.');
+});
+
 test('brain_propose stays proposed until approved', () => {
   const result = call('brain_propose', { kind: 'lesson', text: 'prefer small commits', reason: 'test' });
   assert.ok(result.text.endsWith('proposed; the owner must approve it'));

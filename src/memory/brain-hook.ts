@@ -37,6 +37,15 @@ function userText(obj: unknown): string | undefined {
   return text === '' ? undefined : text;
 }
 
+export function cleanPrompt(text: string): string {
+  let t = String(text).replace(/<timestamp\b[^>]*>[\s\S]*?<\/timestamp>/gi, ' ');
+  const q = /<user_query\b[^>]*>([\s\S]*?)<\/user_query>/i.exec(t);
+  if (q) t = q[1] ?? '';
+  const tag = /^\s*<\/?[A-Za-z][\w:.-]*(?:\s[^>]*)?\/?>/;
+  while (tag.test(t)) t = t.replace(tag, '');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
 function readFirstPrompt(path: unknown): string | undefined {
   if (typeof path !== 'string' || path === '' || !isAbsolute(path)) return undefined;
   let fd: number | undefined;
@@ -121,6 +130,8 @@ async function runBrainHookCore(argv: string[], input: string, options: BrainHoo
   }
   const transcript = data.transcript_path;
   const prompt = readFirstPrompt(transcript);
+  const cleaned = prompt === undefined ? '' : cleanPrompt(prompt);
+  if (cleaned === '') return '';
   const rawFiles = (options.changedFiles ?? defaultChangedFiles)(workspace);
   const seen = new Set<string>();
   for (const f of rawFiles) {
@@ -130,10 +141,8 @@ async function runBrainHookCore(argv: string[], input: string, options: BrainHoo
     seen.add(rel);
   }
   const files = [...seen].slice(0, MAX_FILES);
-  if (prompt === undefined && files.length === 0) return '';
   const now = (options.now ?? Date.now)();
-  const title = prompt !== undefined ? 'Session (auto): ' + prompt.slice(0, TITLE_PROMPT_CAP).trimEnd()
-    : 'Session (auto) ' + new Date(now).toISOString().slice(0, 10);
+  const title = 'Session (auto): ' + cleaned.slice(0, TITLE_PROMPT_CAP).trimEnd();
   let id = typeof sessionId === 'string' && sessionId !== '' ? sessionId
     : sha(JSON.stringify([typeof transcript === 'string' ? transcript : workspace, new Date(now).toISOString().slice(0, 10)]));
   if (id.length > 190) id = sha(id);

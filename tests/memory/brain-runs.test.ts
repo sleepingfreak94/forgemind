@@ -43,6 +43,18 @@ test('full artifacts are recorded', () => {
   assert.equal(rows().length, 1);
 });
 
+test('titles use the first sentence, capped', () => {
+  const title = (objective: string) => { const s = setup(); recordHarnessRun({ ...s.input, objective }); return s.rows()[0]!.title; };
+  assert.equal(title('Fix bugs. Then more'), 'Fix bugs');
+  assert.equal(title('Scope: details'), 'Scope');
+  assert.equal(title('Line one\nline two'), 'Line one');
+  const long = title('a'.repeat(200));
+  assert.equal(long.length, 120);
+  assert.ok(long.endsWith('…'));
+  assert.equal(title('b'.repeat(120)), 'b'.repeat(120));
+  assert.equal(title('   '), 'task-1');
+});
+
 test('failed run records the failure message', () => {
   const { artifacts, input, rows } = setup();
   put(artifacts, 'failure.json', { message: 'boom '.repeat(100) });
