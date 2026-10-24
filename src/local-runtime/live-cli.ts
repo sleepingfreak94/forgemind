@@ -16,6 +16,8 @@ import { pinClaudeCli, openClaudeSubscriptionSession } from '../live-workflow/cl
 import { nodeProjectRuntime } from '../live-workflow/check-runtime.js';
 import { pinCursorCli, openCursorSubscriptionSession } from '../live-workflow/cursor-session.js';
 import { cursorPersonalWorkspaces } from './cursor-route-config.js';
+import { defaultBrainDirectory } from '../memory/brain.js';
+import { recordHarnessRun } from '../memory/brain-runs.js';
 
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:connect --connection /private/forgemind-account
@@ -166,12 +168,26 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       return { cursor: { cli: cursorCli, session, ...(testAuto ? { testAuto } : {}) } };
     })() : { codexExecutable: args['--codex']!, planSession: planSession! };
     const checkRuntime = args['--node-modules'] ? nodeProjectRuntime(args['--node-modules']) : undefined;
-    output(await runTask({ workspace: root, task: manifest, ...route, ...(checkRuntime ? { checkRuntime } : {}),
+    const note = (status: string, prUrl?: string) => {
+      try {
+        const recorded = recordHarnessRun({ brainDirectory: defaultBrainDirectory(), workspace: root, taskId: manifest.taskId,
+          objective: manifest.objective, artifacts: join(runDirectory, 'artifacts'), status, ...(prUrl ? { prUrl } : {}) });
+        process.stderr.write(recorded.recorded ? `Brain: run recorded in the ${recorded.space} space.\n`
+          : `Brain: run not recorded (${recorded.reason}).\n`);
+      } catch { /* recording never changes the run */ }
+    };
+    let result: Awaited<ReturnType<typeof runTask>>;
+    try {
+      result = await runTask({ workspace: root, task: manifest, ...route, ...(checkRuntime ? { checkRuntime } : {}),
       stateDirectory: runDirectory, worktreeDirectory: worktrees, signal: controller.signal,
       ...(publication ? { publication } : {}),
       ...(browserQa ? { browserQa } : {}),
       confirmPlan: async (_plan, digest) => (await terminal.question(`Approve plan ${digest}? Enter approve ${digest}: `, { signal: controller.signal })) === `approve ${digest}`,
-      onProgress: message => process.stderr.write(message + '\n') }));
+      onProgress: message => process.stderr.write(message + '\n') });
+    } catch (error) { note('failed'); throw error; }
+    output(result);
+    const done = result as { status?: unknown; prUrl?: unknown };
+    note(typeof done.status === 'string' ? done.status : 'unknown', typeof done.prUrl === 'string' ? done.prUrl : undefined);
   } finally { routeSession?.close(); terminal.close(); process.removeListener('SIGINT', abort); }
 }
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

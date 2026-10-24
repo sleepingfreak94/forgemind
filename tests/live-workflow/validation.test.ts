@@ -16,7 +16,9 @@ import {
   plan,
   readSources,
   task,
+  subtasks,
 } from "../../src/live-workflow/validation.js";
+import { planSchema, splitPlanSchema } from "../../src/live-workflow/contracts.js";
 import {
   CLAUDE_PHASE_MODELS,
   CURSOR_PHASE_MODELS,
@@ -107,10 +109,15 @@ test("cursor provider routing is owner-fixed and validated", () => {
       assert.throws(() => task({ ...common, provider, model }), /Invalid model routing/);
   for (const provider of ["xai", "Cursor", null])
     assert.throws(() => task({ ...common, provider, model: "gpt-test" }), /Invalid provider/);
-  assert.throws(
-    () => task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "tools", maxToolCalls: 8 }),
-    /Invalid coding mode/,
-  );
+  const cursorTools = task({ ...common, provider: "cursor", model: "grok-4.7-high", codingMode: "tools", maxToolCalls: 8, readScope: "repository" });
+  assert.equal(cursorTools.codingMode, "tools");
+  assert.equal(cursorTools.maxToolCalls, 8);
+  assert.equal(cursorTools.readScope, "repository");
+  for (const provider of [undefined, "openai"])
+    assert.throws(
+      () => task({ ...common, provider, model: "gpt-test", codingMode: "tools", maxToolCalls: 8 }),
+      /Invalid coding mode/,
+    );
   assert.equal(task({ ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding }).provider, "anthropic");
   assert.equal(task({ ...common, provider: "openai", model: "gpt-test" }).provider, "openai");
 });
@@ -163,6 +170,43 @@ test("check profiles and placeholders are validated", () => {
   const plain = task(manifest(baseCheck));
   assert.deepEqual(plain.checks[0], baseCheck);
   assert.equal("profile" in plain.checks[0]!, false);
+});
+test("read scope requires repository value and tools coding mode", () => {
+  const common = {
+    schemaVersion: 1,
+    taskId: "read-scope",
+    objective: "x",
+    readPaths: ["value.txt"],
+    writePaths: ["value.txt"],
+    checks: [
+      { id: "c", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+    ],
+    effort: "low",
+    maxModelRequests: 1,
+    maxPromptBytes: 1000,
+    maxOutputBytes: 1000,
+    maxRuntimeMs: 1000,
+    draftPr: false,
+  };
+  const anthropic = { ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding };
+  const tools = { ...anthropic, codingMode: "tools", maxToolCalls: 8 };
+  assert.equal(task({ ...tools, readScope: "repository" }).readScope, "repository");
+  assert.equal("readScope" in task(tools), false);
+  for (const s of ["all", "Repository", null])
+    assert.throws(() => task({ ...tools, readScope: s }), /Invalid read scope/);
+  assert.throws(() => task({ ...anthropic, readScope: "repository" }), /Invalid read scope/);
+  assert.throws(
+    () => task({ ...anthropic, codingMode: "single-call", readScope: "repository" }),
+    /Invalid read scope/,
+  );
+  assert.throws(
+    () => task({ ...common, model: "gpt-test", readScope: "repository" }),
+    /Invalid read scope/,
+  );
+  assert.throws(
+    () => task({ ...common, model: "gpt-test", codingMode: "tools", maxToolCalls: 8, readScope: "repository" }),
+    /Invalid coding mode/,
+  );
 });
 test("coding mode and tool-call budget are validated", () => {
   const common = {
@@ -226,4 +270,72 @@ test("coding mode and tool-call budget are validated", () => {
     () => task({ ...anthropic, toolBudget: 8 }),
     /Unexpected object fields/,
   );
+});
+const splitCommon = {
+  schemaVersion: 1,
+  taskId: "split-task",
+  objective: "x",
+  readPaths: ["a.txt"],
+  writePaths: ["a.txt", "b.txt"],
+  checks: [
+    { id: "build", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+    { id: "tests", executable: "/usr/bin/true", args: [] as string[], timeoutMs: 1000 },
+  ],
+  effort: "low",
+  maxModelRequests: 1,
+  maxPromptBytes: 1000,
+  maxOutputBytes: 1000,
+  maxRuntimeMs: 1000,
+  draftPr: false,
+};
+test("split is limited to the Claude and Cursor routes", () => {
+  const common = splitCommon;
+  assert.equal(
+    task({ ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding, split: true }).split,
+    true,
+  );
+  assert.equal(
+    task({ ...common, provider: "cursor", model: CURSOR_PHASE_MODELS.coding, split: true }).split,
+    true,
+  );
+  assert.throws(
+    () => task({ ...common, provider: "openai", model: "gpt-test", split: true }),
+    /Invalid split/,
+  );
+  assert.throws(
+    () => task({ ...common, model: "gpt-test", split: true }),
+    /Invalid split/,
+  );
+  assert.throws(
+    () => task({ ...common, provider: "anthropic", model: CLAUDE_PHASE_MODELS.coding, split: false }),
+    /Invalid split/,
+  );
+});
+test("subtasks are bounded to the task write scope and checks", () => {
+  const t = task({
+    ...splitCommon,
+    provider: "anthropic",
+    model: CLAUDE_PHASE_MODELS.coding,
+    split: true,
+  });
+  const entry = (over: Record<string, unknown> = {}) => ({
+    title: "t",
+    objective: "o",
+    writePaths: ["a.txt"],
+    checks: ["build"],
+    ...over,
+  });
+  const good = [entry(), entry({ writePaths: ["b.txt"], checks: ["build", "tests"] })];
+  const out = subtasks(good, t);
+  assert.deepEqual(out, good);
+  assert.notEqual(out, good);
+  assert.throws(() => subtasks([], t), /Invalid split plan/);
+  assert.throws(() => subtasks(Array.from({ length: 9 }, () => entry()), t), /Invalid split plan/);
+  assert.throws(() => subtasks([entry({ extra: 1 })], t), /Unexpected object fields/);
+  assert.throws(() => subtasks([entry({ writePaths: ["c.txt"] })], t), /Subtask expands write scope/);
+  assert.throws(() => subtasks([entry({ writePaths: ["a.txt", "a.txt"] })], t), /Subtask expands write scope/);
+  assert.throws(() => subtasks([entry({ writePaths: [] })], t), /Subtask expands write scope/);
+  assert.throws(() => subtasks([entry({ checks: ["lint"] })], t), /Subtask names an unknown check/);
+  assert.ok(splitPlanSchema.required.includes("subtasks"));
+  assert.equal(planSchema.required.length, 5);
 });

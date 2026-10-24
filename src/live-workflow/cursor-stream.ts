@@ -4,7 +4,10 @@ export interface CursorStreamResult {
   output: Record<string, unknown>;
   usage: Record<string, number> | null;
   requestId: string | null;
+  toolCalls: number;
 }
+/** The one MCP server and tool names Cursor may call in tools coding mode. */
+export interface CursorStreamTools { server: string; names: readonly string[] }
 const MAX_LINES = 4096;
 const allowedTypes = new Set(['system', 'user', 'thinking', 'assistant', 'result']);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -13,7 +16,9 @@ const label = (value: unknown) => typeof value === 'string' && /^[a-z_]{1,40}$/.
 /** Fail closed on anything outside the reviewed `cursor-agent -p --mode ask --output-format stream-json`
  * shape: one login-authenticated init on the routed model, text-only answers, one successful final result
  * whose text is a JSON object. Never retries or substitutes. */
-export function parseCursorStream(stdout: string, model: string): CursorStreamResult {
+export function parseCursorStream(stdout: string, model: string, tools?: CursorStreamTools): CursorStreamResult {
+  if (tools !== undefined && (!record(tools) || typeof tools.server !== 'string' || !tools.server || !Array.isArray(tools.names)
+    || tools.names.some(name => typeof name !== 'string' || !name))) throw new Error('Cursor tools profile is invalid');
   const expected = CURSOR_MODEL_LABELS[model];
   if (!expected) throw new Error('Cursor model is not reviewed');
   const lines = stdout.split('\n').filter(line => line.trim());
@@ -21,7 +26,7 @@ export function parseCursorStream(stdout: string, model: string): CursorStreamRe
   const events = lines.map(line => {
     let value: unknown;
     try { value = JSON.parse(line); } catch { throw new Error('Malformed Cursor stream'); }
-    if (!record(value) || typeof value.type !== 'string' || !allowedTypes.has(value.type))
+    if (!record(value) || typeof value.type !== 'string' || !(allowedTypes.has(value.type) || (tools && value.type === 'tool_call')))
       throw new Error(`Unreviewed Cursor stream event (${label(record(value) ? value.type : undefined)})`);
     return value;
   });
@@ -49,7 +54,38 @@ export function parseCursorStream(stdout: string, model: string): CursorStreamRe
   const result = results[0]!;
   if (result.subtype !== 'success' || result.is_error !== false || typeof result.result !== 'string')
     throw new Error('Cursor run did not complete; no automatic retry or fallback');
-  return { output: answerObject(result.result), usage: usage(result.usage), requestId: typeof result.request_id === 'string' ? result.request_id.slice(0, 80) : null };
+  let toolCalls = 0, text = result.result;
+  if (tools) {
+    for (const event of events.filter(e => e.type === 'tool_call')) if (checkToolCall(event, tools)) toolCalls++;
+    const assistants = events.filter(e => e.type === 'assistant');
+    if (!assistants.length) throw new Error('Cursor tools stream has no answer');
+    const content = (assistants[assistants.length - 1]!.message as { content: Record<string, unknown>[] }).content;
+    text = content.map(block => typeof block.text === 'string' ? block.text : '').join('');
+    if (!text || !result.result.endsWith(text)) throw new Error('Cursor final answer mismatch');
+  }
+  return { output: answerObject(text), usage: usage(result.usage), requestId: typeof result.request_id === 'string' ? result.request_id.slice(0, 80) : null, toolCalls };
+}
+/** Validates one tool_call event; returns whether it is a successful call to a reviewed MCP tool. */
+function checkToolCall(event: Record<string, unknown>, tools: CursorStreamTools): boolean {
+  const call = event.tool_call;
+  const kinds = record(call) ? Object.keys(call).filter(key => key.endsWith('ToolCall')) : [];
+  if ((event.subtype !== 'started' && event.subtype !== 'completed') || !record(call) || kinds.length !== 1)
+    throw new Error('Unreviewed Cursor tool call event');
+  const kind = kinds[0]!, inner = call[kind];
+  if (!record(inner) || !record(inner.args)) throw new Error('Unreviewed Cursor tool call event');
+  const args = inner.args, result = inner.result, completed = event.subtype === 'completed';
+  if (kind === 'getMcpToolsToolCall') {
+    if (args.server !== tools.server) throw new Error('Cursor called an unreviewed MCP tool');
+    return false;
+  }
+  if (kind === 'mcpToolCall') {
+    if (args.providerIdentifier !== tools.server || typeof args.toolName !== 'string' || !tools.names.includes(args.toolName))
+      throw new Error('Cursor called an unreviewed MCP tool');
+    return completed && record(result) && record(result.success);
+  }
+  if (completed && !(record(result) && (result.error !== undefined || result.rejected !== undefined) && result.success === undefined))
+    throw new Error('Cursor used a built-in tool');
+  return false;
 }
 /** The answer must be one JSON object; a single surrounding ```json fence is tolerated, prose is not.
  * A plan-limit or upgrade notice therefore fails here instead of passing as an answer. */

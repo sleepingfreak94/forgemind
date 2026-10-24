@@ -39,6 +39,8 @@ npm run project:run -- --workspace /absolute/project --task /absolute/task.json 
 
 `--connection`, `--codex`, `--claude` and `--claude-profile` are rejected on this route. Plan approval, checks, independent review and draft publication are those of the supervised pipeline.
 
+Task splitting also works on this route, in tools or single-call mode; see [task splitting](task-splitting.md).
+
 ## Auto test mode
 
 On the Free plan only Auto works, so a Grok 4.7 run needs a paid plan or a company seat. To prove the harness anyway, pass `--cursor-mode test-auto` (the only accepted value) with a task that sets `"model": "auto"`. Auto picks its own model, the model is recorded as `auto`, receipts are marked test-only and draft publication is refused. The terminal shows `TEST MODE: Auto picks the model, nothing is published`.
@@ -51,6 +53,46 @@ On the Free plan only Auto works, so a Grok 4.7 run needs a paid plan or a compa
 - The stream must show one init with `apiKeySource: login`, text-only answers, thinking events only in their reviewed shape, and one successful result whose text is a JSON object the existing validators accept.
 - Plan-limit errors, upgrade notices, tool calls, unknown events and malformed answers fail closed: the task stops with a receipt.
 
+## Tools coding mode
+
+Tools mode lets Cursor explore the repository through ForgeMind host tools. The lockdown above describes single-call mode. In tools mode, the rules below apply.
+
+**Opt in.** Set this in the task manifest:
+
+```json
+{ "provider": "cursor", "codingMode": "tools", "maxToolCalls": 16 }
+```
+
+Add `"readScope": "repository"` to let the session read the repository, not only `readPaths`. It also works with split tasks.
+
+**How it runs.**
+
+- The process is `cursor-agent -p --mode ask --trust --approve-mcps`.
+- The work `.cursor/mcp.json` names one server, `forgemind`. It points at a loopback endpoint (127.0.0.1, secret path).
+- Both permission files allow only `Mcp(forgemind:<tool>)` for the granted host tools. They deny all built-ins (Read, Write, Shell, WebFetch).
+- The profile `mcp.json` is always reset to no servers.
+- The sandbox opens only that loopback port, beyond the existing rules.
+
+**Stream checks.**
+
+- The parser accepts only reviewed `tool_call` events. These are forgemind MCP calls to granted tools, and built-in calls only if Cursor refused them.
+- The stream's successful tool-call count must equal the host's count.
+
+**Phase 0 probes** (2026-10-23, Auto test mode, personal Free plan):
+
+- Ask mode called two granted forgemind tools.
+- The built-in read of a canary in the profile got "Permission denied". The canary appeared in no output.
+- A forgemind tool missing from the allowlist came back "User rejected MCP", even with `--approve-mcps`.
+
+**Live runs** (2026-10-23, Auto test mode, test only):
+
+- Repository read: the task said the tax was far too high and to find the rule in the docs. The rule lives only in `docs/rules/TAX.md`. The planner, without the docs, guessed 0.18. The Cursor tools session explored and set `RATE = 0.125` in 5 host tool calls. The check passed and review passed. The outcome was completed-local, with 3 requests. The git-ignored `.env` never leaked.
+- Coupon split task in tools mode: 2 subtasks, each checked, review pass, completed-local, 4 requests.
+
+There is no Grok 4.7 tools-mode run yet.
+
+**Residual risk.** Tools mode relies on Cursor's permission layer honouring allow and deny rules, as the existing lockdown does. This is not a guarantee.
+
 ## Limits
 
 - **Credential lockdown and residual risk:** a live canary probe on 2026-10-23 showed that, without the lockdown, ask mode's read tool read a canary file planted in the profile, where the login lives. With the deny-all lockdown, the same probe run through the real route code from an unlocked profile config got "Permission denied" from the read tool, and the canary appeared in no output. This is not a guarantee: it relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process itself with open `*:443` egress, and tool use is rejected by the stream parser only after a call. Keep this profile dedicated to ForgeMind, and sign out and back in if you suspect misuse.
@@ -60,4 +102,4 @@ On the Free plan only Auto works, so a Grok 4.7 run needs a paid plan or a compa
 - Print mode has no JSON-schema option; the answer must parse and validate.
 - A CLI update changes the manifest digest and needs a new review.
 - Egress cannot be filtered by hostname.
-- Opus planning is deferred, and there is no tools coding mode.
+- Opus planning is deferred.

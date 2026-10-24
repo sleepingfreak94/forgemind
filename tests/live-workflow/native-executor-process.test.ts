@@ -1,4 +1,4 @@
-import { reviewedCodexFixture } from './reviewed-codex-fixture.js';
+import { codexMissing, reviewedCodexFixture } from './reviewed-codex-fixture.js';
 import { reconcileChatGPTExecution } from '../../src/live-workflow/chatgpt-execution-leases.js';
 import { executionFixture } from './chatgpt-execution-fixture.js';
 import { ChatGPTExecutionLedger } from '../../src/live-workflow/chatgpt-execution-ledger.js';
@@ -23,7 +23,7 @@ test('serialized process cannot qualify native execution', () => {
   assert.throws(() => assertNativeProcess({ qualification: 'native-seatbelt' } as never), /trusted/);
 });
 test('real pinned 0.162.1 starts a read-only native thread offline and reaps before lifecycle finish',
-  { skip: process.platform !== 'darwin', timeout: 15000 }, async () => {
+  { skip: process.platform !== 'darwin' || codexMissing('0.162.1'), timeout: 15000 }, async () => {
   const root = realpathSync(mkdtempSync(tmpdir() + '/fm-native-process-'));
   const home = root + '/home', tmp = root + '/tmp'; mkdirSync(home, { mode: 0o700 }); mkdirSync(tmp, { mode: 0o700 });
   const allocator = createServer();
@@ -127,7 +127,7 @@ test('real pinned 0.162.1 starts a read-only native thread offline and reaps bef
 });
 
 test('prelaunch revocation, bind collision and post-bind pre-fork failure each terminalize once',
-  {skip:process.platform!=='darwin',timeout:20000},async()=>{
+  {skip:process.platform!=='darwin'||codexMissing('0.162.1'),timeout:20000},async()=>{
   for(const mode of ['revoked','occupied','pre-fork'] as const){
     const root=realpathSync(mkdtempSync(tmpdir()+'/fm-native-prelaunch-')),home=root+'/home',tmp=root+'/tmp';
     mkdirSync(home,{mode:0o700});mkdirSync(tmp,{mode:0o700});
@@ -168,7 +168,7 @@ test('fixed configuration disables auxiliary plugins and unbounded connection re
 });
 
 test('actual native offline ResponsesLite advertises exactly three direct host tools under the same no-fork profile',
-  {skip:process.platform!=='darwin',timeout:15000},async()=>{
+  {skip:process.platform!=='darwin'||codexMissing('0.162.1'),timeout:15000},async()=>{
   const root=realpathSync(mkdtempSync(tmpdir()+'/fm-native-direct-')),home=root+'/home',tmp=root+'/tmp';
   mkdirSync(home,{mode:0o700});mkdirSync(tmp,{mode:0o700});
   let capturedResolve!:(names:string[])=>void,capturedReject!:(error:Error)=>void;
@@ -231,7 +231,7 @@ test('actual native offline ResponsesLite advertises exactly three direct host t
 
 
 test('execution leases release only with genuine native reaping or prelaunch cleanup, independent of cancellation',
-  {skip:process.platform!=='darwin',timeout:20000},async()=>{
+  {skip:process.platform!=='darwin'||codexMissing('0.162.1'),timeout:20000},async()=>{
   for(const mode of ['normal','cancel','prelaunch','reconcile','revoked-settlement'] as const){
     const f=executionFixture(),home=f.root+'/native-home',tmp=f.root+'/native-tmp';
     mkdirSync(home,{mode:0o700});mkdirSync(tmp,{mode:0o700});writeFileSync(home+'/config.toml',nativeConfiguration('gpt-6.1-sol'),{mode:0o600});
