@@ -291,7 +291,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     }
     authority.phase('candidate', current, {
       summary: changes.summary,
-      paths: changes.edits.map((e) => e.path),
+      paths: [...new Set(changes.edits.map((e) => e.path))],
     });
     save('changes.json', changes);
     const diff = captureTicketDiff(activeRoot, checkout.baseHead, task.writePaths);

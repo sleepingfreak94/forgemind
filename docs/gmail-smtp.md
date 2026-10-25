@@ -76,8 +76,11 @@ including subject, exact serialized summary body, IDs/digests and recipient.
 It never rewrites/truncates the summary. Message-ID is
 <forgemind-weekly.ENVELOPE_ID@forgemind.invalid>.
 Only the fixed sender, intended single SMTP envelope recipient, canonical subject
-and plaintext body are passed to Nodemailer. Content is UTF-8/base64 MIME, with
-no HTML, attachments, alternatives, Bcc/Cc, arbitrary headers or raw MIME input.
+and message parts are passed to Nodemailer. The plain-text part is readable lines
+followed by the exact canonical evidence JSON; the HTML part is rendered by
+renderWeeklyEmail (weekly-email.ts) from the same validated summary. Content is
+UTF-8/base64 MIME, with no attachments, alternatives, links, images, scripts,
+remote content, Bcc/Cc, arbitrary headers or raw MIME input.
 File and URL resolution are disabled at both transport and message levels.
 
 WeeklyDelivery commits uncertain before the callback. This adapter never returns

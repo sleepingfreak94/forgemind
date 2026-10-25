@@ -83,10 +83,21 @@ test('real Nodemailer over in-memory TLS peer enforces fixed framing and preserv
   assert.deepEqual(h.socket.commands.filter(s => s.startsWith('MAIL FROM:')), ['MAIL FROM:<' + username + '>']);
   assert.deepEqual(h.socket.commands.filter(s => s.startsWith('RCPT TO:')), ['RCPT TO:<' + address + '>']);
   assert.equal(h.socket.commands.filter(s => s === 'DATA').length, 1);
-  const split = h.socket.mime.indexOf('\r\n\r\n'), headers = h.socket.mime.slice(0, split);
-  assert.match(headers, /Content-Type: text\/plain; charset=utf-8/i); assert.match(headers, /Content-Transfer-Encoding: base64/i);
-  assert.ok(!/^Bcc:|^Cc:|^Content-Disposition:/im.test(headers)); assert.ok(!/text\/html|multipart\//i.test(headers));
-  assert.equal(Buffer.from(h.socket.mime.slice(split + 4).trim(), 'base64').toString('utf8'), message.body);
+  const mime = h.socket.mime, split = mime.indexOf('\r\n\r\n'), headers = mime.slice(0, split);
+  assert.match(headers, /Content-Type: multipart\/alternative;/i);
+  assert.ok(!/^Bcc:|^Cc:|^Content-Disposition:/im.test(headers)); assert.ok(!/Content-Disposition/i.test(mime));
+  const boundary = /boundary="?([^";\r\n]+)"?/i.exec(headers)![1]!;
+  const parts = mime.slice(split + 4).split('--' + boundary).slice(1).filter(p => !p.startsWith('--'));
+  assert.equal(parts.length, 2);
+  const decoded = parts.map(p => {
+    const at = p.indexOf('\r\n\r\n'), ph = p.slice(0, at).replace(/\r\n\s+/g, ' ');
+    assert.match(ph, /Content-Transfer-Encoding: base64/i);
+    return { ph, text: Buffer.from(p.slice(at + 4).replace(/\s+/g, ''), 'base64').toString('utf8') };
+  });
+  const plain = decoded.filter(d => /Content-Type: text\/plain; charset=utf-8/i.test(d.ph));
+  const html = decoded.filter(d => /Content-Type: text\/html; charset=utf-8/i.test(d.ph));
+  assert.equal(plain.length, 1); assert.equal(html.length, 1);
+  assert.ok(plain[0]!.text.endsWith(message.body)); assert.ok(html[0]!.text.includes('ForgeMind weekly report'));
 });
 test('deadline destroys real owned socket after DATA even though non-pooled Nodemailer.close cannot do so', async () => {
   const h = harness({ holdData: true });

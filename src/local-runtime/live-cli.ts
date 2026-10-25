@@ -18,6 +18,13 @@ import { pinCursorCli, openCursorSubscriptionSession } from '../live-workflow/cu
 import { cursorPersonalWorkspaces } from './cursor-route-config.js';
 import { defaultBrainDirectory } from '../memory/brain.js';
 import { recordHarnessRun } from '../memory/brain-runs.js';
+import { defaultMemoryDirectory } from '../memory/location.js';
+import type { AutomaticHistoryOptions } from '../live-workflow/automatic-run-history.js';
+
+const memoryDirectory = (): string | undefined => {
+  const dir = defaultMemoryDirectory();
+  try { return lstatSync(dir).isDirectory() ? dir : undefined; } catch { return undefined; }
+};
 
 const usage = `Supervised project coding with your ChatGPT plan (macOS):
   project:connect --connection /private/forgemind-account
@@ -176,16 +183,27 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
           : `Brain: run not recorded (${recorded.reason}).\n`);
       } catch { /* recording never changes the run */ }
     };
+    const memory = memoryDirectory();
+    const history: AutomaticHistoryOptions | undefined = memory ? { stateDirectory: memory,
+      // project:run reviews always run in a fresh model session started by this pipeline, so the exact run artifact for this task is independent.
+      verifyIndependentReview: evidence => evidence.taskId === manifest.taskId && evidence.path === join(runDirectory, 'artifacts', 'review.json') } : undefined;
+    if (!history) process.stderr.write('Run history: not recorded (no memory directory)\n');
     let result: Awaited<ReturnType<typeof runTask>>;
     try {
       result = await runTask({ workspace: root, task: manifest, ...route, ...(checkRuntime ? { checkRuntime } : {}),
       stateDirectory: runDirectory, worktreeDirectory: worktrees, signal: controller.signal,
       ...(publication ? { publication } : {}),
       ...(browserQa ? { browserQa } : {}),
+      ...(history ? { history } : {}),
       confirmPlan: async (_plan, digest) => (await terminal.question(`Approve plan ${digest}? Enter approve ${digest}: `, { signal: controller.signal })) === `approve ${digest}`,
       onProgress: message => process.stderr.write(message + '\n') });
     } catch (error) { note('failed'); throw error; }
     output(result);
+    try {
+      const h = (result as { history?: { status?: unknown; code?: unknown } }).history;
+      if (h) process.stderr.write(h.status === 'recorded' ? 'Run history: recorded\n'
+        : `Run history: not recorded (${typeof h.code === 'string' ? h.code : 'incomplete'})\n`);
+    } catch { /* history reporting never changes the run */ }
     const done = result as { status?: unknown; prUrl?: unknown };
     note(typeof done.status === 'string' ? done.status : 'unknown', typeof done.prUrl === 'string' ? done.prUrl : undefined);
   } finally { routeSession?.close(); terminal.close(); process.removeListener('SIGINT', abort); }

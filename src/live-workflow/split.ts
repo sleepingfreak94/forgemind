@@ -66,7 +66,8 @@ export async function runSplitCoding(model: ModelPort, options: SplitCodingOptio
     const paths = result.edits.map(e => e.path);
     authority.phase('subtask', source, { index: i, of: n, title: subtask.title, paths });
     if (narrowed.checks.length) {
-      const results = await runChecks(root, source, narrowed.checks, options.checkDirectory, authority, signal, options.checkRuntime);
+      // Subtask checks are not phase evidence (no output digest on the receipt).
+      const results = await runChecks(root, source, narrowed.checks, options.checkDirectory, authority, signal, options.checkRuntime, false);
       options.save(`subtask-${i}-checks.json`, results);
       assertCurrent();
       if (results.some(c => !c.passed))

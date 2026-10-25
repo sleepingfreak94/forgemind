@@ -42,17 +42,30 @@ History is facts, not rules, and never needs approval. Every harness run records
 
 `forgemind-brain` is a local MCP server over stdio. Run `npm run build` first, and register `node` directly (not `npm run`, whose banner would corrupt the JSON-RPC stream).
 
+In the examples below, replace /absolute/path/to/forgemind with the absolute path of your ForgeMind checkout.
+
 Claude Code:
 
 ```
-claude mcp add --scope user forgemind-brain -- node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-mcp.js --source claude-code
+claude mcp add --scope user forgemind-brain -- node /absolute/path/to/forgemind/dist/src/memory/brain-mcp.js --source claude-code
 ```
 
 Cursor, in `~/.cursor/mcp.json`:
 
 ```
-{"mcpServers":{"forgemind-brain":{"command":"node","args":["/Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-mcp.js","--source","cursor"]}}}
+{"mcpServers":{"forgemind-brain":{"command":"node","args":["/absolute/path/to/forgemind/dist/src/memory/brain-mcp.js","--source","cursor"]}}}
 ```
+
+For the Cursor CLI, allow these four tools in the `permissions.allow` list of `~/.cursor/cli-config.json`:
+
+```
+Mcp(forgemind-brain:brain_context)
+Mcp(forgemind-brain:brain_search)
+Mcp(forgemind-brain:brain_record)
+Mcp(forgemind-brain:brain_propose)
+```
+
+The file is ~/.cursor/cli-config.json; keep any entries already there.
 
 Options: `--source claude-code|cursor` (required), `--workspace` (default current directory, resolved to its git top-level), `--brain-dir`.
 
@@ -69,13 +82,13 @@ Hooks close the memory loop in your own Claude Code and Cursor sessions. Run `np
 Claude Code, in `~/.claude/settings.json`:
 
 ```
-{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-start --source claude-code"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-end --source claude-code"}]}]}}
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node /absolute/path/to/forgemind/dist/src/memory/brain-hook.js session-start --source claude-code"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"node /absolute/path/to/forgemind/dist/src/memory/brain-hook.js session-end --source claude-code"}]}]}}
 ```
 
 Cursor, in `~/.cursor/hooks.json`:
 
 ```
-{"version":1,"hooks":{"sessionStart":[{"command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-start --source cursor"}],"sessionEnd":[{"command":"node /Users/kshitijsharma/Documents/forgemind/dist/src/memory/brain-hook.js session-end --source cursor"}]}}
+{"version":1,"hooks":{"sessionStart":[{"command":"node /absolute/path/to/forgemind/dist/src/memory/brain-hook.js session-start --source cursor"}],"sessionEnd":[{"command":"node /absolute/path/to/forgemind/dist/src/memory/brain-hook.js session-end --source cursor"}]}}
 ```
 
 Session start injects the `brain_context` packet (at most 3200 characters) plus a reminder to call `brain_record` before finishing. Session end records one fallback fact per session (key `session:<id>`): the title comes from the first user prompt, files come from `git status`, secret-like values become `[redacted]`, and nothing is recorded when there is no prompt and no change. The session's own agent writes the rich summary through `brain_record`.
