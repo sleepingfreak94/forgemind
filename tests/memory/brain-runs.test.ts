@@ -19,6 +19,7 @@ function setup(map = true) {
   const rows = () => { const s = new BrainStore(brain, 'personal'); try { return s.history(ws); } finally { s.close(); } };
   return { brain, ws, artifacts, input, rows };
 }
+const entries = (brain: string, ws: string) => { const s = new BrainStore(brain, 'personal'); try { return s.list({ project: ws }); } finally { s.close(); } };
 const put = (dir: string, name: string, value: unknown) => writeFileSync(join(dir, name), typeof value === 'string' ? value : JSON.stringify(value));
 
 test('full artifacts are recorded', () => {
@@ -39,8 +40,76 @@ test('full artifacts are recorded', () => {
   assert.deepEqual(row!.evidence, ['task-1', 'https://github.com/o/r/pull/1']);
   assert.equal(row!.outcome, 'completed');
   const again = recordHarnessRun({ ...input, prUrl: 'https://github.com/o/r/pull/1' });
-  assert.deepEqual(again, result);
+  assert.deepEqual(again, { ...result, lessons: 0 });
+  if (result.recorded) assert.equal(result.lessons, 1);
   assert.equal(rows().length, 1);
+});
+
+const LESSON = 'auto-proposed from a harness run';
+
+test('failed checks propose capped, unapproved lessons', () => {
+  const { artifacts, input, brain, ws } = setup();
+  put(artifacts, 'after-checks.json', ['a', 'b', 'c', 'd', 'e'].map(id => ({ id, passed: false })).concat([{ id: 'ok', passed: true }]));
+  const result = recordHarnessRun(input);
+  assert.ok(result.recorded && result.lessons === 3);
+  const all = entries(brain, ws);
+  assert.deepEqual(all.map(e => e.text).sort(), ['a', 'b', 'c'].map(id => `Check ${id} failed after the change in Add a thing.`));
+  for (const e of all) {
+    assert.equal(e.kind, 'lesson'); assert.equal(e.status, 'proposed'); assert.equal(e.reason, LESSON);
+    assert.deepEqual(e.evidence, ['task-1', 'task-1-abc']);
+  }
+  const s = new BrainStore(brain, 'personal');
+  try { assert.deepEqual(s.approved(ws), []); } finally { s.close(); }
+});
+
+for (const verdict of ['revise', 'blocked']) {
+  test(`${verdict} review findings propose lessons`, () => {
+    const { artifacts, input, brain, ws } = setup();
+    put(artifacts, 'review.json', { verdict, findings: ['one', 'x'.repeat(400), 'three', 'four'] });
+    const result = recordHarnessRun(input);
+    assert.ok(result.recorded && result.lessons === 3);
+    const texts = entries(brain, ws).map(e => e.text);
+    assert.equal(texts.length, 3);
+    assert.ok(texts.includes(`Reviewer (${verdict}): one`));
+    assert.ok(texts.includes(`Reviewer (${verdict}): ${'x'.repeat(300)}`));
+    assert.ok(!texts.some(t => t.includes('four')));
+  });
+}
+
+test('failure message proposes a run-stopped lesson', () => {
+  const { artifacts, input, brain, ws } = setup();
+  put(artifacts, 'failure.json', { message: 'y'.repeat(400) });
+  const result = recordHarnessRun({ ...input, status: 'failed' });
+  assert.ok(result.recorded && result.lessons === 1);
+  const [e] = entries(brain, ws);
+  assert.equal(e!.text, 'Run stopped: ' + 'y'.repeat(180));
+  assert.equal(e!.status, 'proposed');
+});
+
+test('a passing run proposes no lessons', () => {
+  const { artifacts, input, brain, ws } = setup();
+  put(artifacts, 'after-checks.json', [{ id: 'build', passed: true }]);
+  put(artifacts, 'review.json', { verdict: 'pass', findings: ['fine'] });
+  const result = recordHarnessRun(input);
+  assert.ok(result.recorded && result.lessons === 0);
+  assert.equal(entries(brain, ws).length, 0);
+});
+
+test('secret-looking findings are skipped', () => {
+  const { artifacts, input, brain, ws } = setup();
+  put(artifacts, 'review.json', { verdict: 'revise', findings: ['token: abc', 'clean finding'] });
+  const result = recordHarnessRun(input);
+  assert.ok(result.recorded && result.lessons === 1);
+  assert.deepEqual(entries(brain, ws).map(e => e.text), ['Reviewer (revise): clean finding']);
+});
+
+test('recording the same run twice proposes nothing new', () => {
+  const { artifacts, input, brain, ws } = setup();
+  put(artifacts, 'after-checks.json', [{ id: 'tests', passed: false }]);
+  const first = recordHarnessRun(input), second = recordHarnessRun(input);
+  assert.ok(first.recorded && first.lessons === 1);
+  assert.ok(second.recorded && second.lessons === 0);
+  assert.equal(entries(brain, ws).length, 1);
 });
 
 test('titles use the first sentence, capped', () => {

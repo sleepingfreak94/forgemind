@@ -38,6 +38,12 @@ npm run brain -- learn --workspace /path/to/project --source all --limit 100
 
 History is facts, not rules, and never needs approval. Every harness run records its title, summary, files, outcome and evidence automatically in the project's space (the default unless mapped); the run prints `Brain: run not recorded (...)` only on errors. Secret-like values are stored as `[redacted]`. `history` lists the newest runs for the project (`--limit` 1 to 200, default 20). History never appears in `list` or guides agents.
 
+## The harness learns
+
+`project:run` loads the same `brain_context` packet (at most 3200 characters, marked untrusted evidence) into the plan, coding and review prompts and saves it as `brain-context.json`. It prints `Brain: context loaded` or `Brain: context not loaded`; a load failure never stops the run.
+
+After each run, failed checks, revise or blocked review findings and the stop reason become `proposed` lessons scoped to the project (at most 3 + 3 + 1; secret-like text is skipped; the same run never duplicates them). They stay proposed until you `approve` them (`npm run brain -- approve`), and only approved lessons reach the next run's context.
+
 ## Use from Claude Code and Cursor
 
 `forgemind-brain` is a local MCP server over stdio. Run `npm run build` first, and register `node` directly (not `npm run`, whose banner would corrupt the JSON-RPC stream).
