@@ -51,10 +51,14 @@ export function assertPinnedClaudeCli(cli: unknown): asserts cli is ClaudeCli {
 /** Deny-default profile from Phase 0. Claude Code reads its own Keychain item through
  * /usr/bin/security; ForgeMind never reads it. Hostname egress filtering is unavailable.
  * The preference, cfprefs and logging reads are the system base the CLI needs to start;
- * only the Keychain additions were bisected, so the base is a disclosed residual (ADR-0014). */
+ * only the Keychain additions were bisected, so the base is a disclosed residual (ADR-0014).
+ * The CLI may write only its login Keychain file (and its .sb- save sibling) so refreshed
+ * tokens persist; unsafe home paths are refused. */
 export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileDirectory: string, home: string, userCacheDirectory: string,
   mcpPort?: number): string {
   if (mcpPort !== undefined && (!Number.isSafeInteger(mcpPort) || mcpPort < 1024 || mcpPort > 65535)) throw new Error('Invalid MCP port');
+  if (!/^\/[A-Za-z0-9._\/-]+$/.test(home) || home.includes('..')) throw new Error('Unsupported home path for the Claude sandbox');
+  const keychainHome = home.replaceAll('.', '[.]');
   const mds = join(userCacheDirectory, 'mds');
   return [
     '(version 1)', '(deny default)',
@@ -64,6 +68,8 @@ export function claudeInferenceProfile(cli: ClaudeCli, scratch: string, profileD
     `(allow file-read* (literal "/") ${['/usr/lib', '/usr/share', '/System', '/Library/Preferences', '/private/var/db/timezone'].map(subpath).join(' ')} ${['/dev/null', '/dev/urandom', '/dev/random', '/private/etc/ssl/cert.pem', '/private/etc/hosts', '/private/etc/resolv.conf', '/private/var/run/resolv.conf', cli.path].map(literal).join(' ')})`,
     `(allow file-read* file-write* ${subpath(scratch)} ${subpath(profileDirectory)} ${literal('/dev/null')} ${literal('/dev/tty')})`,
     `(allow file-read* ${subpath('/private/var/db/mds')} ${subpath('/Library/Keychains')} ${subpath(join(home, 'Library/Keychains'))} ${subpath(mds)} ${literal(join(home, 'Library/Preferences/com.apple.security.plist'))})`,
+    `(allow file-read* ${literal('/usr/bin/security')})`,
+    `(allow file-write* (regex #"^${keychainHome}/Library/Keychains/login[.]keychain-db([.]sb-[0-9a-f]+-[A-Za-z0-9]+)?$"))`,
     `(allow file-write* ${subpath(mds)})`,
     '(allow mach-lookup ' + ['com.apple.SecurityServer', 'com.apple.securityd.xpc', 'com.apple.security.agent', 'com.apple.trustd', 'com.apple.trustd.agent',
       'com.apple.system.opendirectoryd.libinfo', 'com.apple.system.opendirectoryd.membership', 'com.apple.dnssd.service', 'com.apple.mDNSResponder',

@@ -164,7 +164,7 @@ test('session requires a subscription sign-in and an owner-only profile; forged 
   } finally { rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions', { skip: fakeCliSkip }, () => {
+test('sandbox profile is deny-default with no broad write and only the reviewed Keychain additions, including the login keychain write', { skip: fakeCliSkip }, () => {
   const cli = fakeCli();
   const profile = claudeInferenceProfile(cli, '/private/tmp/fm/scratch', '/Users/o/.forgemind/claude-profile', '/Users/o', '/private/var/folders/x/C');
   assert.match(profile, /^\(version 1\)\n\(deny default\)/);
@@ -172,6 +172,17 @@ test('sandbox profile is deny-default with no broad write and only the reviewed 
   assert.match(profile, /\(allow file-write\* \(subpath "\/private\/var\/folders\/x\/C\/mds"\)\)/);
   assert.doesNotMatch(profile, /\(allow file-write\*\)|\(allow file-read\*\)|\(allow mach-lookup\)|\(allow network\*/);
   assert.match(profile, /com\.apple\.system\.opendirectoryd\.membership/);
+  const readRule = '(allow file-read* (literal "/usr/bin/security"))';
+  const writeRule = '(allow file-write* (regex #"^/Users/o/Library/Keychains/login[.]keychain-db([.]sb-[0-9a-f]+-[A-Za-z0-9]+)?$"))';
+  assert.ok(profile.includes(readRule));
+  assert.ok(profile.includes(writeRule));
+  assert.ok(profile.indexOf(readRule) > profile.indexOf('(subpath "/Users/o/Library/Keychains")'));
+  const dotted = claudeInferenceProfile(cli, '/private/tmp/fm/scratch', '/Users/o/.forgemind/claude-profile', '/Users/o.p', '/private/var/folders/x/C');
+  assert.ok(dotted.includes('#"^/Users/o[.]p/Library/Keychains/login[.]keychain-db([.]sb-[0-9a-f]+-[A-Za-z0-9]+)?$"'));
+  assert.ok(!dotted.includes('/Users/o.p/Library/Keychains/login'));
+  for (const bad of ['/Users/o p', '/Users/(o)', '/Users/../x'])
+    assert.throws(() => claudeInferenceProfile(cli, '/private/tmp/fm/scratch', '/Users/o/.forgemind/claude-profile', bad, '/private/var/folders/x/C'),
+      { message: 'Unsupported home path for the Claude sandbox' });
 });
 
 interface Recorder { requests: number[]; reserved: ActionEnvelope[]; finished: string[]; phases: string[]; data: Record<string, unknown>[] }
