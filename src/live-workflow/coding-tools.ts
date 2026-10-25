@@ -31,7 +31,9 @@ export function codingToolsFor(task: LiveTask): readonly { name: string; descrip
 export function repositoryReadable(path: string): boolean {
   return !path.split('/').some(part => {
     const p = part.toLowerCase();
-    return p === '.git' || /^\.env(\..*)?$/.test(p) || /\.(pem|key|p12|pfx|keystore)$/.test(p) ||
+    return p === '.git' || /^\.env(\..*)?$/.test(p) || /\.(pem|key|p12|pfx|keystore|jks)$/.test(p) ||
+      ['.git-credentials', '.pgpass', '.docker', '.kube'].includes(p) || /^kubeconfig(\..*)?$/.test(p) ||
+      /\.(tfvars(\.json)?|tfstate(\.backup)?)$/.test(p) || /^service-account.*\.json$/.test(p) ||
       /^(id_rsa|id_ecdsa|id_ed25519)/.test(p) || p === '.npmrc' || p === '.netrc' || /^(credentials|secrets)/.test(p);
   });
 }
