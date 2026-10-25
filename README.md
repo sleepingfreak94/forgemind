@@ -189,7 +189,7 @@ Mcp(forgemind-brain:brain_record)
 Mcp(forgemind-brain:brain_propose)
 ```
 
-Put them in the `permissions.allow` list of that file. Note: docs/brain.md does not show the file layout, so check it against your Cursor CLI version.
+Put them in the `permissions.allow` list of that file. The file is ~/.cursor/cli-config.json; keep any entries already there.
 
 Token caps: `brain_context` returns at most 3200 characters (about 800 tokens). `brain_search` returns at most 5 items, 400 characters each and 2000 in total. Agents never get the whole store.
 
