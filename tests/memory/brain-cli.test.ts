@@ -32,7 +32,7 @@ test('unmapped project is refused', () => {
   assert.equal(r.json.error, 'Project is not mapped to a brain space; run brain map');
 });
 
-test('map writes private canonical file and refuses switching', () => {
+test('map writes private canonical file and refuses switching', { skip: process.platform === 'win32' }, () => {
   const { brain, ws, base } = setup();
   const link = join(base, 'link'); symlinkSync(ws, link);
   const r = run(brain, ['map', '--workspace', link, '--space', 'personal']);
@@ -117,7 +117,7 @@ test('history lists this workspace only', () => {
   for (const bad of ['0', '201', 'abc']) assert.equal(run(brain, ['history', '--workspace', ws, '--limit', bad]).code, 2);
 });
 
-test('map file validation', () => {
+test('map file validation', { skip: process.platform === 'win32' }, () => {
   const { brain, ws, base } = setup();
   mapBrainSpace(ws, 'personal', brain);
   const file = join(brain, 'spaces.json');

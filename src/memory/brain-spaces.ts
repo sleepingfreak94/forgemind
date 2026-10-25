@@ -31,7 +31,8 @@ function readMap(path: string): SpaceMap {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.create(null) as SpaceMap;
     throw error;
   }
-  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > 65536)
+  if (!stat.isFile() || stat.nlink !== 1 || stat.size > 65536
+    || (typeof process.getuid === 'function' && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0)))
     throw new Error('Brain space map must be an owner-only regular file');
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(path, 'utf8')); } catch { throw new Error('Invalid brain space map'); }
