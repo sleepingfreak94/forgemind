@@ -4,7 +4,6 @@ import { BrainStore, containsSecret } from './brain.js';
 import type { BrainSpace } from './brain.js';
 import { brainSpaceFor } from './brain-spaces.js';
 
-const unmapped = 'project not mapped to a brain space';
 const maxFile = 1024 * 1024;
 
 function readJson(directory: string, name: string): unknown {
@@ -36,7 +35,7 @@ export function recordHarnessRun(input: { brainDirectory: string; workspace: str
     try { space = brainSpaceFor(input.workspace, input.brainDirectory); }
     catch (error) {
       const message = error instanceof Error ? error.message : '';
-      return { recorded: false, reason: /not mapped/.test(message) ? unmapped : message || 'brain unavailable' };
+      return { recorded: false, reason: message || 'brain unavailable' };
     }
     const project = realpathSync(input.workspace);
     const dir = input.artifacts;

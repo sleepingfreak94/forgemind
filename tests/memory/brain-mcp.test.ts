@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { BrainStore } from '../../src/memory/brain.js';
 import { mapBrainSpace } from '../../src/memory/brain-spaces.js';
-import { MAPPING_HINT, handleBrainMessage, resolveWorkspace, runBrainMcp } from '../../src/memory/brain-mcp.js';
+import { handleBrainMessage, resolveWorkspace, runBrainMcp } from '../../src/memory/brain-mcp.js';
 
 interface Reply { result?: { content: { text: string }[]; isError: boolean; tools?: { name: string }[]; protocolVersion?: string;
   serverInfo?: { name: string } }; error?: { code: number; message: string } }
@@ -117,16 +117,20 @@ test('brain_record appears in context and is idempotent per day', () => {
   assert.equal(call('brain_record', { ...args, files: ['../x'] }).isError, true);
 });
 
-test('unmapped workspace returns the hint', () => {
+test('unmapped workspace works in the personal space', () => {
   const other = temp(); mkdirSync(join(other, '.git'));
   const ctx = { ...context(), workspace: other };
-  const argsFor: Record<string, object> = { brain_context: {}, brain_search: { query: 'hello' },
-    brain_propose: { kind: 'lesson', text: 'a', reason: 'b' }, brain_record: { title: 't', summary: 's', outcome: 'o' } };
-  for (const [name, args] of Object.entries(argsFor)) {
-    const result = call(name, args, ctx);
-    assert.equal(result.isError, true);
-    assert.equal(result.text, MAPPING_HINT);
-  }
+  const c = call('brain_context', {}, ctx);
+  assert.equal(c.isError, false);
+  assert.ok(c.text.startsWith('ForgeMind brain (personal space)'));
+  const rec = call('brain_record', { title: 'Unmapped title', summary: 's', outcome: 'o' }, ctx);
+  assert.equal(rec.isError, false);
+  assert.ok(call('brain_context', {}, ctx).text.includes('Unmapped title'));
+  const prop = call('brain_propose', { kind: 'lesson', text: 'unmapped lesson', reason: 'b' }, ctx);
+  assert.equal(prop.isError, false);
+  const id = prop.text.split(' ')[0]!;
+  assert.equal(withStore(s => s.list({ status: 'proposed' })).some(e => e.id === id && e.project === other), true);
+  assert.equal(call('brain_search', { query: 'hello' }, ctx).isError, false);
 });
 
 test('secrets are refused as errors', () => {

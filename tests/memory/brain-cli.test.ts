@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runBrainCli } from '../../src/local-runtime/brain-cli.js';
@@ -25,11 +25,20 @@ function run(brain: string, args: string[]) {
   return { code, json: JSON.parse(out) as Record<string, any>, out };
 }
 
-test('unmapped project is refused', () => {
-  const { brain, ws } = setup();
-  const r = run(brain, ['list', '--workspace', ws]);
-  assert.equal(r.code, 1);
-  assert.equal(r.json.error, 'Project is not mapped to a brain space; run brain map');
+test('unmapped project uses the personal space', () => {
+  const { base, brain, ws } = setup();
+  const first = run(brain, ['list', '--workspace', ws]);
+  assert.equal(first.code, 0); assert.equal(first.json.space, 'personal'); assert.deepEqual(first.json.entries, []);
+  const added = run(brain, ['add', '--workspace', ws, '--kind', 'lesson', '--text', 'Shared.', '--reason', 'r']);
+  assert.equal(added.code, 0); assert.match(added.json.id, /^[0-9a-f]{16}$/);
+  const list = run(brain, ['list', '--workspace', ws]);
+  assert.equal(list.json.entries.length, 1); assert.equal(list.json.entries[0].project, ws);
+  const hist = run(brain, ['history', '--workspace', ws]);
+  assert.equal(hist.code, 0); assert.equal(hist.json.space, 'personal');
+  assert.equal(existsSync(join(brain, 'spaces.json')), false);
+  const missing = join(base, 'missing');
+  assert.equal(brainSpaceFor(ws, missing), 'personal');
+  assert.equal(existsSync(missing), false);
 });
 
 test('map writes private canonical file and refuses switching', { skip: process.platform === 'win32' }, () => {

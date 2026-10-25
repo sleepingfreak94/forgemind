@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrainStore } from '../../src/memory/brain.js';
@@ -64,10 +64,35 @@ test('failed run records the failure message', () => {
   assert.ok(outcome.length <= 'failed: '.length + 180);
 });
 
-test('unmapped workspace records nothing', () => {
-  const { brain, input } = setup(false);
-  assert.deepEqual(recordHarnessRun(input), { recorded: false, reason: 'project not mapped to a brain space' });
-  assert.equal(existsSync(join(brain, 'personal')), false);
+test('unmapped workspace records in the personal space', () => {
+  const { input, rows, ws } = setup(false);
+  const result = recordHarnessRun(input);
+  assert.equal(result.recorded, true);
+  if (result.recorded) assert.equal(result.space, 'personal');
+  const all = rows();
+  assert.equal(all.length, 1); assert.equal(all[0]!.project, ws);
+});
+
+test('unmapped workspaces share space-wide entries but keep project entries and history apart', () => {
+  const a = setup(false);
+  const ws2 = join(root, `case${counter++}`, 'ws2'), art2 = join(ws2, '..', 'runs', 'task-2-abc', 'artifacts');
+  mkdirSync(ws2, { recursive: true }); mkdirSync(art2, { recursive: true });
+  const store = new BrainStore(a.brain, 'personal');
+  let wide: string, mine: string;
+  try {
+    const base = { kind: 'convention' as const, reason: 'r', evidence: [] };
+    wide = store.propose({ ...base, project: null, text: 'Wide rule' }); store.approve(wide);
+    mine = store.propose({ ...base, project: a.ws, text: 'Own rule' }); store.approve(mine);
+  } finally { store.close(); }
+  assert.equal(recordHarnessRun(a.input).recorded, true);
+  assert.equal(recordHarnessRun({ ...a.input, workspace: ws2, taskId: 'task-2', artifacts: art2 }).recorded, true);
+  const s = new BrainStore(a.brain, 'personal');
+  try {
+    assert.deepEqual(s.approved(a.ws).map(e => e.id).sort(), [wide, mine].sort());
+    assert.deepEqual(s.approved(ws2).map(e => e.id), [wide]);
+    assert.deepEqual(s.history(a.ws).map(h => h.project), [a.ws]);
+    assert.deepEqual(s.history(ws2).map(h => h.project), [ws2]);
+  } finally { s.close(); }
 });
 
 test('missing artifacts still record a minimal run', () => {
