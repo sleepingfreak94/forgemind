@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BrainStore, containsSecret, defaultBrainDirectory } from './brain.js';
 import { brainSpaceFor } from './brain-spaces.js';
@@ -138,7 +138,7 @@ async function runBrainHookCore(argv: string[], input: string, options: BrainHoo
     if (typeof f !== 'string' || f.length < 1 || f.length > 1024) continue;
     const rel = relative(workspace, resolve(workspace, f));
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
-    seen.add(rel);
+    seen.add(rel.split(sep).join('/'));
   }
   const files = [...seen].slice(0, MAX_FILES);
   const now = (options.now ?? Date.now)();
