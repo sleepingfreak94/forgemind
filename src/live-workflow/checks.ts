@@ -57,6 +57,7 @@ export async function runChecks(
   authority: ActionAuthority,
   signal: AbortSignal,
   runtime?: CheckRuntime,
+  phaseEvidence = true,
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   // All node-project checks of one phase share a scratch, in manifest order (build, then test).
@@ -132,7 +133,12 @@ export async function runChecks(
           stdout: result.stdout,
           stderr: result.stderr,
         };
-        receipt.finish(result.code === 0 ? 'completed' : 'failed', sha256(JSON.stringify(item)));
+        const status = result.code === 0 ? 'completed' : 'failed';
+        // Only orchestrator before/after phase checks carry an output digest: run history binds each phase check
+        // result to exactly one terminal receipt with that digest, so in-session (host_check) and split-subtask
+        // checks finish with status only, like other non-evidence actions.
+        if (phaseEvidence) receipt.finish(status, sha256(JSON.stringify(item)));
+        else receipt.finish(status);
         results.push(item);
       } catch (error) {
         try {

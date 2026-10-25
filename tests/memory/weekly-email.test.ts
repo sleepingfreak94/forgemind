@@ -76,7 +76,11 @@ test('text has heading first and evidence marker before the JSON', () => {
   assert.ok(t.startsWith('ForgeMind weekly report\n'));
   assert.ok(t.includes('\n\n--- Evidence (exact JSON, for verification) ---\n' + serialize(summary)));
   assert.ok(t.endsWith(serialize(summary)));
-  assert.ok(t.includes('- task-1: 5 files (a&b/<x>.ts, b.ts, c.ts, +2 more); checks 1/2; review pass'));
+  assert.ok(t.includes('- task-1: 5 files (a&b/<x>.ts, b.ts, c.ts, +2 more); checks 1 run; review reviewed'));
+  assert.ok(t.includes('- task-2: 1 file (z.ts); checks 1 run; review —'));
+  const html = renderWeeklyEmail(summary).html;
+  assert.ok(html.includes('>1 run<') && html.includes('>reviewed<'));
+  assert.ok(!html.includes('>1/2<') && !html.includes('>pass<') && !t.includes('1/2'));
   assert.ok(t.includes('+7 more runs not shown'));
 });
 test('files stay under 500 lines', () => {

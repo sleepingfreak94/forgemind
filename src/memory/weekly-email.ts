@@ -23,11 +23,11 @@ function files(paths: readonly string[]): string {
   const more = paths.length > 3 ? `, +${paths.length - 3} more` : '';
   return paths.length === 0 ? '0 files' : `${paths.length} ${paths.length === 1 ? 'file' : 'files'} (${shown}${more})`;
 }
-/** Examples carry no per-check verdict: "passed" counts the candidate-phase checks recorded, over all checks. */
+/** Examples carry no per-check verdict, so the cell counts the candidate-phase checks that were run. */
 function checksCell(e: Example): string {
-  return `${e.checks.filter(c => c.phase === 'candidate').length}/${e.checks.length}`;
+  return `${e.checks.filter(c => c.phase === 'candidate').length} run`;
 }
-function review(e: Example): string { return e.review ? 'pass' : '—'; }
+function review(e: Example): string { return e.review ? 'reviewed' : '—'; }
 function stopped(s: Summary): [string, number][] {
   return Object.entries(s.authenticated.phases).filter(([, n]) => n > 0);
 }

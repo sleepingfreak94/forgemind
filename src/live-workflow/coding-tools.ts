@@ -186,8 +186,9 @@ export class CodingToolHost {
     if (name === 'host_check') {
       const index = task.checks.findIndex(c => c.id === a.id);
       if (Object.keys(a).join() !== 'id' || index < 0) throw new Error('Check outside the exact grant');
+      // In-session checks are not phase evidence (no output digest on the receipt).
       const results = await runChecks(root, this.#session, task.checks.slice(0, index + 1), this.options.checkDirectory, authority,
-        this.options.signal, this.options.checkRuntime);
+        this.options.signal, this.options.checkRuntime, false);
       this.#assertCurrent();
       try {
         authority.phase('tool-check', this.#session, { call: this.#calls, tree: this.#current,
