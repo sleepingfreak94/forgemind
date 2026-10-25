@@ -20,6 +20,32 @@ test('only the all suite requires both exact reviewed Codex fixtures', () => {
   assert.doesNotThrow(() => validateTestPrerequisites(host, {}));
 });
 
+test('every suite has its wall-clock limit and local mirrors all without fixture requirements', () => {
+  const expected = { portable: 300000, host: 600000, all: 1800000, local: 1800000 } as const;
+  const pairs: [keyof typeof expected, NodeJS.Platform][] = [
+    ['portable', 'darwin'], ['portable', 'linux'], ['portable', 'win32'],
+    ['all', 'darwin'], ['all', 'linux'], ['local', 'darwin'], ['local', 'linux'], ['host', 'darwin']];
+  for (const [mode, platform] of pairs) {
+    const { maxRunMs } = testSuite(mode, platform, true);
+    assert.ok(Number.isInteger(maxRunMs) && maxRunMs > 0);
+    assert.equal(maxRunMs, expected[mode]);
+  }
+  for (const platform of ['darwin', 'linux'] as const) {
+    const local = testSuite('local', platform, true), all = testSuite('all', platform, true);
+    assert.deepEqual(local.directories, all.directories);
+    assert.deepEqual(local.files, all.files);
+    assert.deepEqual(local.requiredCodexFixtures, []);
+    assert.deepEqual(all.requiredCodexFixtures, ['0.161.0', '0.162.1']);
+  }
+  assert.throws(() => testSuite('local', 'win32', true), /POSIX identity/);
+  assert.throws(() => testSuite('local', 'linux', false), /POSIX identity/);
+  assert.throws(() => testSuite('nope', 'darwin', true), error => {
+    assert.ok(error instanceof Error);
+    for (const name of ['portable', 'all', 'local', 'host']) assert.ok(error.message.includes(name));
+    return true;
+  });
+});
+
 test('the prerequisite error names both missing pinned fixtures without selecting ambient commands', () => {
   assert.throws(() => validateTestPrerequisites(testSuite('all', 'linux', true), {
     PATH: '/private/should-not-search', CODEX_HOME: '/private/should-not-read'
