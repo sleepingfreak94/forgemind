@@ -1,6 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import { dataSnapshot, serialize } from '../context-engine/validation.js';
 import { sha } from './run-recording.js';
+import { renderWeeklyEmail } from './weekly-email.js';
+import type { Summary } from './weekly-summary.js';
 import { outboxEntry, recipient, shape } from './weekly-delivery-envelope.js';
 import type { EmailEnvelope } from './weekly-delivery-envelope.js';
 import type { AdapterResult, OwnerEmailAdapter } from './weekly-delivery.js';
@@ -15,7 +17,7 @@ export interface GmailOwnerOptions {
 /** Owner-supplied in-memory resolution only; never files/env/argv in this module. */
 export type GmailAppPasswordResolver = () => string | Promise<string>;
 interface Binding { username: string; recipient: string; deadlineMs: number }
-interface Message { subject: string; text: string; messageId: string; receiptId: string; date: Date }
+interface Message { subject: string; text: string; html?: string; messageId: string; receiptId: string; date: Date }
 const uncertain = () => new Error('Gmail SMTP result uncertain');
 export const gmailSetupTestText = 'ForgeMind delivery setup test. No project content included.';
 export function gmailMessageId(id: string): string {
@@ -87,7 +89,8 @@ function send(config: Binding, resolver: GmailAppPasswordResolver, factory: Gmai
       return transport.sendMail({
         from: { address: config.username, name: '' }, to: [{ address: config.recipient, name: '' }],
         envelope: { from: config.username, to: [config.recipient] },
-        subject: message.subject, text: message.text, messageId: message.messageId, date: message.date,
+        subject: message.subject, text: message.text, ...(message.html === undefined ? {} : { html: message.html }),
+        messageId: message.messageId, date: message.date,
         encoding: 'utf-8', textEncoding: 'base64', attachments: [], alternatives: [],
         disableFileAccess: true, disableUrlAccess: true
       });
@@ -104,7 +107,8 @@ export function createGmailSmtpAdapter(raw: GmailOwnerOptions, resolver: GmailAp
   const config = binding(raw, resolver, factory);
   return envelope => send(config, resolver, factory, () => {
     const e = canonical(envelope, config.recipient);
-    return { subject: e.subject, text: e.body, messageId: gmailMessageId(e.id),
+    const rendered = renderWeeklyEmail(JSON.parse(e.body) as Summary);
+    return { subject: e.subject, text: rendered.text, html: rendered.html, messageId: gmailMessageId(e.id),
       receiptId: 'gmail-smtp-' + e.id, date: new Date(e.dueAt) };
   });
 }

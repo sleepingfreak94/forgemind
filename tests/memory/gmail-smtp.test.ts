@@ -12,6 +12,8 @@ import type { EmailEnvelope } from '../../src/memory/weekly-delivery-envelope.js
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
 import { WeeklyDelivery } from '../../src/memory/weekly-delivery.js';
 import { serialize } from '../../src/context-engine/validation.js';
+import { renderWeeklyEmail } from '../../src/memory/weekly-email.js';
+import type { Summary } from '../../src/memory/weekly-summary.js';
 import { fixture } from './fixture.js';
 
 const options = { username: 'offline.owner@gmail.com', recipient: 'recipient@example.invalid' };
@@ -37,21 +39,24 @@ test('factory is dormant; sends exact canonical plain body, fixed sender and sol
   assert.equal(resolutions, 0); assert.equal(f.opens, 0); assert.deepEqual(Object.keys(adapter), []);
   const e = message(), result = await adapter(e);
   assert.equal(result.status, 'accepted'); assert.equal(f.opens, 1); assert.equal(f.sends, 1); assert.equal(f.closes, 1);
-  assert.equal(f.sent.text, e.body); assert.equal(f.sent.subject, e.subject);
+  assert.ok(String(f.sent.text).endsWith('\n' + e.body)); assert.ok(String(f.sent.text).startsWith('ForgeMind weekly report'));
+  assert.equal(f.sent.text, renderWeeklyEmail(JSON.parse(e.body) as Summary).text);
+  assert.ok(String(f.sent.html).includes('ForgeMind weekly report')); assert.equal(f.sent.subject, e.subject);
   assert.equal(f.sent.messageId, gmailMessageId(e.id));
   assert.deepEqual(f.sent.from, { address: options.username, name: '' });
   assert.deepEqual(f.sent.to, [{ address: options.recipient, name: '' }]);
   assert.deepEqual(f.sent.envelope, { from: options.username, to: [options.recipient] });
   assert.equal(f.sent.disableFileAccess, true); assert.equal(f.sent.disableUrlAccess, true);
   assert.deepEqual(f.sent.attachments, []); assert.deepEqual(f.sent.alternatives, []);
-  for (const k of ['cc', 'bcc', 'html', 'raw', 'auth', 'headers', 'replyTo']) assert.ok(!Object.hasOwn(f.sent, k));
+  for (const k of ['cc', 'bcc', 'raw', 'auth', 'headers', 'replyTo']) assert.ok(!Object.hasOwn(f.sent, k));
   assert.ok(!serialize(result).includes(password)); assert.ok(!serialize(result).includes('offline-provider-raw-text'));
 });
 test('snapshot is taken before async password resolution and preserves canonical immutable message identity', async () => {
-  const f = fake(), e = { ...message() }, expected = e.body;
+  const f = fake(), e = { ...message() }, rendered = renderWeeklyEmail(JSON.parse(e.body) as Summary), expected = rendered.text;
   const pending = createGmailSmtpAdapter(options, () => Promise.resolve(password), f.factory)(e);
   e.body = 'caller mutation'; e.subject = 'caller mutation';
   assert.equal((await pending).status, 'accepted'); assert.equal(f.sent.text, expected);
+  assert.equal(f.sent.html, rendered.html);
 });
 test('wrong destination, corrupt/extra fields, getters and proxies reject before password or transport', async () => {
   let touched = false, resolves = 0;
@@ -135,7 +140,7 @@ test('total deadline closes hung send and ignores late acceptance; one connectio
 test('separate setup helper has exact fixed payload/domain, no summary or arbitrary message input, no dedupe claim', async () => {
   const f = fake(), id = 'b'.repeat(64);
   const result = await sendGmailSetupTest(options, id, () => password, f.factory);
-  assert.equal(result.status, 'accepted'); assert.equal(f.sent.subject, gmailSetupTestText); assert.equal(f.sent.text, gmailSetupTestText);
+  assert.equal(result.status, 'accepted'); assert.equal(f.sent.subject, gmailSetupTestText); assert.equal(f.sent.text, gmailSetupTestText); assert.ok(!Object.hasOwn(f.sent, 'html'));
   assert.equal(gmailSetupTestText, 'ForgeMind delivery setup test. No project content included.');
   assert.equal(f.sent.messageId, '<forgemind-setup.' + id + '@forgemind.invalid>');
   assert.notEqual(f.sent.messageId, gmailMessageId(id));
