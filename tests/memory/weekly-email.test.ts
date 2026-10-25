@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { serialize } from '../../src/context-engine/validation.js';
 import { renderWeeklyEmail, weeklyReportLines } from '../../src/memory/weekly-email.js';
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
@@ -17,7 +18,7 @@ const ex = (i: number, paths: string[], withReview: boolean): Summary['examples'
   ...(withReview ? { review: { source: h('e'), evidenceSha256: h('3') } } : {})
 });
 const summary: Summary = {
-  schemaVersion: 1, projectId: 'proj', originalRoot: '/p', dueAt: Date.UTC(2026, 9, 25, 4, 30),
+  schemaVersion: 1, projectId: 'proj', originalRoot: resolve('/', 'p'), dueAt: Date.UTC(2026, 9, 25, 4, 30),
   lowerExclusive: 0, upperInclusive: 9, cursor: 9, historical: true, trust: 'evidence-only',
   executionSelection: 'authenticated', maxBytes: 65536,
   authenticated: { runs: 12,
@@ -35,7 +36,7 @@ const summary: Summary = {
   examples: [ex(1, ['a&b/<x>.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'], true), ex(2, ['z.ts'], false)],
   omittedExamples: 7, id: 'abcdef0123456789'.padEnd(64, '0'), digest: '0123456789abcdef'.padEnd(64, '1')
 };
-const empty = () => finishWeeklySummary(createWeeklyAccumulator({ projectId: 'proj', originalRoot: '/p', dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
+const empty = () => finishWeeklySummary(createWeeklyAccumulator({ projectId: 'proj', originalRoot: resolve('/', 'p'), dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
 const forbidden = /<script|<img|<link|href=|src=|url\(|https?:|:\/\//i;
 
 test('empty summary renders friendly empty state', () => {
