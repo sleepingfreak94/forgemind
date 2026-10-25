@@ -115,8 +115,15 @@ test('codingToolsFor and repositoryReadable follow the read scope rules', () => 
   assert.deepEqual(codingToolsFor(base).map(t => t.name), ['host_read', 'host_apply', 'host_check']);
   assert.deepEqual(codingToolsFor({ ...base, readScope: 'repository' }).map(t => t.name),
     ['host_read', 'host_apply', 'host_check', 'host_list', 'host_search']);
-  for (const p of ['.git/config', 'a/.env.local', '.ENV', 'k.PEM', 'id_ed25519.pub', '.npmrc', 'Credentials.txt', 'secrets.yml'])
+  for (const p of ['.git/config', 'a/.env.local', '.ENV', 'k.PEM', 'id_ed25519.pub', '.npmrc', 'Credentials.txt', 'secrets.yml',
+    '.git-credentials', 'a/.GIT-CREDENTIALS', '.pgpass', '.docker/config.json', 'ops/.docker/config.json', '.kube/config',
+    'deploy/kubeconfig', 'deploy/kubeconfig.yaml', 'infra/prod.tfvars', 'infra/x.auto.tfvars', 'infra/terraform.tfvars.json',
+    'infra/terraform.tfstate', 'infra/terraform.tfstate.backup', 'service-account.json', 'gcp/service-account-prod.json',
+    'android/release.jks', 'A.JKS'])
     assert.equal(repositoryReadable(p), false, p);
+  for (const p of ['src/docker.ts', 'docs/kube.md', 'Dockerfile', 'docker-compose.yml', 'src/config.json', 'infra/main.tf',
+    'infra/variables.tf', 'src/service-account.ts', 'src/jks-notes.md', 'src/pgpass-parser.go'])
+    assert.equal(repositoryReadable(p), true, p);
   for (const p of ['src/app.ts', '.envrc-docs/readme.md', 'docs/environment.md'])
     assert.equal(repositoryReadable(p), true, p);
 });

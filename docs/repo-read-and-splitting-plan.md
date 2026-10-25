@@ -17,6 +17,7 @@ Status: **Part 1 and Part 3 are built** (Part 3 on Claude and Cursor); the rest 
 - **Contract:** a task opts in with `"readScope": "repository"`, which is valid only with `"codingMode": "tools"` on the Claude route. `readPaths` then become hints, not a limit.
 - **Readable files:** `host_read` accepts any path that Git tracks (`git ls-files` at the session source), except a reviewed secret denylist:
   - `.git/`, `.env*`, `*.pem`, `*.key`, `*.p12`, `id_rsa*`, `*.keystore`, `.npmrc`, `.netrc`, `credentials*`, `secrets*`;
+  - `*.pfx`, `*.jks`, `.git-credentials`, `.pgpass`, `.docker/`, `.kube/`, `kubeconfig`, `kubeconfig.*`, `*.tfvars`, `*.tfvars.json`, `*.tfstate`, `*.tfstate.backup`, `service-account*.json`;
   - anything ignored or untracked.
 - **New read-only tools:**
   - `host_list {prefix?}`: tracked paths under a prefix, capped;
