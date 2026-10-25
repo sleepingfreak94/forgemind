@@ -9,6 +9,7 @@ import { SlackDelivery } from '../../src/memory/slack-delivery.js';
 import { WeeklyDelivery } from '../../src/memory/weekly-delivery.js';
 import { slackEntry, slackPayload, slackLiteral } from '../../src/memory/slack-envelope.js';
 import { createSlackWebhookAdapter } from '../../src/memory/slack-transport.js';
+import { weeklyReportLines } from '../../src/memory/weekly-email.js';
 import type { SlackTransport } from '../../src/memory/slack-transport.js';
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
 import { RunHistory } from '../../src/memory/run-history.js';
@@ -65,7 +66,11 @@ test('real owner adapter capability posts immutable JSON once and retains only a
   const adapter = owner(fakeUrl, async req => {
     calls++; assert.equal(r.d.outbox()[0]?.status, 'uncertain');
     assert.equal(req.url, fakeUrl);
-    assert.equal(req.body, serialize(r.d.outbox()[0]!.envelope.payload));
+    const e = r.d.outbox()[0]!.envelope, p = JSON.parse(req.body);
+    assert.equal(req.body, serialize({ ...e.payload, text: slackLiteral(weeklyReportLines(e.summary)) + '\n\n' + e.payload.text }));
+    assert.ok(p.text.startsWith('ForgeMind weekly report')); assert.ok(p.text.endsWith(e.payload.text));
+    assert.notEqual(p.text, e.payload.text);
+    assert.equal(p.mrkdwn, false); assert.equal(p.parse, 'none'); assert.equal(p.unfurl_links, false); assert.equal(p.unfurl_media, false);
     assert.ok(Buffer.byteLength(req.body) <= 24576); assert.deepEqual(Object.keys(JSON.parse(req.body)), ['mrkdwn', 'parse', 'text', 'unfurl_links', 'unfurl_media']);
     return { statusCode: 200, acknowledged: true };
   });

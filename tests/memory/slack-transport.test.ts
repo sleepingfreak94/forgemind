@@ -7,7 +7,9 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { RequestOptions } from 'node:https';
 import { createSlackHttpsTransport, createSlackWebhookAdapter, sendSlackEnvelope } from '../../src/memory/slack-transport.js';
 import type { SlackHttpOpen, SlackTransport } from '../../src/memory/slack-transport.js';
-import { slackEnvelope } from '../../src/memory/slack-envelope.js';
+import { slackEnvelope, slackLiteral } from '../../src/memory/slack-envelope.js';
+import { weeklyReportLines } from '../../src/memory/weekly-email.js';
+import { serialize } from '../../src/context-engine/validation.js';
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
 
 // Fake credential shape only; all invocation paths use injected offline transports.
@@ -112,6 +114,36 @@ test('endpoint allowlist rejects arbitrary hosts, GovSlack, credentials, queries
   assert.notEqual(a.endpointBinding, b.endpointBinding);
 });
 
+test('rendered readable body is posted when it fits', async () => {
+  let body = '';
+  const a = createSlackWebhookAdapter({ destinationId: 'team', webhookUrl: url }, async req => { body = req.body; return { statusCode: 200, acknowledged: true }; });
+  const e = slackEnvelope(summary, a.destinationId, a.endpointBinding);
+  assert.equal((await sendSlackEnvelope(a, e)).status, 'accepted');
+  const p = JSON.parse(body);
+  assert.ok(body.startsWith('{')); assert.ok(p.text.startsWith('ForgeMind weekly report')); assert.ok(p.text.endsWith(e.payload.text));
+});
+test('envelope whose rendered body exceeds the budget posts the exact original payload', async () => {
+  let found: ReturnType<typeof slackEnvelope> | undefined;
+  // '&' expands to '&amp;' in the literal payload, so the root length steers the payload size.
+  for (let n = 1; n <= 900 && !found; n++) {
+    let e: ReturnType<typeof slackEnvelope>;
+    try {
+      const s = finishWeeklySummary(createWeeklyAccumulator({ projectId: 'project', originalRoot: resolve('/', 'project', '&'.repeat(n)),
+        dueAt: 0, lowerExclusive: 0, upperInclusive: 0 }));
+      e = slackEnvelope(s, 'team', 'a'.repeat(64), 4096);
+    } catch { continue; }
+    const rendered = serialize({ ...e.payload, text: slackLiteral(weeklyReportLines(e.summary)) + '\n\n' + e.payload.text });
+    if (Buffer.byteLength(serialize(e.payload)) <= 4096 && Buffer.byteLength(rendered) > 4096) found = e;
+  }
+  assert.ok(found);
+  let body = '', calls = 0;
+  const a = createSlackWebhookAdapter({ destinationId: 'team', webhookUrl: url }, async req => { calls++; body = req.body; return { statusCode: 200, acknowledged: true }; });
+  const e = slackEnvelope(found.summary, a.destinationId, a.endpointBinding, 4096);
+  const rendered = serialize({ ...e.payload, text: slackLiteral(weeklyReportLines(e.summary)) + '\n\n' + e.payload.text });
+  assert.ok(Buffer.byteLength(rendered) > 4096);
+  assert.equal((await sendSlackEnvelope(a, e)).status, 'accepted');
+  assert.equal(calls, 1); assert.equal(body, serialize(e.payload));
+});
 test('native transport independently rejects unsupported endpoints and request bounds before opening', async () => {
   let calls = 0;
   const transport = createSlackHttpsTransport(() => { calls++; throw Error('must not open'); });

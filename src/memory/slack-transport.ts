@@ -4,7 +4,8 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import { bytes, dataSnapshot, digest, object, serialize, string } from '../context-engine/validation.js';
 import { natural, slug } from './run-recording.js';
 import { shape } from './weekly-delivery-envelope.js';
-import { maxSlackBytes, slackEntry } from './slack-envelope.js';
+import { maxSlackBytes, slackEntry, slackLiteral } from './slack-envelope.js';
+import { weeklyReportLines } from './weekly-email.js';
 import type { SlackEnvelope } from './slack-envelope.js';
 
 export type SlackAdapterResult = { readonly status: 'accepted' | 'uncertain' };
@@ -86,7 +87,11 @@ export function createSlackWebhookAdapter(raw: SlackWebhookOptions, transport: S
         if (envelope.destinationId !== adapter.destinationId || envelope.endpointBinding !== adapter.endpointBinding) {
           throw new Error('Slack destination mismatch');
         }
-        const body = serialize(envelope.payload);
+        // Render the readable report at send time so stored envelopes stay valid; over budget, post the exact stored payload.
+        const rendered = serialize({ ...envelope.payload,
+          text: slackLiteral(weeklyReportLines(envelope.summary)) + '\n\n' + envelope.payload.text });
+        const fits = bytes(rendered) <= maxSlackBytes && bytes(rendered) <= envelope.payloadBudget;
+        const body = fits ? rendered : serialize(envelope.payload);
         if (bytes(body) > maxSlackBytes || bytes(body) > envelope.payloadBudget) throw new Error('Slack payload bound');
         const controller = new AbortController();
         let timer: ReturnType<typeof setTimeout> | undefined;

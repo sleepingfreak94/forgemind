@@ -32,7 +32,7 @@ function stopped(s: Summary): [string, number][] {
   return Object.entries(s.authenticated.phases).filter(([, n]) => n > 0);
 }
 
-function textPart(s: Summary): string {
+export function weeklyReportLines(s: Summary): string {
   const a = s.authenticated, o = a.outcomes, c = a.checks, r = a.reviews;
   const lines = ['ForgeMind weekly report', 'Week ending ' + weekEnding(s.dueAt), 'Project: ' + s.projectId, ''];
   if (a.runs === 0) lines.push(EMPTY);
@@ -41,14 +41,17 @@ function textPart(s: Summary): string {
     `Candidate checks passed: ${c.candidatePassed}`, `Candidate checks failed: ${c.candidateFailed}`,
     `Reviews: pass ${r.pass}, revise ${r.revise}, blocked ${r.blocked}, absent ${r.absent}`);
   const ph = stopped(s);
-  if (ph.length) lines.push('', 'Where runs stopped', ...ph.map(([k, n]) => `${k}: ${n}`));
+  if (ph.length) lines.push('', 'Last step reached', ...ph.map(([k, n]) => `${k}: ${n}`));
   if (s.examples.length) {
     lines.push('', 'Runs', ...s.examples.map(e => `- ${e.taskId}: ${files(e.changedPaths)}; checks ${checksCell(e)}; review ${review(e)}`));
     if (s.omittedExamples > 0) lines.push(`+${s.omittedExamples} more runs not shown`);
   }
   lines.push('', `Summary ${s.id.slice(0, 12)} · Digest ${s.digest.slice(0, 12)}`,
     `Fixture runs excluded: ${s.excludedFixtureCount}`);
-  return lines.join('\n') + '\n\n' + MARKER + '\n' + serialize(s);
+  return lines.join('\n');
+}
+function textPart(s: Summary): string {
+  return weeklyReportLines(s) + '\n\n' + MARKER + '\n' + serialize(s);
 }
 
 const tile = (n: number, label: string, color: string) =>
@@ -81,7 +84,7 @@ function htmlPart(s: Summary): string {
     row('Candidate checks failed', c.candidateFailed) + row('Reviews pass', r.pass) + row('Reviews revise', r.revise) +
     row('Reviews blocked', r.blocked) + row('Reviews absent', r.absent))));
   const ph = stopped(s);
-  if (ph.length) parts.push(section('Where runs stopped', tbl(ph.map(([k, n]) => row(esc(k), n)).join(''))));
+  if (ph.length) parts.push(section('Last step reached', tbl(ph.map(([k, n]) => row(esc(k), n)).join(''))));
   if (s.examples.length) {
     const head = ['Task', 'Files changed', 'Checks', 'Review'].map(h =>
       `<td style="padding:6px 8px;background:#f8fafc;border-bottom:1px solid #cbd5e1;font-size:12px;color:#64748b">${h}</td>`).join('');

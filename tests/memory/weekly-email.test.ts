@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { serialize } from '../../src/context-engine/validation.js';
-import { renderWeeklyEmail } from '../../src/memory/weekly-email.js';
+import { renderWeeklyEmail, weeklyReportLines } from '../../src/memory/weekly-email.js';
 import { createWeeklyAccumulator, finishWeeklySummary } from '../../src/memory/weekly-summary.js';
 import type { Summary } from '../../src/memory/weekly-summary.js';
 
@@ -43,7 +43,8 @@ test('empty summary renders friendly empty state', () => {
   assert.ok(r.html.startsWith('<!doctype html>'));
   assert.ok(r.html.includes('No harness runs were recorded this week.'));
   assert.ok(r.html.includes('Week ending Thu, 1 Jan 1970'));
-  assert.ok(!r.html.includes('Where runs stopped')); assert.ok(!r.html.includes('Completed'));
+  assert.ok(!r.html.includes('Where runs stopped')); assert.ok(!r.html.includes('Last step reached'));
+  assert.ok(!r.text.includes('Where runs stopped')); assert.ok(!r.html.includes('Completed'));
   assert.ok(r.text.endsWith(serialize(s)));
 });
 test('non-empty summary renders sections, escaping and +N more', () => {
@@ -54,7 +55,7 @@ test('non-empty summary renders sections, escaping and +N more', () => {
   assert.ok(html.includes('—'));
   for (const s of ['Runs', 'Completed', 'Failed', 'Blocked', '#15803d', '#b91c1c', '#b45309', '#0f172a', '#f1f5f9', 'max-width:640px'])
     assert.ok(html.includes(s), s);
-  assert.ok(html.includes('Where runs stopped')); assert.ok(html.includes('coding')); assert.ok(html.includes('terminal'));
+  assert.ok(html.includes('Last step reached')); assert.ok(!html.includes('Where runs stopped')); assert.ok(html.includes('coding')); assert.ok(html.includes('terminal'));
   assert.ok(!html.includes('>setup<'));
   assert.ok(html.includes(summary.id.slice(0, 12))); assert.ok(html.includes(summary.digest.slice(0, 12)));
   assert.ok(html.includes('Fixture runs excluded: 2'));
@@ -82,6 +83,15 @@ test('text has heading first and evidence marker before the JSON', () => {
   assert.ok(html.includes('>1 run<') && html.includes('>reviewed<'));
   assert.ok(!html.includes('>1/2<') && !html.includes('>pass<') && !t.includes('1/2'));
   assert.ok(t.includes('+7 more runs not shown'));
+});
+test('weeklyReportLines is the readable text block of the email', () => {
+  const marker = '\n\n--- Evidence (exact JSON, for verification) ---\n';
+  for (const x of [summary, empty()]) assert.equal(renderWeeklyEmail(x).text, weeklyReportLines(x) + marker + serialize(x));
+  const l = weeklyReportLines(summary);
+  assert.ok(l.startsWith('ForgeMind weekly report\n'));
+  assert.ok(l.includes('\nLast step reached\ncoding: 3\nterminal: 9'));
+  assert.ok(!l.includes('Where runs stopped') && !l.includes('Evidence'));
+  assert.ok(l.endsWith('Fixture runs excluded: 2'));
 });
 test('files stay under 500 lines', () => {
   for (const f of ['src/memory/weekly-email.ts', 'tests/memory/weekly-email.test.ts'])
