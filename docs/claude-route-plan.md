@@ -152,6 +152,17 @@ SHA-256 `6da8800f3e6ac5cb47239dd28f90b7e5fbf85625b6a421c91926527c9b66f2b7`.
   (`65ad2a5b…`).
 - Steps 2 and 4 are done.
 
+**Keychain token refresh (2026-10-25).** The daily HTTP 401 came from the CLI's token
+refresh failing to write the Keychain ("Operation not permitted"). The CLI then fell
+back to `<profile>/.credentials.json`, and the next run read the stale Keychain copy
+first, whose refresh token had been rotated. By owner decision the profile now adds two
+rules: `file-read*` of `/usr/bin/security`, and a `file-write*` regex for
+`~/Library/Keychains/login.keychain-db` plus its `.sb-<hex>-<alnum>` temp sibling (dots
+written as `[.]`, no `{n}` quantifiers). Nothing narrower worked. Residual risk: the
+sandboxed CLI can now write the login keychain file, still only through the Keychain
+format, and no other files. Unsafe home paths are refused. The stale copies already on a
+machine are not cleaned up; one more `claude auth login` may be needed.
+
 ### Step 6: host tools over MCP (2026-10-22)
 
 A stub stdio MCP server (plain Node, canned results, every message logged) exposed
