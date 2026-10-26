@@ -113,12 +113,7 @@ async function runBrainHookCore(argv: string[], input: string, options: BrainHoo
   if (typeof candidate !== 'string' || candidate === '') throw new Error('missing workspace');
   const brainDirectory = options.brainDirectory ?? defaultBrainDirectory();
   const workspace = resolveWorkspace(candidate);
-  let space;
-  try { space = brainSpaceFor(workspace, brainDirectory); }
-  catch (error) {
-    if (error instanceof Error && error.message.includes('not mapped to a brain space')) return '';
-    throw error;
-  }
+  const space = brainSpaceFor(workspace, brainDirectory);
   if (event === 'session-start') {
     const store = new BrainStore(brainDirectory, space);
     try {

@@ -19,7 +19,7 @@ export interface SplitCodingOptions {
   authority: RunAuthority;
   checkDirectory: string;
   signal: AbortSignal;
-  input: { plan: GeneratedPlan; memory: unknown; beforeChecks: unknown };
+  input: { plan: GeneratedPlan; memory: unknown; brain?: string | null; beforeChecks: unknown };
   checkRuntime?: CheckRuntime;
   save(name: string, value: unknown): void;
   progress(message: string): void;
@@ -48,7 +48,7 @@ export async function runSplitCoding(model: ModelPort, options: SplitCodingOptio
     options.progress(`Subtask ${i} of ${n}: ${subtask.title}`);
     const sources = readSources(root, [...new Set([...task.readPaths, ...subtask.writePaths, ...changed])], task.maxPromptBytes);
     const codingInput = { task: narrowed, subtask: { index: i, of: n, title: subtask.title }, earlier: earlier.map(e => ({ ...e })),
-      plan: input.plan, sources, memory: input.memory, beforeChecks: input.beforeChecks };
+      plan: input.plan, sources, memory: input.memory, brain: input.brain ?? null, beforeChecks: input.beforeChecks };
     let result: CodingResult;
     if (task.codingMode === 'tools') {
       const coded = await runToolCoding(model, { root, task: narrowed, source, authority, checkDirectory: options.checkDirectory, signal,

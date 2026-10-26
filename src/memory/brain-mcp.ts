@@ -15,7 +15,6 @@ const CONTEXT_CAP = 3200;
 const SEARCH_ITEM_CAP = 400;
 const SEARCH_CAP = 2000;
 const HISTORY_IN_CONTEXT = 5;
-export const MAPPING_HINT = 'This project is not mapped to a brain space. Run: npm run brain -- map --workspace <path> --space personal|company';
 const KINDS = ['convention', 'lesson', 'decision', 'pattern'];
 
 const TOOLS = [
@@ -160,12 +159,7 @@ export function handleBrainMessage(message: unknown, context: BrainMcpContext): 
   if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) return ok(toolResult('invalid arguments', true));
   let store: BrainStore | undefined;
   try {
-    let space;
-    try { space = brainSpaceFor(context.workspace, context.brainDirectory); }
-    catch (error) {
-      if (error instanceof Error && error.message.includes('not mapped to a brain space')) return ok(toolResult(MAPPING_HINT, true));
-      throw error;
-    }
+    const space = brainSpaceFor(context.workspace, context.brainDirectory);
     store = new BrainStore(context.brainDirectory, space);
     return ok(toolResult(runTool(name, rawArgs as Record<string, unknown>, store, space, context)));
   } catch (error) {

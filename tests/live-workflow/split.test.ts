@@ -46,9 +46,10 @@ function harness(codingAnswers: ((input: any) => unknown)[], plan: unknown = { .
   });
   return { log, factory };
 }
-const run = (f: ReturnType<typeof repo>, h: ReturnType<typeof harness>, confirm = true) => runTask({ workspace: f.work, task: f.task,
+const run = (f: ReturnType<typeof repo>, h: ReturnType<typeof harness>, confirm = true, brainContext?: string) => runTask({ workspace: f.work, task: f.task,
   stateDirectory: join(f.root, 'state'), worktreeDirectory: join(f.root, 'worktrees'),
-  confirmPlan: async plan => { h.log.confirmed.push(plan); return confirm; }, modelFactory: h.factory });
+  confirmPlan: async plan => { h.log.confirmed.push(plan); return confirm; }, modelFactory: h.factory,
+  ...(brainContext !== undefined ? { brainContext } : {}) });
 const phaseCount = (artifacts: string, name: string) =>
   JSON.parse(readFileSync(join(artifacts, 'receipt.json'), 'utf8')).phases.filter((p: { name: string }) => p.name === name).length;
 
@@ -56,8 +57,10 @@ test('a split task codes and checks each subtask in turn and merges one candidat
   const f = repo('auto');
   try {
     const h = harness([i => edit(i, 'a.txt', 'A1'), i => edit(i, 'b.txt', 'B1')]);
-    const result = await run(f, h);
+    const result = await run(f, h, true, 'brain: prefer small edits');
     assert.equal(result.status, 'completed-local');
+    assert.equal(h.log.coding.length, 2);
+    for (const c of h.log.coding) assert.equal(c.brain, 'brain: prefer small edits');
     assert.equal(h.log.confirmed.length, 1);
     assert.equal(h.log.confirmed[0].subtasks.length, 2);
     for (const n of [1, 2]) {

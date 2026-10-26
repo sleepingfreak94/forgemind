@@ -130,6 +130,15 @@ test('cli usage errors and unmapped workspace', () => {
   assert.equal(cli(counting, ['--source', 'svn']).learn().code, 2);
   assert.equal(cli(counting, ['--limit', '0']).learn().code, 2);
   assert.equal(cli(counting, ['--limit', 'x']).learn().code, 2);
-  assert.equal(cli(counting, [], false).learn().code, 1);
   assert.equal(calls, 0);
+});
+test('cli learn works on an unmapped workspace', () => {
+  const c = cli(good, [], false); const r = c.learn();
+  assert.equal(r.code, 0); assert.deepEqual(r.json.skipped, []); assert.ok(r.json.proposed.length > 0);
+  const list = c.exec(['list', '--workspace', c.ws]);
+  assert.equal(list.json.space, 'personal');
+  for (const id of r.json.proposed) {
+    const e = list.json.entries.find((x: any) => x.id === id);
+    assert.equal(e.status, 'proposed'); assert.equal(e.project, c.ws);
+  }
 });

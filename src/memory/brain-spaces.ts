@@ -5,7 +5,6 @@ import type { BrainSpace } from './brain.js';
 import { privatePath } from './database.js';
 
 type SpaceMap = Record<string, BrainSpace>;
-const notMapped = 'Project is not mapped to a brain space; run brain map';
 
 function canonicalWorkspace(workspace: unknown): string {
   if (typeof workspace !== 'string' || workspace === '') throw new Error('workspace must be an existing directory');
@@ -56,13 +55,13 @@ export function brainSpaceFor(workspace: string, brainDirectory: string): BrainS
   const project = canonicalWorkspace(workspace);
   const dir = checkDirectory(brainDirectory);
   try { lstatSync(dir); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(notMapped);
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'personal';
     throw error;
   }
   checkCanonical(dir);
   const space = readMap(join(dir, 'spaces.json'))[project];
-  if (!space) throw new Error(notMapped);
-  return space;
+  // Unmapped projects share the default (personal) space by owner decision (2026-10-26).
+  return space ?? 'personal';
 }
 
 export function mapBrainSpace(workspace: string, space: BrainSpace, brainDirectory: string): void {

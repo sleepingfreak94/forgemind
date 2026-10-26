@@ -131,7 +131,7 @@ Checks run in a sandbox that cannot fork.
 - Worktree with the edits: under `--worktree-root`. Your project is not touched.
 - Status `completed-local`: checks and review passed. Take the worktree changes yourself. Nothing was pushed.
 - Draft PR: set `"draftPr": true` and add `--gh /canonical/gh --author-name "Your Name" --author-email "you@users.noreply.github.com"`. All three are required. Test mode never publishes.
-- The run ends with `Brain: run recorded in the <space> space.` or `Brain: run not recorded (...)`. The second means the project is not mapped (see below).
+- The run ends with `Brain: run recorded in the <space> space.` or `Brain: run not recorded (...)`. The second means the brain was unavailable or its map file is invalid (see below).
 
 ## Central brain (memory across Claude Code, Cursor and the harness)
 
@@ -139,12 +139,12 @@ The brain is local owner state in `~/.forgemind/brain`, never in a repository. F
 
 - History facts (what each run or session did) are stored automatically.
 - Rules (conventions, lessons, decisions) guide agents only after you approve them.
-- There are two isolated spaces, `personal` and `company`. Map each project to one space, once.
+- There are two isolated spaces, `personal` and `company`. Every project uses the shared default space automatically; `brain map --space company` is optional for keeping a project apart.
 
-Set up a project:
+Use it on a project (no setup needed):
 
 ```sh
-npm run brain -- map --workspace /absolute/project --space personal
+npm run brain -- map --workspace /absolute/project --space company   # optional
 npm run brain -- learn --workspace /absolute/project --source all --limit 100
 npm run brain -- list --workspace /absolute/project --status proposed
 npm run brain -- approve --workspace /absolute/project --id ID
@@ -193,7 +193,7 @@ Put them in the `permissions.allow` list of that file. The file is ~/.cursor/cli
 
 Token caps: `brain_context` returns at most 3200 characters (about 800 tokens). `brain_search` returns at most 5 items, 400 characters each and 2000 in total. Agents never get the whole store.
 
-Check it works: start a session in a mapped project and look for the injected brain context. End it, then run `npm run brain -- history --workspace /absolute/project`. The session should be listed.
+Check it works: start a session in any project and look for the injected brain context. End it, then run `npm run brain -- history --workspace /absolute/project`. The session should be listed.
 
 Hooks never call a model or block a session. Hooks run from `dist/`, so run `npm run build` again after every `git pull`.
 

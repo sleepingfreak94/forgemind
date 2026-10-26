@@ -4,7 +4,6 @@ import { BrainStore, containsSecret } from './brain.js';
 import type { BrainSpace } from './brain.js';
 import { brainSpaceFor } from './brain-spaces.js';
 
-const unmapped = 'project not mapped to a brain space';
 const maxFile = 1024 * 1024;
 
 function readJson(directory: string, name: string): unknown {
@@ -30,13 +29,13 @@ function firstSentence(objective: string): string {
 }
 
 export function recordHarnessRun(input: { brainDirectory: string; workspace: string; taskId: string; objective: string; artifacts: string;
-  status: string; prUrl?: string }): { recorded: true; space: BrainSpace; id: string } | { recorded: false; reason: string } {
+  status: string; prUrl?: string }): { recorded: true; space: BrainSpace; id: string; lessons: number } | { recorded: false; reason: string } {
   try {
     let space: BrainSpace;
     try { space = brainSpaceFor(input.workspace, input.brainDirectory); }
     catch (error) {
       const message = error instanceof Error ? error.message : '';
-      return { recorded: false, reason: /not mapped/.test(message) ? unmapped : message || 'brain unavailable' };
+      return { recorded: false, reason: message || 'brain unavailable' };
     }
     const project = realpathSync(input.workspace);
     const dir = input.artifacts;
@@ -66,8 +65,31 @@ export function recordHarnessRun(input: { brainDirectory: string; workspace: str
     const evidence = [clean(input.taskId, 300), ...(input.prUrl ? [clean(input.prUrl, 300)] : [])];
     const store = new BrainStore(input.brainDirectory, space);
     try {
-      const id = store.record({ project, source: 'harness', key: basename(dirname(input.artifacts)), title, summary, files, outcome, evidence });
-      return { recorded: true, space, id };
+      const key = basename(dirname(input.artifacts));
+      const id = store.record({ project, source: 'harness', key, title, summary, files, outcome, evidence });
+      let lessons = 0;
+      try {
+        const texts: string[] = [];
+        if (Array.isArray(list)) {
+          const failed = list.filter(isObject).filter(c => typeof c.id === 'string' && c.passed === false).slice(0, 3);
+          for (const c of failed) texts.push(`Check ${c.id as string} failed after the change in ${title}.`);
+        }
+        if (isObject(review) && (review.verdict === 'revise' || review.verdict === 'blocked') && Array.isArray(review.findings)) {
+          const found = review.findings.filter((f): f is string => typeof f === 'string' && f.trim() !== '').slice(0, 3);
+          for (const f of found) texts.push(`Reviewer (${review.verdict}): ${f.trim().slice(0, 300)}`);
+        }
+        if (message) texts.push(`Run stopped: ${message}`);
+        const known = new Set(store.list({ project }).map(e => e.id));
+        for (const text of new Set(texts)) {
+          if (containsSecret(text)) continue;
+          try {
+            const lesson = store.propose({ kind: 'lesson', project, text, evidence: [clean(input.taskId, 300), key],
+              reason: 'auto-proposed from a harness run' });
+            if (!known.has(lesson)) { known.add(lesson); lessons++; }
+          } catch { /* a proposal error never stops the run being recorded */ }
+        }
+      } catch { /* lessons are best effort */ }
+      return { recorded: true, space, id, lessons };
     } finally { store.close(); }
   } catch (error) {
     return { recorded: false, reason: error instanceof Error ? error.message : 'brain write failed' };

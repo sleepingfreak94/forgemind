@@ -50,11 +50,16 @@ test('cursor session-start shape', async () => {
   assert.ok(parsed.additional_context.endsWith(LINE));
 });
 
-test('unmapped workspace is ignored', async () => {
-  const input = JSON.stringify({ session_id: 'u', cwd: other });
-  assert.equal(await runBrainHook(['session-start', '--source', 'claude-code'], input, opts()), '');
-  assert.equal(await runBrainHook(['session-end', '--source', 'claude-code'], input, opts(['a.ts'])), '');
-  assert.equal(history(other).length, 0);
+test('unmapped workspace works in the personal space', async () => {
+  const start = await runBrainHook(['session-start', '--source', 'claude-code'], JSON.stringify({ session_id: 'u', cwd: other }), opts());
+  const text: string = JSON.parse(start).hookSpecificOutput.additionalContext;
+  assert.ok(text.startsWith('ForgeMind brain (personal space)'));
+  assert.ok(text.endsWith(LINE));
+  assert.ok(!text.includes('Use tabs never'));
+  const t = transcript([{ type: 'user', message: { role: 'user', content: 'Unmapped prompt' } }]);
+  await runBrainHook(['session-end', '--source', 'claude-code'], JSON.stringify({ session_id: sid(), cwd: other, transcript_path: t }), opts(['a.ts']));
+  assert.ok(history(other).some(x => x.title === 'Session (auto): Unmapped prompt'));
+  assert.ok(!history(ws).some(x => x.title === 'Session (auto): Unmapped prompt'));
 });
 
 test('claude session-end records from transcript', async () => {
