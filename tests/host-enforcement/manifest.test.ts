@@ -3,7 +3,6 @@ import test from 'node:test';
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { hostFixture } from './fixture.js';
 import { hostResource, pinFile, prepareHostPlan } from '../../src/host-enforcement/manifest.js';
 import { snapshotWorkspace } from '../../src/host-enforcement/workspace.js';
@@ -53,10 +52,6 @@ test('workspace copies only selected files and rejects traversal, symlinks and h
   for (const path of ['../source/.env', '/etc/passwd', 'link']) assert.throws(() => snapshotWorkspace(source, stage, [path]));
   linkSync(join(source, 'okay.txt'), join(source, 'hardlink'));
   assert.throws(() => snapshotWorkspace(source, stage, ['hardlink']));
-});
-test('legacy task launcher blocks live coding before resolving or starting an agent', () => {
-  const result = spawnSync(process.execPath, ['scripts/run-harness.mjs', 'write code'], { env: {}, encoding: 'utf8' });
-  assert.equal(result.status, 1); assert.match(result.stderr, /Live coding is disabled/); assert.equal(result.stdout, '');
 });
 test('executable/runtime pins reject setuid and setgid identity expansion', t => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'forgemind-pin-'))), file = join(base, 'binary');

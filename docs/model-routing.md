@@ -33,7 +33,7 @@ The [office routing rule](../.cursor/rules/office-model-routing.mdc) directs the
 cursor-agent --model 'grok-4.7[effort=high,fast=false]'
 ```
 
-This command expresses the intended Cursor parent selection; it was not executed during setup. Live `npm run harness -- "task"` execution is disabled by the host gate. The [Cursor ACP adapter](./cursor-driver.md) validates explicit advertised configuration IDs/values in deterministic fixtures; it does not launch these native agents or certify office model/effort/speed availability or billing.
+This command expresses the intended Cursor parent selection; it was not executed during setup. The [Cursor ACP adapter](./cursor-driver.md) validates explicit advertised configuration IDs/values in deterministic fixtures; it does not launch these native agents or certify office model/effort/speed availability or billing.
 
 ## Personal Codex reference
 

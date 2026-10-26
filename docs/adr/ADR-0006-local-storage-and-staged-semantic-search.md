@@ -4,6 +4,8 @@
 - Date: 2026-10-07
 - Deciders: ForgeMind maintainer (confirmed in project conversation)
 
+Update 2026-10-26: Ruflo was removed from this repository; the central brain (docs/brain.md) is the only development memory.
+
 ## Context
 
 The local-first MVP needs durable task state and reusable evidence across sessions and tickets. Harness coordination and application persistence have separate responsibilities. Semantic similarity can discover related work described differently, but cannot establish ownership, authorization, or verified equivalence between tickets.

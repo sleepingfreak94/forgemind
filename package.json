@@ -5,7 +5,6 @@
   "type": "module",
   "description": "Local-first harness for supervised AI coding with project memory, explicit permissions, and review evidence.",
   "scripts": {
-    "harness": "node scripts/run-harness.mjs",
     "build": "tsc -p config/tsconfig.json",
     "typecheck": "tsc -p config/tsconfig.json --noEmit",
     "test": "npm run build && node scripts/run-tests.mjs all",
