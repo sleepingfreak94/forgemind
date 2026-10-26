@@ -6,7 +6,7 @@ PRD/ADRs and the accepted project/session memory architecture already exist. Loc
 
 `config/forgemind-project.json` registers a stable project ID, PRD/SRS/ADR references and non-secret workflow preferences. PRD records product goals; SRS records testable requirements and constraints; ADRs record decisions, alternatives and consequences. New-project scaffolding creates only missing **Draft** requirements and a **Proposed** ADR template. It preserves existing documents and leaves unresolved requirements explicit.
 
-Project memory stores validated facts/decisions linked to versioned sources with expiry and supersession. SQLite now serves separate policy and project-memory stores; wider tasks/approvals persistence under ADR-0006 remains pending. Ruflo is the separate development ledger. Documents and preferences never grant permissions. Cloned config retains project identity, while each workspace still needs fresh trusted runtime registration and grants.
+Project memory stores validated facts/decisions linked to versioned sources with expiry and supersession. SQLite now serves separate policy and project-memory stores; wider tasks/approvals persistence under ADR-0006 remains pending. Documents and preferences never grant permissions. Cloned config retains project identity, while each workspace still needs fresh trusted runtime registration and grants.
 
 Onboarding asks:
 

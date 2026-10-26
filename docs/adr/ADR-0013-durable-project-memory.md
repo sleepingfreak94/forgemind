@@ -4,6 +4,8 @@
 - Date: 2026-10-07
 - Basis: user authorization to implement all five steps in the project-memory plan
 
+Update 2026-10-26: Ruflo was removed from this repository; the central brain (docs/brain.md) is the only development memory.
+
 ## Decision
 
 Implement the project portion of ADR-0002/0006 with one SQLite database per canonical workspace and project ID, stored outside the repository. Keep it separate from the existing policy database and Ruflo's development ledger. Use typed APIs, an explicit local-owner CLI and exact source citations.
