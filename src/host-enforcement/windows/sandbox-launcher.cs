@@ -106,7 +106,8 @@ static class Launcher {
       Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>...");
       return 64;
     } catch (Exception error) {
-      Console.Error.WriteLine("forgemind-launcher: " + error.GetType().Name);
+      // Reached only before the report exists (or if writing it failed), so the host treats the run as unconfirmed.
+      Console.Error.WriteLine("forgemind-launcher: " + error.GetType().Name + ": " + error.Message);
       return 70;
     }
   }
@@ -136,13 +137,30 @@ static class Launcher {
     foreach (string path in p.denyPaths) Canonical(path);
     if (!p.journalPath.EndsWith(".journal")) throw new ArgumentException("journal must end in .journal");
     if (File.Exists(p.reportPath) || File.Exists(p.journalPath)) throw new ArgumentException("report or journal already exists");
+    PrivateFolder(Path.GetDirectoryName(p.reportPath)); PrivateFolder(Path.GetDirectoryName(p.journalPath));
     foreach (string arg in p.args) if (arg == null || arg.IndexOf('\0') >= 0) throw new ArgumentException("invalid argument");
     foreach (KeyValuePair<string, string> pair in p.env)
       if (pair.Key.Length == 0 || pair.Key.IndexOf('=') >= 0 || pair.Key.IndexOf('\0') >= 0 || pair.Value == null || pair.Value.IndexOf('\0') >= 0) throw new ArgumentException("invalid environment");
   }
 
+  // The report and journal live in the owner's state root. No AppContainer or capability may do more there than the
+  // read-attributes that setup grants, or a contained child could plant a report or rewrite the journal.
+  static void PrivateFolder(string folder) {
+    foreach (FileSystemAccessRule rule in Directory.GetAccessControl(folder, AccessControlSections.Access).GetAccessRules(true, true, typeof(SecurityIdentifier))) {
+      string value = rule.IdentityReference.Value;
+      if (rule.AccessControlType == AccessControlType.Allow && (value.StartsWith("S-1-15-2-") || value.StartsWith("S-1-15-3-")) &&
+          ((int)rule.FileSystemRights & ~0x1000A0) != 0) throw new ArgumentException("state root is reachable from AppContainers");
+    }
+  }
+
   static int Run(Policy p) {
     Validate(p);
+    // Opened exclusively before the child exists, so nothing else can create, replace or delete the report.
+    using (FileStream report = new FileStream(p.reportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+      return Run(p, report);
+  }
+
+  static int Run(Policy p, FileStream report) {
     string name = "forgemind." + RandomHex(16);
     IntPtr derived;
     int derivation = DeriveAppContainerSidFromAppContainerName(name, out derived);
@@ -160,6 +178,8 @@ static class Launcher {
     string pending = p.journalPath + ".tmp";
     File.WriteAllText(pending, json.Serialize(new Journal { name = name, sid = sid.Value, trees = trees.ToArray(), objects = objects.ToArray() }));
     File.Move(pending, p.journalPath);
+    // Held read-shared until cleanup, so the journal cannot be rewritten while the child runs.
+    FileStream journalHold = new FileStream(p.journalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
     IntPtr sidPointer;
     int created = CreateAppContainerProfile(name, name, "ForgeMind contained run", IntPtr.Zero, 0, out sidPointer);
     if (created != 0) throw new Win32Exception(created, "AppContainer profile");
@@ -182,9 +202,10 @@ static class Launcher {
     }
     bool clean = Revoke(sid, trees, objects) & DeleteAppContainerProfile(name) == 0;
     clean &= TryWindowAccess(GetProcessWindowStation(), sid) & TryWindowAccess(GetThreadDesktop(GetCurrentThreadId()), sid);
+    journalHold.Dispose();
     if (clean) File.Delete(p.journalPath);
     else if (status == "reaped" || status == "deadline") status = "cleanup-uncertain";
-    WriteReport(p.reportPath, status, exited ? (object)exitCode : null, message, sid.Value);
+    WriteReport(report, status, exited ? (object)exitCode : null, message, sid.Value);
     return status == "reaped" ? 0 : 3;
   }
 
@@ -211,8 +232,10 @@ static class Launcher {
     InitializeProcThreadAttributeList(IntPtr.Zero, 3, 0, ref size);
     IntPtr list = Marshal.AllocHGlobal(size), capabilities = IntPtr.Zero, capabilityList = IntPtr.Zero, runtime = IntPtr.Zero, childPolicy = IntPtr.Zero, handleList = IntPtr.Zero, environment = IntPtr.Zero;
     ProcessInformation info = new ProcessInformation();
+    bool initialized = false;
     try {
       Check(InitializeProcThreadAttributeList(list, 3, 0, ref size), "attribute list");
+      initialized = true;
       if (p.activeProcessLimit == 1) {
         // A single-process run cannot create children at all, so a spawn fails at once instead of tripping the job limit.
         childPolicy = Marshal.AllocHGlobal(4);
@@ -255,7 +278,8 @@ static class Launcher {
     } finally {
       if (info.hProcess != IntPtr.Zero) CloseHandle(info.hProcess);
       if (info.hThread != IntPtr.Zero) CloseHandle(info.hThread);
-      DeleteProcThreadAttributeList(list); Marshal.FreeHGlobal(list);
+      if (initialized) DeleteProcThreadAttributeList(list);
+      Marshal.FreeHGlobal(list);
       if (capabilities != IntPtr.Zero) Marshal.FreeHGlobal(capabilities);
       if (capabilityList != IntPtr.Zero) Marshal.FreeHGlobal(capabilityList);
       if (childPolicy != IntPtr.Zero) Marshal.FreeHGlobal(childPolicy);
@@ -429,12 +453,10 @@ static class Launcher {
     return failures == 0 ? 0 : 3;
   }
 
-  static void WriteReport(string path, string status, object exitCode, string message, string sid) {
-    string text = json.Serialize(new Dictionary<string, object> { { "status", status }, { "exitCode", exitCode }, { "message", message }, { "sid", sid } });
-    using (FileStream report = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) {
-      byte[] bytes = Encoding.UTF8.GetBytes(text);
-      report.Write(bytes, 0, bytes.Length);
-    }
+  static void WriteReport(FileStream report, string status, object exitCode, string message, string sid) {
+    byte[] bytes = Encoding.UTF8.GetBytes(json.Serialize(new Dictionary<string, object> { { "status", status }, { "exitCode", exitCode }, { "message", message }, { "sid", sid } }));
+    report.Write(bytes, 0, bytes.Length);
+    report.Flush(true);
   }
 
   static string EnvironmentBlock(Dictionary<string, string> env) {

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pinWindowsLauncher, protectedPaths, runContained, sweepWindowsSandbox } from '../../src/host-enforcement/windows-sandbox.js';
@@ -10,11 +11,11 @@ import type { ContainedCommand, WindowsLauncher } from '../../src/host-enforceme
 test('protected paths cover .git, .codex and .env files at any depth without following links', t => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'forgemind-protected-'))); t.after(() => rmSync(root, { recursive: true, force: true }));
   const outside = realpathSync.native(mkdtempSync(join(tmpdir(), 'forgemind-outside-'))); t.after(() => rmSync(outside, { recursive: true, force: true }));
-  for (const dir of ['.git', '.codex', 'src/deep', 'pkg']) mkdirSync(join(root, dir), { recursive: true });
+  for (const dir of ['.git', '.codex', 'src/deep', 'pkg/.Codex']) mkdirSync(join(root, dir), { recursive: true });
   for (const file of ['.env', 'src/deep/.env.local', 'pkg/.ENV', '.envrc', 'src/env.ts', 'README.md']) writeFileSync(join(root, file), 'x');
   writeFileSync(join(outside, '.env'), 'x');
   symlinkSync(outside, join(root, 'linked'), 'junction');
-  assert.deepEqual(protectedPaths(root), ['.codex', '.env', '.git', 'pkg/.ENV', 'src/deep/.env.local'].map(path => join(root, path)).sort());
+  assert.deepEqual(protectedPaths(root), ['.codex', '.env', '.git', 'pkg/.Codex', 'pkg/.ENV', 'src/deep/.env.local'].map(path => join(root, path)).sort());
 });
 
 test('the Windows sandbox refuses to run anywhere but Windows', { skip: process.platform === 'win32' }, async () => {
@@ -66,13 +67,21 @@ test('a contained check reads source and writes scratch, and nothing else', cont
     s.on('error', e => { out.net = e.code; done(); }); s.on('timeout', () => { out.net = 'timeout'; s.destroy(); done(); });
     dns.lookup('example.com', e => { out.dns = e ? e.code : 'allowed'; done(); });`;
   process.env.FORGEMIND_SECRET = 'leak'; t.after(() => { delete process.env.FORGEMIND_SECRET; });
-  const result = await runContained(w.launcher, w.command(script), w.state);
+  // A host listener on loopback must see no connection from the container.
+  let accepted = 0;
+  const server = createServer(socket => { accepted++; socket.destroy(); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => server.close());
+  const port = (server.address() as { port: number }).port;
+  const loopback = `const l = require('net').connect(${port}, '127.0.0.1'); l.setTimeout(3000);
+    const say = v => { console.error('loopback=' + v); l.destroy(); }; l.on('connect', () => say('allowed')); l.on('error', e => say(e.code)); l.on('timeout', () => say('timeout'));`;
+  const result = await runContained(w.launcher, w.command(script + loopback), w.state);
   assert.equal(result.status, 'reaped', result.stderr); assert.equal(result.exitCode, 0, result.stderr);
   const out = JSON.parse(result.stdout);
   assert.equal(out.readSource, 'allowed'); assert.equal(out.writeScratch, 'allowed'); assert.equal(out.secretEnv, 'absent');
   for (const key of ['readEnv', 'readGit', 'writeSource', 'writeStream', 'readSecret', 'readEscape', 'writePublic', 'writeParent', 'forgeReport'])
     assert.equal(out[key], 'EPERM', `${key}: ${out[key]}`);
   assert.notEqual(out.spawn, 'allowed'); assert.notEqual(out.net, 'allowed'); assert.notEqual(out.dns, 'allowed');
+  assert.match(result.stderr, /loopback=/); assert.doesNotMatch(result.stderr, /loopback=allowed/); assert.equal(accepted, 0);
   assert.equal(readFileSync(join(w.root, 'value.txt'), 'utf8'), 'source');
   assert.ok(!existsSync(targets.public) && !existsSync(targets.parent) && !existsSync(join(w.state, 'forged.report')));
   assert.deepEqual(readdirSync(w.state), []);
@@ -119,4 +128,16 @@ test('a changed launcher, a reachable state root or a missing grant target is re
   await assert.rejects(runContained(w.launcher, w.command('1'), w.scratch), /separate/);
   await assert.rejects(runContained(w.launcher, w.command('1', { readPaths: [w.root, join(w.base, 'missing')] }), w.state));
   assert.deepEqual(readdirSync(w.state), []);
+  linkSync(join(w.root, '.env'), join(w.root, 'alias.txt'));
+  await assert.rejects(runContained(w.launcher, w.command('1'), w.state), /hardlinked/);
+  rmSync(join(w.root, 'alias.txt'));
+});
+
+test('a state root that any AppContainer can write is refused, so a child cannot plant its own report', contained, async t => {
+  const w = workspace(t), marker = join(w.scratch, 'ran.txt');
+  // S-1-15-2-1 is ALL APPLICATION PACKAGES.
+  assert.equal(spawnSync('icacls', [w.state, '/grant', '*S-1-15-2-1:(OI)(CI)M']).status, 0);
+  const result = await runContained(w.launcher, w.command(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`), w.state);
+  assert.notEqual(result.status, 'reaped'); assert.match(result.stderr, /reachable from AppContainers/);
+  assert.equal(existsSync(marker), false); assert.deepEqual(readdirSync(w.state), []);
 });

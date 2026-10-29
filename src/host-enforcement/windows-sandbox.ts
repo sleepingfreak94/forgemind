@@ -21,7 +21,7 @@ export interface ContainedCommand {
   maxOutputBytes: number;
 }
 export type ContainedStatus = 'reaped' | 'deadline' | 'error' | 'cleanup-uncertain' | 'output-limit';
-export interface ContainedResult { status: ContainedStatus; exitCode: number | null; stdout: string; stderr: string }
+export interface ContainedResult { status: ContainedStatus; exitCode: number | null; stdout: string; stderr: string; message: string }
 
 // The launcher enforces timeoutMs itself from the moment the command starts. This backup only catches a hung launcher, so
 // it also covers profile creation (about 5 s in a 2-vCPU VM) and ACL propagation over the granted trees.
@@ -49,12 +49,22 @@ export function protectedPaths(root: string): string[] {
   const visit = (directory: string) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
-      if (entry.name === '.git' || entry.name === '.codex' || /^\.env($|\.)/i.test(entry.name)) found.push(path);
+      if (/^(\.git|\.codex|\.env|\.env\..*)$/i.test(entry.name)) found.push(path);
       else if (entry.isDirectory() && !entry.isSymbolicLink()) visit(path);
     }
   };
   visit(root);
   return found.sort();
+}
+
+/** A hardlink shares one ACL across all its names, so granting a tree would also grant a denied or outside file. */
+export function assertNoHardlinks(paths: string[]): void {
+  const visit = (path: string) => {
+    const stat = lstatSync(path);
+    if (stat.isDirectory()) for (const entry of readdirSync(path)) visit(join(path, entry));
+    else if (stat.isFile() && stat.nlink > 1) throw new Error('Granted trees must not contain hardlinked files');
+  };
+  paths.forEach(visit);
 }
 
 /** Runs one command in a fresh AppContainer inside a kill-on-close job. Never falls back to an uncontained run. */
@@ -69,6 +79,7 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
   }
   if (!Number.isInteger(command.timeoutMs) || command.timeoutMs < 1 || command.timeoutMs > 3600000) throw new Error('Invalid timeout');
   if (!Number.isInteger(command.maxOutputBytes) || command.maxOutputBytes < 1) throw new Error('Invalid output limit');
+  assertNoHardlinks([...command.readPaths, ...command.writePaths]);
   const id = randomUUID(), reportPath = join(stateRoot, `${id}.report`), journalPath = join(stateRoot, `${id}.journal`);
   const policy = { executable: command.executable, args: command.args, cwd: command.cwd, env: command.env, readPaths: command.readPaths,
     writePaths: command.writePaths, denyPaths: command.denyPaths, timeoutMs: command.timeoutMs, activeProcessLimit: command.activeProcessLimit,
@@ -86,16 +97,19 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
       if (total > command.maxOutputBytes) { overLimit = true; child.kill(); return; }
       output[name].push(chunk);
     });
-  await new Promise<void>(resolve => { child.on('close', () => resolve()); child.on('error', () => resolve()); });
+  const launcherExit = await new Promise<number | null>(resolve => { child.on('close', code => resolve(code)); child.on('error', () => resolve(null)); });
   clearTimeout(timer);
-  let report: { status?: unknown; exitCode?: unknown } = {};
+  let report: { status?: unknown; exitCode?: unknown; message?: unknown } = {};
   try { report = JSON.parse(readFileSync(reportPath, 'utf8')); } catch { /* a killed launcher leaves no report */ }
   rmSync(reportPath, { force: true });
-  const known = ['reaped', 'deadline', 'error', 'cleanup-uncertain'];
-  // No report means the launcher was killed before cleanup; its journal stays for sweepWindowsSandbox.
-  let status: ContainedStatus = typeof report.status === 'string' && known.includes(report.status) ? report.status as ContainedStatus : 'cleanup-uncertain';
+  // The launcher exits 0 only after a clean reap and 3 after any other written result. A report that disagrees, or no
+  // report (the launcher was killed and its journal stays for sweepWindowsSandbox), is never trusted.
+  const agrees = (report.status === 'reaped' && launcherExit === 0) ||
+    (['deadline', 'error', 'cleanup-uncertain'].includes(report.status as string) && launcherExit === 3);
+  let status: ContainedStatus = agrees ? report.status as ContainedStatus : 'cleanup-uncertain';
   if (overLimit && status !== 'cleanup-uncertain') status = 'output-limit';
-  return { status, exitCode: typeof report.exitCode === 'number' ? report.exitCode : null,
+  return { status, exitCode: agrees && typeof report.exitCode === 'number' ? report.exitCode : null,
+    message: agrees && typeof report.message === 'string' ? report.message : '',
     stdout: Buffer.concat(output.stdout).toString('utf8'), stderr: Buffer.concat(output.stderr).toString('utf8') };
 }
 
