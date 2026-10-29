@@ -108,7 +108,8 @@ test('deadline destroys real owned socket after DATA even though non-pooled Node
 });
 test('deadline also destroys an established TLS connection waiting forever for SMTP greeting', async () => {
   const h = harness({ noGreeting: true });
-  await assert.rejects(createGmailSmtpAdapter({ username, recipient: address, deadlineMs: 30 }, () => password,
+  // The deadline must outlast connecting under load; the greeting never comes, so it still expires waiting for it.
+  await assert.rejects(createGmailSmtpAdapter({ username, recipient: address, deadlineMs: 300 }, () => password,
     options => createGmailSmtpTransport(options, h.runtime))(e()), { message: 'Gmail SMTP result uncertain' });
   assert.ok(h.socket.destroyed); assert.equal(h.socket.commands.length, 0); assert.equal(h.opens, 1);
 });
