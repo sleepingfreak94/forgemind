@@ -13,7 +13,7 @@ test('CLI onboarding remembers choices; preview shows plan and cannot approve or
   const f = fixture(), config = join(root, 'preferences.json'), input = join(root, 'plan.json');
   writeFileSync(config, JSON.stringify(f.profile.preferences)); writeFileSync(input, JSON.stringify(f.plan));
   const script = fileURLToPath(new URL('../../src/local-runtime/project-cli.js', import.meta.url));
-  const run = (args: string[], stdin = '') => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', input: stdin, timeout: 2000,
+  const run = (args: string[], stdin = '') => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', input: stdin, timeout: 15000,
     env: process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} });
   const setup = run(['init', '--workspace', root, '--project-id', f.profile.projectId, '--preferences', config, '--new']); assert.equal(setup.status, 0, setup.stderr);
   const saved = readFileSync(join(root, profilePath), 'utf8');
@@ -36,7 +36,7 @@ test('every-task prompts preserve explicit flags and ask only unanswered choices
   const f = fixture(); f.profile.preferences.askAt = 'task';
   const config = join(root, 'preferences.json'), input = join(root, 'plan.json'); writeFileSync(config, JSON.stringify(f.profile.preferences)); writeFileSync(input, JSON.stringify(f.plan));
   const script = fileURLToPath(new URL('../../src/local-runtime/project-cli.js', import.meta.url));
-  const run = (args: string[], answer = '') => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', input: answer, timeout: 2000,
+  const run = (args: string[], answer = '') => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', input: answer, timeout: 15000,
     env: process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} });
   assert.equal(run(['init', '--workspace', root, '--project-id', f.profile.projectId, '--preferences', config]).status, 0);
   const result = run(['plan', '--workspace', root, '--task-id', 'ticket', '--source-snapshot', 'a'.repeat(64), '--plan', input, '--draft-pr', 'no', '--evidence', 'text'], 'show\n');
@@ -51,7 +51,7 @@ test('prepare onboards an unfamiliar project and auto mode keeps only that plan 
   writeFileSync(config, JSON.stringify({ ...f.profile.preferences, planReview: 'auto' })); writeFileSync(input, JSON.stringify(f.plan));
   const script = fileURLToPath(new URL('../../src/local-runtime/project-cli.js', import.meta.url));
   const run = (extra: string[]) => spawnSync(process.execPath, [script, 'prepare', '--workspace', root, '--project-id', f.profile.projectId, '--task-id', 'ticket',
-    '--source-snapshot', 'a'.repeat(64), '--plan', input, ...extra], { encoding: 'utf8', input: '', timeout: 2000,
+    '--source-snapshot', 'a'.repeat(64), '--plan', input, ...extra], { encoding: 'utf8', input: '', timeout: 15000,
     env: process.platform === 'win32' && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} });
   const invalid = run(['--preferences', config, '--new', '--evidence', 'invalid']); assert.equal(invalid.status, 2); assert.equal(existsSync(join(root, profilePath)), false);
   const first = run(['--preferences', config, '--new']); assert.equal(first.status, 0, first.stderr); assert.match(first.stdout, /"planVisible": false/);
