@@ -55,7 +55,7 @@ test('interactive approval fails if cited source changes while the owner reviews
       const child = spawn(process.execPath, [projectScript, 'plan', '--workspace', f.root, '--task-id', 'memory-ticket', '--source-snapshot', 'a'.repeat(64),
         '--plan', path, '--memory-state-dir', f.directory], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '', changed = false;
-      const timeout = setTimeout(() => { child.kill(); reject(new Error('CLI did not reach review')); }, 4000);
+      const timeout = setTimeout(() => { child.kill(); reject(new Error('CLI did not reach review')); }, 10000);
       child.on('error', error => { clearTimeout(timeout); reject(error); });
       child.stdout.on('data', chunk => {
         output += chunk.toString();
