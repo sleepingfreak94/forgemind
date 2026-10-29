@@ -1,23 +1,17 @@
 node_modules
 dist/
-.askme-harness/
 .DS_Store
 
-# Ruflo local secrets and runtime data
+# Local secrets
 .env
 .env.local
 .env.*.local
-.claude-flow/data/
-.claude-flow/logs/
-.claude-flow/sessions/
 
 # Codex local configuration
 .codex/
-# Claude Flow runtime data
 # Environment variables
 
-# Local orchestration state and unpublished evidence
-.swarm/
+# Local state and unpublished evidence
 agentdb.rvf*
 ruvector.db*
 *.log

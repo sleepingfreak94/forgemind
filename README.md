@@ -6,6 +6,17 @@ ForgeMind is a local-first harness for supervised AI coding. It brings project m
 
 It gives you project memory with citations, isolated worktrees, explicit grants, durable receipts, validated edits, baseline/candidate checks, a fresh review, draft PRs, and a central brain shared by Claude Code, Cursor and the harness.
 
+## How a run works
+
+1. `npm run project:run` takes a task manifest.
+2. The planner writes a plan that you approve.
+3. The work can optionally be split into 1 to 8 ordered subtasks.
+4. Coding (single-call or host tools) happens only in `writePaths`.
+5. Baseline and candidate checks run.
+6. A fresh, independent review follows.
+7. A draft PR is optional.
+8. Every run is recorded in the central brain, the run prompts include the brain context, and lessons are proposed for your approval.
+
 [Contributing](docs/contributing.md) · [Architecture](docs/architecture.md) · [MIT license](LICENSE)
 
 ## Try the offline demo
@@ -230,8 +241,7 @@ This clears only the saved local record (fingerprints, timestamp, review ID). It
 
 - **Claude and Cursor:** covered above. See [Claude route](docs/claude-driver.md), [ADR-0014](docs/adr/ADR-0014-claude-subscription-route.md), [Cursor route](docs/cursor-route.md) and the [ACP adapter](docs/cursor-driver.md).
 - **Codex demo:** `npm run demo:codex`. See [driver instructions](docs/codex-driver.md) for the native probe.
-- **Enforced offline host (macOS):** `npm run test:host`, and `npm run probe:host -- /absolute/path/to/codex`. See [host enforcement](docs/host-enforcement.md). This host grants no provider access. The older `npm run harness -- "task"` launcher stays disabled.
-- **Ruflo diagnostic:** `npm run harness -- --check` inspects temporary MCP configuration. It is separate from the application host. State is ignored under `.askme-harness/`.
+- **Enforced offline host (macOS):** `npm run test:host`, and `npm run probe:host -- /absolute/path/to/codex`. See [host enforcement](docs/host-enforcement.md). This host grants no provider access.
 
 ## This repository
 

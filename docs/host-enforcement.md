@@ -40,7 +40,7 @@ Completion requires confirmed shutdown and another source/runtime/cancellation/d
 
 This is a trusted local owner model, not isolation from a hostile administrator or another unsandboxed process with the same UID. The installed executable, runtime libraries and host code are part of the trusted installation; keep them outside writable agent workspaces. Source snapshots are private copies, and pinned installation identity is rechecked, but path/hash checks are not an atomic defense against malicious host-side replacement. OS libraries and file metadata are platform allowances, not exact per-file project grants.
 
-Wall-clock and output caps do not impose hard CPU, RAM, thread or scratch-disk quotas. There are no provider/model-token spending permissions: all network is denied. No native subagents, MCP tools, PTYs, shell subprocesses or writable coding tasks are enabled. The older `npm run harness -- "task"` path now stops before resolving/launching an agent; `--check` remains an explicitly separate development diagnostic with ambient CLI configuration.
+Wall-clock and output caps do not impose hard CPU, RAM, thread or scratch-disk quotas. There are no provider/model-token spending permissions: all network is denied. No native subagents, MCP tools, PTYs, shell subprocesses or writable coding tasks are enabled.
 
 Before live coding, implement controlled provider egress/credential use and full-prompt spending reservations, then enforce exact write/command capabilities and validate a native task. Do not broaden network or fork permissions simply to make a task pass. Headroom activation and Cursor certification follow the raw enforced baseline. See [ADR-0010](./adr/ADR-0010-offline-host-enforcement.md).
 
