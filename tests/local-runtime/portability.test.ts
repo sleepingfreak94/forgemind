@@ -9,7 +9,8 @@ import { testSuite } from '../../src/local-runtime/test-suites.js';
 
 test('portable routing includes fixtures and leaves POSIX/native verification explicit', () => {
   const suite = testSuite('portable', 'win32', false);
-  assert.equal(suite.files.length, 0); assert.ok(!suite.directories.some(path => /policy|host-enforcement/.test(path)));
+  // Only the Windows sandbox file, whose contained tests skip unless a pinned launcher is provided.
+  assert.deepEqual(suite.files, ['dist/tests/host-enforcement/windows-sandbox.test.js']); assert.ok(!suite.directories.some(path => /policy|host-enforcement/.test(path)));
   for (const identity of [true, false]) {
     assert.throws(() => testSuite('all', 'win32', identity), /POSIX/);
     assert.throws(() => testSuite('host', 'win32', identity), /Seatbelt/);

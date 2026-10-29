@@ -14,6 +14,7 @@
     "test:portable": "npm run build && node scripts/run-tests.mjs portable",
     "verify:portable": "npm run doctor && npm run typecheck && npm run test:portable",
     "doctor": "node scripts/doctor.mjs",
+    "build:windows-launcher": "node scripts/build-windows-launcher.mjs",
     "project:init": "npm run build && node dist/src/local-runtime/project-cli.js init",
     "project:plan": "npm run build && node dist/src/local-runtime/project-cli.js plan",
     "project:prepare": "npm run build && node dist/src/local-runtime/project-cli.js prepare",

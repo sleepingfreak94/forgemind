@@ -70,4 +70,18 @@ The portable [project onboarding/planning CLI](./project-workflow.md) is also av
 
 Implement SID-based identity and private ACL-protected policy/artifact storage; explicit handling of reparse points, alternate data streams and device paths; a default-deny process/filesystem/network boundary; and independently supervised process-tree shutdown with durable evidence. Then test denied reads/writes/network, revocation, fencing, cancellation and restart recovery on Windows.
 
-[AppContainer](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation) and [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) are candidate building blocks. Job Objects provide lifecycle/resource controls; they do not substitute for per-process security. The backend is not implemented or certified by this portability change. Existing credential/egress/spend/write gates still apply to both drivers.
+The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md): an owner-built launcher that runs a command in a fresh [AppContainer](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation) inside a kill-on-close [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects). Phase 1a (the launcher, `src/host-enforcement/windows-sandbox.ts` and its tests) is implemented. Runs don't use it yet, so live coding and checks are still refused on Windows. Existing credential, egress, spend and write gates still apply to both drivers.
+
+## Windows sandbox tests
+
+In an elevated PowerShell (setup needs administrator once):
+
+```powershell
+New-Item -ItemType Directory -Force $env:USERPROFILE\forgemind-owner | Out-Null
+npm.cmd run build:windows-launcher -- $env:USERPROFILE\forgemind-owner
+$env:FORGEMIND_WINDOWS_LAUNCHER = "$env:USERPROFILE\forgemind-owner\forgemind-sandbox.exe"
+$env:FORGEMIND_WINDOWS_LAUNCHER_SHA256 = '<sha256 printed by the build>'
+node --test dist\tests\host-enforcement\windows-sandbox.test.js
+```
+
+Without the two variables, the contained tests are skipped and only the portable ones run. The launcher's digest is pinned before every run. Rebuild it and update the digest after any change to `sandbox-launcher.cs`.
