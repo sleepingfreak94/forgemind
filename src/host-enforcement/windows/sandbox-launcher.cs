@@ -146,6 +146,16 @@ static class Launcher {
   // The report and journal live in the owner's state root. No AppContainer or capability may do more there than the
   // read-attributes that setup grants, or a contained child could plant a report or rewrite the journal.
   static void PrivateFolder(string folder) {
+    // A NULL DACL grants everyone, AppContainers included, full access. .NET shows it as an Everyone rule, so read the raw descriptor.
+    IntPtr handle = CreateFile(folder, 0x20000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+    Check(handle != new IntPtr(-1), "open state root");
+    try {
+      int needed;
+      GetKernelObjectSecurity(handle, 4, null, 0, out needed);
+      byte[] bytes = new byte[needed];
+      Check(GetKernelObjectSecurity(handle, 4, bytes, needed, out needed), "read state root security");
+      if (new RawSecurityDescriptor(bytes, 0).DiscretionaryAcl == null) throw new ArgumentException("state root is reachable from AppContainers");
+    } finally { CloseHandle(handle); }
     foreach (FileSystemAccessRule rule in Directory.GetAccessControl(folder, AccessControlSections.Access).GetAccessRules(true, true, typeof(SecurityIdentifier))) {
       string value = rule.IdentityReference.Value;
       if (rule.AccessControlType == AccessControlType.Allow && (value.StartsWith("S-1-15-2-") || value.StartsWith("S-1-15-3-")) &&

@@ -140,4 +140,10 @@ test('a state root that any AppContainer can write is refused, so a child cannot
   const result = await runContained(w.launcher, w.command(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`), w.state);
   assert.notEqual(result.status, 'reaped'); assert.match(result.stderr, /reachable from AppContainers/);
   assert.equal(existsSync(marker), false); assert.deepEqual(readdirSync(w.state), []);
+  // A NULL DACL grants everyone without listing any rule.
+  const nullDacl = join(w.base, 'open-state'); mkdirSync(nullDacl);
+  assert.equal(spawnSync('powershell.exe', ['-NoProfile', '-Command',
+    `$a = Get-Acl -LiteralPath '${nullDacl}'; $a.SetSecurityDescriptorSddlForm('D:NO_ACCESS_CONTROL'); Set-Acl -LiteralPath '${nullDacl}' -AclObject $a`]).status, 0);
+  const open = await runContained(w.launcher, w.command(`require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran')`), nullDacl);
+  assert.notEqual(open.status, 'reaped'); assert.match(open.stderr, /reachable from AppContainers/); assert.equal(existsSync(marker), false);
 });
