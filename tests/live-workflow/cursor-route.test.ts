@@ -243,6 +243,23 @@ test('a symlinked cli-config.json is replaced without changing its target', asyn
   } finally { f.close(); }
 });
 
+test('synced Cursor plugins (and the MCP servers they bring) are removed before every call, without following links', async () => {
+  const f = fixture();
+  try {
+    const session = await open(f, 'Free'), plugins = join(f.profile, '.cursor', 'plugins');
+    mkdirSync(join(plugins, 'cache', 'cursor-public', 'figma'), { recursive: true });
+    writeFileSync(join(plugins, 'cache', 'cursor-public', 'figma', '.mcp.json'), JSON.stringify({ mcpServers: { figma: { url: 'https://mcp.figma.com/mcp' } } }));
+    launchIn(f, session);
+    assert.ok(!existsSync(plugins), 'the synced plugin is gone');
+    const elsewhere = mkdtempSync(join(f.root, 'else-'));
+    writeFileSync(join(elsewhere, 'keep'), 'owner file');
+    symlinkSync(elsewhere, plugins);
+    launchIn(f, session);
+    assert.ok(!existsSync(plugins), 'the link is removed');
+    assert.equal(readFileSync(join(elsewhere, 'keep'), 'utf8'), 'owner file', 'the link target is untouched');
+  } finally { f.close(); }
+});
+
 test('a symlinked profile .cursor is refused', async () => {
   const f = fixture();
   try {
