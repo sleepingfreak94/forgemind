@@ -130,6 +130,9 @@ export function lockCursorPermissions(profileDirectory: string, workDirectory: s
   replaceFile(work.dir, 'cli.json', JSON.stringify({ permissions: { allow, deny } }, null, 2) + '\n');
   // The profile can never add MCP servers; only the per-call work directory names the granted one.
   replaceFile(profile.dir, 'mcp.json', JSON.stringify({ mcpServers: {} }, null, 2) + '\n');
+  // Cursor syncs account and team plugins into .cursor/plugins, and a plugin brings its own MCP servers (Figma's
+  // mcp.figma.com) outside mcp.json. Remove them before every call; rm never follows a link, it removes the link itself.
+  for (const dir of [profile.dir, work.dir]) rmSync(join(dir, 'plugins'), { recursive: true, force: true });
   if (grant) replaceFile(work.dir, 'mcp.json', JSON.stringify({ mcpServers: { [CURSOR_MCP_SERVER]: { url: grant.url } } }, null, 2) + '\n');
   assertSameDirectory(profile);
   assertSameDirectory(work);
