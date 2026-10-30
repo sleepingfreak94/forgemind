@@ -80,10 +80,15 @@ The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md)
 In an elevated PowerShell, from the checkout:
 
 ```powershell
-npm.cmd run windows:setup -- $env:USERPROFILE\forgemind-owner --claude $env:USERPROFILE\.local\bin\claude.exe
+npm.cmd run windows:setup -- $env:USERPROFILE\forgemind-owner --claude $env:USERPROFILE\.local\bin\claude.exe `
+  --cursor $env:LOCALAPPDATA\cursor-agent\versions\2026.10.22-27dcf5f
 ```
 
-`--claude` is optional. It copies Claude Code for the contained Claude route (ADR-0017 phase 2a), and you need to re-run setup after updating Claude Code. Setup also loopback-exempts ForgeMind's two provider containers, so they can reach the host's allow-list proxy.
+`--claude` and `--cursor` are optional. They copy Claude Code and the Cursor CLI version folder for the contained provider routes (ADR-0017 phases 2a and 2b). Re-run setup after updating either CLI.
+
+Setup also loopback-exempts ForgeMind's two provider containers, so they can reach the host's allow-list proxy. It then installs WFP filters that limit those containers to ForgeMind's own loopback ports (47810–47841), and checks from inside each container that another loopback port is refused. No Windows account is created.
+
+The Cursor profile must be an owner-only folder outside your user folder, for example `C:\ForgeMind\cursor-profile` with inheritance removed. Sign in to it yourself with `cursor-agent login`, with `USERPROFILE`, `HOME` and `APPDATA` pointing into it and `AGENT_CLI_CREDENTIAL_STORE=file`.
 
 Setup does the following:
 1. Builds `bin\forgemind-sandbox.exe` from `src\host-enforcement\windows\*.cs` with the C# compiler that ships with Windows.

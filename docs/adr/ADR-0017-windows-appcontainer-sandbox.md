@@ -124,16 +124,36 @@ On Windows both call `launcher acl`:
 - A real `NativeClaudeModel.complete()` returned its structured answer in about 25 s. It ran contained, in one process, with no refused targets.
 - From the `forgemind.claude` container, a direct connection to `1.1.1.1:443` fails, and a CONNECT to another host is refused and reported.
 
-**Residual (needs explicit owner sign-off).**
-- The loopback exemption covers every listener on 127.0.0.1, not just the proxy and MCP ports. The test shows a container reaching an unrelated host listener. macOS pins one exact port.
-- The MCP endpoint takes a secret URL path, which mitigates this.
-- Closing it needs fixed ports plus per-package firewall rules, or accepting the residual.
+**Residual, closed in phase 2b.** The loopback exemption alone reaches every listener on 127.0.0.1. Phase 2b's loopback lock below limits it to ForgeMind's port range.
 
-**Cursor (2b) is blocked.**
-- Cursor's bundled `node.exe` runs contained.
-- Its `index.js` stalls synchronously early in start-up. That happens with no child processes or workers, with the file credential store, and even with its install folder writable.
-- Uncontained it works.
-- The cause is not yet found, so the Cursor route stays refused on Windows.
+## Phase 2b: loopback lock and the Cursor route
+
+**Loopback lock.**
+- Windows Firewall rules don't filter loopback: in the VM, block rules scoped to the container's package SID, even "block everything", left loopback reachable.
+- Raw WFP filters do. Setup runs `forgemind-sandbox loopback 47810 47841` (admin, once), which installs persistent filters in a ForgeMind sublayer at `ALE_AUTH_CONNECT_V4/V6`. For each fixed container they block every connection WFP flags as loopback (`FWP_CONDITION_FLAG_IS_LOOPBACK`) whose port is outside that range. The flag also covers the host's own interface addresses: matching only `127.0.0.0/8` and `::1` left a host listener reachable through the VM's LAN IPv4 and IPv6 link-local addresses (found in review, reproduced in the VM). Filter keys are derived from the container name, so re-running setup replaces them.
+- The proxy and the MCP endpoint bind the first free port in the range on Windows (`listenLoopback`).
+- Setup then proves the lock from inside each container: a listener in the range is reached, and one outside it is refused through `127.0.0.1`, `::1` and every address of the host's interfaces (`scripts/windows-loopback-check.mjs`). The Claude egress test now requires the refusal.
+- Residual: another local program that happens to listen on a port in the range is reachable, as are other ForgeMind runs' proxies (same allow-list).
+
+**Why Cursor hung.** Cursor's bundled Node (v24.22.1, libuv 1.52.1) spawns `rg.exe`, `git` and `reg.exe` with stdio pipes. Inside an AppContainer, libuv < 1.53 names those pipes outside `LOCAL\`, gets `ERROR_ACCESS_DENIED` and retries forever (fixed in libuv 1.53.0, commit 2cadaa401670; no Node release bundles it yet). A dedicated Windows account (Codex's elevated mode) was rejected: the owner's organisation does not allow local accounts.
+
+**The route.**
+- `windows:setup -- <owner> --cursor <version folder>` copies the Cursor CLI version folder to `runtime\cursor\<version>` and settles its `node.exe`. It also copies `src\host-enforcement\windows\stdio-files.cjs` beside it. The shim is part of the launcher source digest and is pinned in `windows-host.json`.
+- The contained CLI runs as `node.exe -r stdio-files.cjs index.js ...`. The shim routes piped child stdout/stderr through temp files in the container's own `AC\Temp` (Windows sets the container's `TEMP` there, writable only by that container; random names, opened exclusively) and replays them before `close` (`ChildProcess.prototype.spawn`, `spawnSync`, `execFileSync`, `execSync`), so no libuv pipe is ever created. A failed spawn still ends its streams and closes. `ipc` and extra pipes (`fork`) fail at once instead of hanging. Output arrives when the child exits, not streamed. Delete the shim once Cursor's Node bundles libuv ≥ 1.53; a cloud routine checks for that every few weeks.
+- `cursorSession.launch` on Windows returns a containment policy: write scratch and the profile; read the CLI through the runtime capability; up to 8 processes; the fixed `forgemind.cursor` container. The environment holds `SystemRoot`, `PATH` (System32), the real `LOCALAPPDATA`, `USERPROFILE`/`HOME`/`APPDATA` in the profile, `CI=1` (without a console Cursor blocks at start-up), the file credential store, `NODE_USE_ENV_PROXY=1` and the proxy variables, with `localhost` bypassed for Cursor's own worker server.
+- `NativeCursorModel` and the session's `status`/`about` checks start one relay per call for `CURSOR_PROXY_HOSTS` (`api2.cursor.sh`, `agentn.global.api5.cursor.sh`). `NativeCursorModel` records refused targets as `proxy-refused`.
+- Ownership checks use `isPrivate`/`isTrusted`. `PINNED_CURSOR_CLI_WINDOWS` pins 2026.10.22-27dcf5f (win32-arm64) by manifest; its Phase 0 review is pending, so receipts record `reviewedBuild: false`.
+
+**Verified in the VM** (`tests/host-enforcement/windows-cursor.test.ts`, with the loopback lock on):
+- the contained `status` and `about` report the owner's sign-in and plan;
+- a real `-p` request answers through the proxy;
+- the CLI's attempt to add itself to the user `PATH` (`reg add HKCU\Environment`) is denied.
+
+**Residual.**
+- The profile picks up Cursor plugins (here a Figma plugin) whose MCP servers it tries to reach. The proxy refuses them, but the retries cost about a minute per call.
+- Cursor writes its own state under the kept container's `AC` folder, which persists across runs (as for Claude). The shim's temp files land there too. A killed run can leave some behind; the next run's shim deletes those of processes that no longer exist before it starts anything, so one run does not read another's child output. A dead run's process ID that Windows has already reused for a live process keeps its files (rare; fails safe).
+- The sign-in checks (`status`, `about`) run before a run authority exists, so their refused targets are not recorded.
+- Setup's self-test listens on `::`; a host with IPv6 turned off fails setup (closed) rather than running unchecked.
 
 ## Verified in the VM (tests/host-enforcement/windows-sandbox.test.ts)
 
@@ -158,7 +178,7 @@ On Windows both call `launcher acl`:
 ## Limits
 
 - **What is still readable:** whatever already grants ALL APPLICATION PACKAGES, which covers much of `C:\Windows` and parts of HKLM and Program Files. RPC services that accept AppContainers are also reachable. LPAC is a later hardening step.
-- **Spawning with stdio pipes hangs:** when an AppContainer process spawns a child with stdio pipes, Node (libuv) retries its named pipe and hangs until the deadline instead of failing at once. It is still contained.
+- **Spawning with stdio pipes hangs:** when an AppContainer process spawns a child with stdio pipes, Node (libuv < 1.53) retries its named pipe and hangs until the deadline instead of failing at once. It is still contained. The Cursor route works around it with the stdio shim (phase 2b).
 - **Cost:** a contained run costs about 5 s in a 2-vCPU VM, mostly profile creation. The host's backup timer is `timeoutMs + 60 s`, and only catches a hung launcher.
 - **Hardlinks:** one ACL covers every name of a hardlinked file, so `runContained` refuses any file with `nlink > 1` in a granted tree.
 - **Quiet tree:** the grant plan is made once, at launch. A `.env`, `.git` or `.codex` created during a run, under a folder that had no denied entry, inherits the read grant. The worktree must be quiet while a check runs, which the single-writer rule already requires.
@@ -169,7 +189,6 @@ On Windows both call `launcher acl`:
 
 ## Next
 
-- **Phase 2b:** find why Cursor's start-up stalls in an AppContainer, then mirror 2a with `forgemind.cursor`.
 - **Phase 3:** worktree, git and gh, artifacts and a draft PR on Windows, then a full `project:run`.
 - **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 

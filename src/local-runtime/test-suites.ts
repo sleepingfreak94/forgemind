@@ -23,7 +23,7 @@ export function missingCodexFixtures(env: NodeJS.ProcessEnv = process.env): Revi
 
 export function testSuite(mode: string, platform: NodeJS.Platform, posixIdentity: boolean): TestSuite {
   const portable = ['dist/tests/context-engine', 'dist/tests/agent-drivers', 'dist/tests/local-runtime', 'dist/tests/project-workflow', 'dist/tests/memory'];
-  if (mode === 'portable') return { directories: portable, files: ['dist/tests/host-enforcement/windows-sandbox.test.js', 'dist/tests/host-enforcement/windows-checks.test.js', 'dist/tests/host-enforcement/windows-claude.test.js'], requiredCodexFixtures: [], maxRunMs: 300000 };
+  if (mode === 'portable') return { directories: portable, files: ['dist/tests/host-enforcement/windows-sandbox.test.js', 'dist/tests/host-enforcement/windows-checks.test.js', 'dist/tests/host-enforcement/windows-claude.test.js', 'dist/tests/host-enforcement/windows-cursor.test.js', 'dist/tests/host-enforcement/stdio-files.test.js'], requiredCodexFixtures: [], maxRunMs: 300000 };
   if (mode === 'all' || mode === 'local') {
     if (platform === 'win32' || !posixIdentity) throw new Error('Full policy tests require POSIX identity. Use npm run test:portable for deterministic fixtures.');
     return { directories: [...portable, 'dist/tests/policy', 'dist/tests/live-workflow'],

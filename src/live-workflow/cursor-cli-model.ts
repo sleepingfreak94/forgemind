@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { sha256 } from './validation.js';
 import { supervised } from './process.js';
 import { cursorStreamShape, parseCursorStream } from './cursor-stream.js';
-import { CURSOR_MCP_SERVER, assertCursorSession, assertPinnedCursorCli } from './cursor-session.js';
+import { CURSOR_MCP_SERVER, assertCursorSession, assertPinnedCursorCli, openCursorTunnel } from './cursor-session.js';
+import type { NativeTunnel } from './native-executor-tunnel.js';
 import type { CursorCli, CursorRunner, CursorSubscriptionSession } from './cursor-session.js';
 import { startMcpEndpoint } from './claude-mcp-server.js';
 import type { McpEndpoint } from './claude-mcp-server.js';
@@ -92,13 +93,16 @@ export class NativeCursorModel implements ModelPort {
     const promptBytes = Buffer.byteLength(prompt);
     if (promptBytes > task.maxPromptBytes) throw new Error('Task context exceeds prompt limit');
     const scratch = mkdtempSync(join(authority.directory, 'cursor-'));
-    let receipt: ActionReceipt | undefined;
+    let receipt: ActionReceipt | undefined, tunnel: NativeTunnel | undefined;
+    const refused: string[] = [];
     try {
       const source = this.options.source();
       const endpoint = call.mcp?.endpoint;
+      // Windows: the contained CLI reaches only CURSOR_PROXY_HOSTS through this per-call relay (ADR-0017 phase 2b).
+      tunnel = await openCursorTunnel(!this.options.runner, () => receipt?.check(), target => { if (refused.length < 20) refused.push(target); });
       const request = session.launch(cli, scratch, call.args, prompt,
         { timeoutMs: Math.min(task.maxRuntimeMs, 600000), maxOutputBytes: task.maxOutputBytes }, call.signal, () => receipt!.check(),
-        endpoint && { url: endpoint.url, port: endpoint.port, tools: call.mcp!.tools });
+        endpoint && { url: endpoint.url, port: endpoint.port, tools: call.mcp!.tools }, tunnel?.port);
       // One ForgeMind request per CLI invocation; upstream request count is unobservable without a broker.
       const requestNumber = authority.reserveRequest(promptBytes);
       receipt = authority.reserve({ kind: 'provider', source, detail: {
@@ -111,7 +115,11 @@ export class NativeCursorModel implements ModelPort {
       } });
       receipt.check();
       call.signal.throwIfAborted();
-      const result = await (this.options.runner ?? supervised)(request);
+      const result = await (this.options.runner ?? supervised)(request).finally(() => {
+        // Recorded even when the call fails: what the CLI tried to reach is the evidence a failure needs.
+        // Evidence must never replace the call's own outcome.
+        try { if (refused.length) authority.phase('proxy-refused', source, { provider: 'cursor', phase, targets: refused }); } catch {}
+      });
       if (call.mcp?.endpoint.fatal) throw call.mcp.endpoint.fatal;
       call.sourceAfter(source);
       if (result.code !== 0) {
@@ -138,6 +146,9 @@ export class NativeCursorModel implements ModelPort {
     } catch (error) {
       try { receipt?.finish('indeterminate'); } catch {}
       throw error;
-    } finally { rmSync(scratch, { recursive: true, force: true }); }
+    } finally {
+      await tunnel?.stop();
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 }

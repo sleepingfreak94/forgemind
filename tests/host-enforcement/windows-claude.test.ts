@@ -53,8 +53,8 @@ test('the Claude container reaches only the proxy, and the proxy only the allowe
   assert.equal(out.allowed, 'reached: HTTP/1.1 200 Connection Established');
   assert.ok(!String(out.otherHost).startsWith('reached'));
   assert.deepEqual(refused, ['CONNECT example.com:443 HTTP/1.1']);
-  // Residual (ADR-0017): a loopback exemption covers every 127.0.0.1 listener, not just the proxy port.
-  t.diagnostic(`other loopback listener: ${out.otherLoopback}`);
+  // Setup's WFP loopback lock: the exemption would reach every 127.0.0.1 listener, the lock only ForgeMind's range.
+  assert.ok(!String(out.otherLoopback).startsWith('reached'), `other loopback listener: ${out.otherLoopback}`);
 });
 
 test('two runs on the same fixed container take turns and both finish cleanly', windows, async t => {
