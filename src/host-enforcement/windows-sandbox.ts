@@ -68,8 +68,9 @@ export function assertNoHardlinks(paths: string[]): void {
 }
 
 /** Runs one command in a fresh AppContainer inside a kill-on-close job. Never falls back to an uncontained run. */
-export async function runContained(launcher: WindowsLauncher, command: ContainedCommand, stateRoot: string): Promise<ContainedResult> {
+export async function runContained(launcher: WindowsLauncher, command: ContainedCommand, stateRoot: string, signal?: AbortSignal): Promise<ContainedResult> {
   if (process.platform !== 'win32') throw new Error('The Windows sandbox requires Windows');
+  signal?.throwIfAborted();
   if (hashFile(launcher.path) !== launcher.digest) throw new Error('Launcher digest mismatch');
   canonical(stateRoot, 'state root');
   for (const path of [command.executable, command.cwd, ...command.readPaths, ...command.writePaths]) {
@@ -90,7 +91,9 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
   const output: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
   let total = 0, overLimit = false;
   // Killing the launcher closes its job handle, and the kernel then ends every contained process.
-  const timer = setTimeout(() => child.kill(), command.timeoutMs + GRACE_MS);
+  const timer = setTimeout(() => child.kill(), command.timeoutMs + GRACE_MS), abort = () => child.kill();
+  // Aborting kills the launcher too: no report, so the result is cleanup-uncertain and the caller sweeps.
+  signal?.addEventListener('abort', abort, { once: true });
   for (const name of ['stdout', 'stderr'] as const)
     child[name].on('data', (chunk: Buffer) => {
       total += chunk.length;
@@ -99,6 +102,7 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
     });
   const launcherExit = await new Promise<number | null>(resolve => { child.on('close', code => resolve(code)); child.on('error', () => resolve(null)); });
   clearTimeout(timer);
+  signal?.removeEventListener('abort', abort);
   let report: { status?: unknown; exitCode?: unknown; message?: unknown } = {};
   try { report = JSON.parse(readFileSync(reportPath, 'utf8')); } catch { /* a killed launcher leaves no report */ }
   rmSync(reportPath, { force: true });
@@ -107,7 +111,8 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
   const agrees = (report.status === 'reaped' && launcherExit === 0) ||
     (['deadline', 'error', 'cleanup-uncertain'].includes(report.status as string) && launcherExit === 3);
   let status: ContainedStatus = agrees ? report.status as ContainedStatus : 'cleanup-uncertain';
-  if (overLimit && status !== 'cleanup-uncertain') status = 'output-limit';
+  // Over the limit the launcher was killed, so there is no report; the caller sweeps as for cleanup-uncertain.
+  if (overLimit) status = 'output-limit';
   return { status, exitCode: agrees && typeof report.exitCode === 'number' ? report.exitCode : null,
     message: agrees && typeof report.message === 'string' ? report.message : '',
     stdout: Buffer.concat(output.stdout).toString('utf8'), stderr: Buffer.concat(output.stderr).toString('utf8') };
