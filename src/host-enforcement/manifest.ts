@@ -5,6 +5,7 @@ import type { DriverIntent } from '../agent-drivers/contracts.js';
 import { dataSnapshot, object, positive, serialize, string, validateScope } from '../context-engine/validation.js';
 import { offlineProfile } from './seatbelt.js';
 import { configurationSnapshot } from '../agent-drivers/cursor-wire.js';
+import { isTrusted } from './owner-acl.js';
 const prepared = new WeakSet<object>();
 
 export interface PinnedFile { path: string; digest: string; identity: string }
@@ -18,21 +19,27 @@ export interface HostPlan {
   supervisorNode: PinnedFile;
 }
 export function hashFile(path: string): string { return createHash('sha256').update(readFileSync(path)).digest('hex'); }
-function inspectFile(path: string): { path: string; identity: string } {
+// trust=false keeps only the identity comparison, for the 50 ms drift polls (a Windows ACL check starts the launcher).
+// An ACL edit changes the identity through ctime.
+function inspectFile(path: string, trust = true): { path: string; identity: string } {
   if (!isAbsolute(path) || path.includes('\0')) throw new Error('absolute file required');
   const canonical = realpathSync(path), stat = lstatSync(canonical);
-  if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o6022) || ![0, process.getuid!()].includes(stat.uid)) throw new Error('untrusted file');
+  if (!stat.isFile() || stat.nlink !== 1 || (trust && !isTrusted(canonical, stat))) throw new Error('untrusted file');
   const exact = lstatSync(canonical, { bigint: true });
   return { path: canonical, identity: [exact.dev, exact.ino, exact.size, exact.mode, exact.uid, exact.nlink, exact.mtimeNs, exact.ctimeNs].join(':') };
 }
 export function pinFile(path: string): PinnedFile {
   const before = inspectFile(path), digest = hashFile(before.path);
-  if (serialize(before) !== serialize(inspectFile(path))) throw new Error('file changed while pinning');
+  if (serialize(before) !== serialize(inspectFile(path, false))) throw new Error('file changed while pinning');
   return Object.freeze({ ...before, digest });
 }
 export function verifyFile(file: PinnedFile, hash = true): void {
-  const current = inspectFile(file.path);
-  if (current.path !== file.path || current.identity !== file.identity || (hash && hashFile(file.path) !== file.digest)) throw new Error('file identity changed');
+  const current = inspectFile(file.path, hash);
+  if (current.path !== file.path || current.identity !== file.identity || (hash && hashFile(file.path) !== file.digest)) {
+    const names = ['dev', 'ino', 'size', 'mode', 'uid', 'nlink', 'mtime', 'ctime'], before = file.identity.split(':'), after = current.identity.split(':');
+    const changed = current.path !== file.path ? ['path'] : names.filter((_, i) => before[i] !== after[i]);
+    throw new Error(`file identity changed (${changed.length ? changed.join(', ') : 'content'})`);
+  }
 }
 export function intentSnapshot(raw: DriverIntent): DriverIntent {
   const value = dataSnapshot(raw);

@@ -1,9 +1,10 @@
 // ForgeMind Windows sandbox launcher (ADR-0017). The owner builds it once with the in-box C# 5 compiler
-// (scripts/build-windows-launcher.mjs) and the host pins the binary by hash; it is never compiled at run time.
+// (npm run windows:setup) and the host pins the binary by hash; it is never compiled at run time.
 //   launcher run <base64url policy JSON>   run one command in a fresh AppContainer inside a kill-on-close job
 //   launcher sweep <journal directory>     remove grants and profiles left by a launcher that was killed
 //   launcher setup <directory>...          once, as administrator: let contained runs read the attributes of each
 //                                          directory and its ancestors (Node's realpath stats every path component)
+//   launcher acl user | acl private <path> | acl trusted <path>   ownership checks the host cannot make in Node
 // Child output goes to the inherited stdio; the trusted result goes only to policy.reportPath, which the child cannot open.
 using System;
 using System.Collections.Generic;
@@ -38,7 +39,7 @@ public class Journal {
   public string[] objects { get; set; }
 }
 
-static class Launcher {
+static partial class Launcher {
   [StructLayout(LayoutKind.Sequential)] struct BasicLimit {
     public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags;
     public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit;
@@ -103,7 +104,8 @@ static class Launcher {
       if (argv.Length == 2 && argv[0] == "run") return Run(json.Deserialize<Policy>(Encoding.UTF8.GetString(FromBase64Url(argv[1]))));
       if (argv.Length == 2 && argv[0] == "sweep") return Sweep(argv[1]);
       if (argv.Length >= 2 && argv[0] == "setup") return Setup(argv);
-      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>...");
+      if (argv.Length >= 2 && argv[0] == "acl") return Acl(argv);
+      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>... | acl user | acl private|trusted <path>");
       return 64;
     } catch (Exception error) {
       // Reached only before the report exists (or if writing it failed), so the host treats the run as unconfirmed.
@@ -143,25 +145,6 @@ static class Launcher {
       if (pair.Key.Length == 0 || pair.Key.IndexOf('=') >= 0 || pair.Key.IndexOf('\0') >= 0 || pair.Value == null || pair.Value.IndexOf('\0') >= 0) throw new ArgumentException("invalid environment");
   }
 
-  // The report and journal live in the owner's state root. No AppContainer or capability may do more there than the
-  // read-attributes that setup grants, or a contained child could plant a report or rewrite the journal.
-  static void PrivateFolder(string folder) {
-    // A NULL DACL grants everyone, AppContainers included, full access. .NET shows it as an Everyone rule, so read the raw descriptor.
-    IntPtr handle = CreateFile(folder, 0x20000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
-    Check(handle != new IntPtr(-1), "open state root");
-    try {
-      int needed;
-      GetKernelObjectSecurity(handle, 4, null, 0, out needed);
-      byte[] bytes = new byte[needed];
-      Check(GetKernelObjectSecurity(handle, 4, bytes, needed, out needed), "read state root security");
-      if (new RawSecurityDescriptor(bytes, 0).DiscretionaryAcl == null) throw new ArgumentException("state root is reachable from AppContainers");
-    } finally { CloseHandle(handle); }
-    foreach (FileSystemAccessRule rule in Directory.GetAccessControl(folder, AccessControlSections.Access).GetAccessRules(true, true, typeof(SecurityIdentifier))) {
-      string value = rule.IdentityReference.Value;
-      if (rule.AccessControlType == AccessControlType.Allow && (value.StartsWith("S-1-15-2-") || value.StartsWith("S-1-15-3-")) &&
-          ((int)rule.FileSystemRights & ~0x1000A0) != 0) throw new ArgumentException("state root is reachable from AppContainers");
-    }
-  }
 
   static int Run(Policy p) {
     Validate(p);
@@ -308,85 +291,6 @@ static class Launcher {
     return accounting.ActiveProcesses;
   }
 
-  const int ReadMask = 0x1200A9;
-
-  static bool Under(string path, string parent) {
-    string prefix = parent.EndsWith("\\") ? parent : parent + "\\";
-    return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && path.Length > prefix.Length;
-  }
-  static bool Denied(string path, string[] deny) {
-    foreach (string entry in deny) if (string.Equals(entry, path, StringComparison.OrdinalIgnoreCase)) return true;
-    return false;
-  }
-  static void PlanRead(string path, string[] deny, List<string> trees, List<string> objects) {
-    if (Denied(path, deny)) return;
-    bool above = false;
-    foreach (string entry in deny) if (Under(entry, path)) above = true;
-    if (!above) { trees.Add(path); return; }
-    objects.Add(path);
-    foreach (string entry in Directory.GetFileSystemEntries(path)) {
-      FileAttributes attributes = File.GetAttributes(entry);
-      if ((attributes & FileAttributes.ReparsePoint) != 0) continue; // never grant through a link
-      if ((attributes & FileAttributes.Directory) != 0) PlanRead(entry, deny, trees, objects);
-      else if (!Denied(entry, deny)) objects.Add(entry);
-    }
-  }
-
-  // Inheritable grant; SetNamedSecurityInfo propagates it to the existing tree below.
-  static void Grant(string path, SecurityIdentifier sid, FileSystemRights rights) {
-    if (Directory.Exists(path)) {
-      DirectorySecurity security = Directory.GetAccessControl(path, AccessControlSections.Access);
-      security.AddAccessRule(new FileSystemAccessRule(sid, rights, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-      Directory.SetAccessControl(path, security);
-    } else if (File.Exists(path)) {
-      FileSecurity security = File.GetAccessControl(path, AccessControlSections.Access);
-      security.AddAccessRule(new FileSystemAccessRule(sid, rights, AccessControlType.Allow));
-      File.SetAccessControl(path, security);
-    } else throw new FileNotFoundException("policy path missing");
-  }
-
-  // Adds (grant) or removes every ACE for sid on a window station or desktop handle (SE_WINDOW_OBJECT).
-  static void WindowAccess(IntPtr handle, SecurityIdentifier sid, int mask, bool grant) {
-    if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "window object");
-    IntPtr dacl, pointer;
-    int error = GetSecurityInfo(handle, 7, 4, IntPtr.Zero, IntPtr.Zero, out dacl, IntPtr.Zero, out pointer);
-    if (error != 0) throw new Win32Exception(error, "read window security");
-    byte[] bytes = new byte[GetSecurityDescriptorLength(pointer)];
-    Marshal.Copy(pointer, bytes, 0, bytes.Length); LocalFree(pointer);
-    RawAcl acl = new RawSecurityDescriptor(bytes, 0).DiscretionaryAcl;
-    for (int i = acl.Count - 1; i >= 0; i--) {
-      KnownAce ace = acl[i] as KnownAce;
-      if (ace != null && ace.SecurityIdentifier == sid) acl.RemoveAce(i);
-    }
-    if (grant) acl.InsertAce(acl.Count, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, mask, sid, false, null));
-    byte[] updated = new byte[acl.BinaryLength];
-    acl.GetBinaryForm(updated, 0);
-    error = SetSecurityInfo(handle, 7, 4, IntPtr.Zero, IntPtr.Zero, updated, IntPtr.Zero);
-    if (error != 0) throw new Win32Exception(error, "write window security");
-  }
-  static bool TryWindowAccess(IntPtr handle, SecurityIdentifier sid) {
-    try { WindowAccess(handle, sid, 0, false); return true; } catch (Exception) { return false; }
-  }
-
-  static bool Revoke(SecurityIdentifier sid, IEnumerable<string> trees, IEnumerable<string> objects) {
-    bool clean = true;
-    foreach (string path in objects) {
-      try { if (File.Exists(path) || Directory.Exists(path)) EditDacl(path, delegate (RawAcl acl) { return RemoveAces(acl, sid); }); }
-      catch (Exception) { clean = false; }
-    }
-    foreach (string path in trees) {
-      try {
-        if (Directory.Exists(path)) {
-          DirectorySecurity security = Directory.GetAccessControl(path, AccessControlSections.Access);
-          security.PurgeAccessRules(sid); Directory.SetAccessControl(path, security);
-        } else if (File.Exists(path)) {
-          FileSecurity security = File.GetAccessControl(path, AccessControlSections.Access);
-          security.PurgeAccessRules(sid); File.SetAccessControl(path, security);
-        }
-      } catch (Exception) { clean = false; }
-    }
-    return clean;
-  }
 
   // The one capability every contained run holds. Setup grants it read-attributes only, never file contents.
   static IntPtr RuntimeCapability() {
@@ -410,44 +314,6 @@ static class Launcher {
     return 0;
   }
 
-  // Adds an allow ACE to this object only. SetKernelObjectSecurity does not walk children, unlike
-  // SetNamedSecurityInfo, which would rewrite every file under a volume root.
-  static void DirectAce(string path, SecurityIdentifier sid, int mask) {
-    EditDacl(path, delegate (RawAcl acl) {
-      int position = acl.Count;
-      for (int i = 0; i < acl.Count; i++) {
-        CommonAce ace = acl[i] as CommonAce;
-        if (ace != null && ace.SecurityIdentifier == sid && ace.AccessMask == mask && (ace.AceFlags & AceFlags.Inherited) == 0) return false;
-        if ((acl[i].AceFlags & AceFlags.Inherited) != 0 && position == acl.Count) position = i;
-      }
-      // Explicit allows sit after explicit denies and before inherited ACEs, which keeps the ACL canonical.
-      acl.InsertAce(position, new CommonAce(AceFlags.None, AceQualifier.AccessAllowed, mask, sid, false, null));
-      return true;
-    });
-  }
-  static bool RemoveAces(RawAcl acl, SecurityIdentifier sid) {
-    bool changed = false;
-    for (int i = acl.Count - 1; i >= 0; i--) {
-      KnownAce ace = acl[i] as KnownAce;
-      if (ace != null && ace.SecurityIdentifier == sid && (ace.AceFlags & AceFlags.Inherited) == 0) { acl.RemoveAce(i); changed = true; }
-    }
-    return changed;
-  }
-  static void EditDacl(string path, Func<RawAcl, bool> edit) {
-    IntPtr handle = CreateFile(path, 0x60000, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
-    Check(handle != new IntPtr(-1), "open for security");
-    try {
-      int needed;
-      GetKernelObjectSecurity(handle, 4, null, 0, out needed);
-      byte[] bytes = new byte[needed];
-      Check(GetKernelObjectSecurity(handle, 4, bytes, needed, out needed), "read security");
-      RawSecurityDescriptor descriptor = new RawSecurityDescriptor(bytes, 0);
-      if (!edit(descriptor.DiscretionaryAcl)) return;
-      byte[] updated = new byte[descriptor.BinaryLength];
-      descriptor.GetBinaryForm(updated, 0);
-      Check(SetKernelObjectSecurity(handle, 4, updated), "write security");
-    } finally { CloseHandle(handle); }
-  }
 
   static int Sweep(string directory) {
     int failures = 0;

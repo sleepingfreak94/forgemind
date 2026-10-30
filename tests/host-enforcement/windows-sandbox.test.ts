@@ -23,7 +23,7 @@ test('the Windows sandbox refuses to run anywhere but Windows', { skip: process.
   await assert.rejects(runContained({ path: process.execPath, digest: 'a'.repeat(64) }, {} as ContainedCommand, tmpdir()), /requires Windows/);
 });
 
-// Needs an owner-built launcher (npm run build:windows-launcher) and an elevated shell, because setup grants
+// Needs the launcher that npm run windows:setup builds and an elevated shell, because setup grants
 // read-attributes on the temporary folder's ancestors (C:\ and C:\Users) once.
 const launcherPath = process.env.FORGEMIND_WINDOWS_LAUNCHER, launcherDigest = process.env.FORGEMIND_WINDOWS_LAUNCHER_SHA256;
 const contained = { skip: process.platform !== 'win32' || !launcherPath || !launcherDigest, timeout: 120000 };

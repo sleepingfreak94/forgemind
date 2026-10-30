@@ -1,6 +1,6 @@
 # ADR-0017: Windows AppContainer sandbox for checks
 
-- Status: Proposed. Phase 1a (launcher, wrapper and Windows tests) is implemented; nothing is wired into a run yet.
+- Status: Proposed. Phase 1a (launcher, wrapper and Windows tests) and phase 1b (setup, Windows ownership checks, contained single-process checks) are implemented. Live coding is not wired yet.
 - Date: 2026-10-30
 - Basis: the owner authorized building a Windows sandbox, designed and reviewed with Opus 5.5. The design was checked against a Windows 11 ARM VM (build 26300).
 
@@ -24,7 +24,7 @@ The alternatives were weighed:
 
 ## Decision
 
-A small C# 5 launcher, `src/host-enforcement/windows/sandbox-launcher.cs`, runs one command contained. The owner builds it once with the in-box `csc.exe` (`npm run build:windows-launcher -- <folder outside the repo>`). The host pins the printed SHA-256 with `pinWindowsLauncher` and checks it again before every run. Nothing is compiled at run time. The source is reviewed. The binary isn't reproducible, because the in-box compiler has no `/deterministic`, so the binary digest is whatever the owner's build printed.
+A small C# 5 launcher, `src/host-enforcement/windows/sandbox-launcher.cs` and `sandbox-acl.cs`, runs one command contained. Each machine builds it from the reviewed source with the in-box `csc.exe` during a one-time setup (`npm run windows:setup -- <owner folder outside the repo>`). The host pins that build's SHA-256 and checks it again before every run. Nothing is compiled at run time. The binary isn't reproducible, because the in-box compiler has no `/deterministic`. That is acceptable because nobody runs a binary built on another machine (owner decision, 2026-10-30). A signed prebuilt release can come later.
 
 For each run the launcher does the following:
 1. It refuses a state root where any AppContainer or capability SID may do more than read attributes. It then opens the report exclusively, before any child exists.
@@ -50,6 +50,50 @@ The review found the first version trusted any file at `reportPath`.
 If the launcher is killed, the kernel kills the job. The journal stays behind, and `launcher sweep <state root>` revokes its grants and profile. If the report is missing, the host reports `cleanup-uncertain`.
 
 `launcher setup <folders>` is a one-time step run as administrator. It gives the `forgemindRuntime` capability read-attributes and traverse, but no contents, on each folder and its ancestors, because Node's `realpath` stats every path component. It uses `SetKernelObjectSecurity` so a volume root's tree is never walked.
+
+## Phase 1b: setup, ownership and checks
+
+Owner decisions (2026-10-30):
+- each machine builds its own launcher;
+- runs use an owner-private copy of `node.exe`;
+- the provider route reaches the internet through an allow-list proxy (phase 2);
+- both the Claude and Cursor CLIs.
+
+**Setup.** `scripts/windows-setup.mjs`, run elevated once, does the following:
+1. Builds the launcher into `<owner>\bin`.
+2. Copies `node.exe` into `<owner>\runtime`.
+3. Creates the launcher state root `<owner>\sandbox-state`.
+4. Removes inheritance and grants only the user, SYSTEM and Administrators.
+5. Runs `launcher setup` on the runtime, state and any extra folders.
+6. Locks the folder before anything is built or run in it, because setup runs elevated: it takes ownership of the folder and everything below, resets every ACE, then grants only the user, SYSTEM and Administrators (review finding B1). A handle someone opened before the lock keeps its access, so the owner folder must sit in a folder only the owner can reach, such as the user profile.
+7. Grants the runtime capability read and execute on `runtime\` once. A per-run grant there would propagate to `node.exe`, change its ctime, and trip the pin's drift check (seen in the VM).
+8. Checks that the folder, `bin\`, the launcher and the state root are private and that `runtime\` is trusted, then writes `windows-host.json`.
+
+`loadWindowsHost` then:
+- refuses paths outside the folder;
+- refuses a launcher source digest other than the checkout's (`launcherSourceDigest`);
+- pins the launcher and node.exe;
+- checks that the folder, the file, the state root, `bin\` and the launcher are private, and that `runtime\` is trusted;
+- sweeps leftovers from killed runs.
+
+Every contained run can read all of `runtime\`, so it must hold only executables meant for the sandbox (today `node.exe`).
+
+**Ownership.** `owner-acl.ts` translates POSIX checks:
+- `isPrivate` replaces "owner uid and no group or world bits";
+- `isTrusted` replaces "no group or world write, owned by root or the owner".
+
+On Windows both call `launcher acl`:
+- **private:** the owner is the user, SYSTEM or Administrators. Every allow ACE belongs to one of them (or CREATOR OWNER), or grants at most read-attributes and traverse. Inherit-only ACEs count too: every user may traverse folders by default, so a folder that hands future files to others is not private.
+- **trusted:** additionally allows TrustedInstaller as owner, and other SIDs that hold no write, delete, WRITE_DAC or WRITE_OWNER rights.
+- A NULL DACL or an unsupported ACE type fails.
+
+`privateDirectory`, the run ledger, `PolicyStore` and `pinFile` use them. The owner identity is the uid or the user SID. Drift polls compare identity only (an ACL edit changes ctime), and full checks run when a file is pinned and when it is verified with a hash.
+
+**Checks.**
+- `supervised()` on win32 calls `supervisedWindows`, where the launcher is the supervisor. It polls pins, aborts by killing the launcher and then sweeps, and maps statuses to the macOS failure reasons.
+- `runChecks` on win32 runs only the pinned `node.exe`, under `windowsCheckPolicy`: read the tree, write scratch, deny `.git`, `.codex` and `.env*`, one process. Its environment holds only `SystemRoot`, `USERPROFILE` and `HOME` (pointing at scratch), the real `LOCALAPPDATA`, and `FORGEMIND_NESTED_SANDBOX`. Windows points an AppContainer's `TEMP` and `TMP` at `<LOCALAPPDATA>\Packages\<container>\AC\Temp`, which the profile creates and deletes. With `LOCALAPPDATA` set to scratch, that folder didn't exist (seen in the VM).
+- `node-project` checks are refused.
+- `runtimeFiles` returns only the executable, and refuses a DLL beside it, because the loader searches that folder first.
 
 ## Verified in the VM (tests/host-enforcement/windows-sandbox.test.ts)
 
@@ -85,19 +129,13 @@ If the launcher is killed, the kernel kills the job. The journal stays behind, a
 
 ## Next
 
-- **1b:** run plain checks through this launcher on Windows, behind the existing gates.
-  - Pin it in `process.ts`.
-  - Add a Windows branch in the supervisor, with an environment containing `SystemRoot`, `LOCALAPPDATA`, `TEMP`/`TMP` and `USERPROFILE` set to scratch.
-  - Skip the uid and mode checks in `manifest.ts`, keeping the link checks.
-  - `node-project` checks and provider CLIs stay refused.
-- **Phase 2:** provider CLIs, with an egress choice for the owner: per-SID firewall rules, or a loopback exemption plus a host-side CONNECT proxy that allows only provider hosts.
-- **Phase 3:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
+- **Phase 2:** the Claude CLI (2a), then the Cursor CLI (2b), each reaching only provider hosts through a host-side allow-list CONNECT proxy and a loopback exemption. Needs stdin in the container and the window-station lock for concurrent runs.
+- **Phase 3:** worktree, git and gh, artifacts and a draft PR on Windows, then a full `project:run`.
+- **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 
 ## Owner questions
 
-1. Is an owner-built, non-reproducible binary acceptable? The alternatives are a signed prebuilt binary or a deterministic compiler.
-2. Which provider egress option should phase 2 use?
+Answered 2026-10-30: owner-built per machine (1), allow-list proxy (2), private node.exe copy (4), both the Claude and Cursor CLIs (5).
+
 3. Should elevated sessions be refused once testing no longer needs SSH?
-4. Should a run use an owner-private copy of `node.exe` (the current approach), or should setup grant the runtime capability on `C:\Program Files\nodejs`?
-5. Which Windows builds of Claude Code and Cursor should be reviewed?
 6. Smart App Control is in evaluation mode on the VM. If it switches on, it blocks the unsigned launcher. Is it in scope?
