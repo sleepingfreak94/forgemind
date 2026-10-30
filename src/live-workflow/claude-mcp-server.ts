@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
+import { listenLoopback } from './loopback.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CodingToolResult } from './coding-tools.js';
 
@@ -66,7 +67,7 @@ export async function startMcpEndpoint(tools: readonly McpTool[], call: (name: s
   };
   const server = createServer((req, res) => { handle(req, res).catch(e => { fail(e); if (!res.headersSent) reply(res, 500); }); });
   server.headersTimeout = 10000; server.requestTimeout = 60000; // bounds receiving a request, not a long host_check reply
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => resolve()); });
+  await listenLoopback(server);
   const address = server.address();
   if (!address || typeof address !== 'object') throw new Error('MCP endpoint did not bind');
   port = address.port;

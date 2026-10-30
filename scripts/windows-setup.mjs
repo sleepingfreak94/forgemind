@@ -1,13 +1,15 @@
 // One-time Windows owner setup (ADR-0017), run from an elevated PowerShell:
-//   npm.cmd run windows:setup -- <owner folder outside the repo> [--claude <claude.exe>] [folder a contained run must stat]...
+//   npm.cmd run windows:setup -- <owner folder outside the repo> [--claude <claude.exe>] [--cursor <cursor-agent version folder>]
+//     [folder a contained run must stat]...
 // Builds the sandbox launcher from this checkout's reviewed source with the in-box C# compiler, copies node.exe,
 // makes the folder owner-only and writes windows-host.json, which runs pin. Each machine pins its own build.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashFile } from '../dist/src/host-enforcement/manifest.js';
-import { LAUNCHER_SOURCE, launcherSourceDigest } from '../dist/src/host-enforcement/windows-host.js';
+import { LAUNCHER_SOURCE, launcherSourceDigest, WINDOWS_LOOPBACK_PORTS } from '../dist/src/host-enforcement/windows-host.js';
+import { checkLoopbackLock } from './windows-loopback-check.mjs';
 
 const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 const fail = message => { process.stderr.write(`windows-setup: ${message}\n`); process.exit(2); };
@@ -16,10 +18,16 @@ const run = (file, args) => execFileSync(file, args, { encoding: 'utf8', windows
 const system32 = name => join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', name);
 
 if (process.platform !== 'win32') fail('run this on Windows');
-const [target, ...rest0] = process.argv.slice(2);
-const claudeAt = rest0.indexOf('--claude'), claudeSource = claudeAt >= 0 ? rest0[claudeAt + 1] : undefined;
-const extra = claudeAt >= 0 ? rest0.filter((_, i) => i !== claudeAt && i !== claudeAt + 1) : rest0;
-if (claudeAt >= 0 && (!claudeSource || !isAbsolute(claudeSource) || !existsSync(claudeSource))) fail('--claude needs the absolute path of claude.exe');
+const [target, ...extra] = process.argv.slice(2);
+const option = name => {
+  const at = extra.indexOf(name);
+  if (at < 0) return undefined;
+  const [, value] = extra.splice(at, 2);
+  if (!value || !isAbsolute(value) || !existsSync(value)) fail(`${name} needs an absolute existing path`);
+  return value;
+};
+const claudeSource = option('--claude'), cursorSource = option('--cursor');
+if (cursorSource && (!existsSync(join(cursorSource, 'node.exe')) || !existsSync(join(cursorSource, 'index.js')))) fail('--cursor needs a cursor-agent version folder (node.exe, index.js)');
 if (!target || !isAbsolute(target)) fail('pass an absolute owner folder');
 mkdirSync(target, { recursive: true });
 const folder = realpathSync.native(target), rest = relative(repository, folder);
@@ -63,6 +71,14 @@ settle(node, ['-e', '0']);
 // Claude Code is one executable; the private copy is what runs pin (the installer's copy updates itself).
 const claude = claudeSource ? join(runtime, 'claude', 'claude.exe') : undefined;
 if (claude) { mkdirSync(dirname(claude)); copyFileSync(claudeSource, claude); settle(claude, ['--version']); }
+// Cursor is a version folder (its own node.exe, index.js, rg.exe); the copy is pinned by manifest at session open.
+// The stdio shim it preloads sits beside it, outside the manifest (ADR-0017 phase 2b).
+const cursor = cursorSource ? join(runtime, 'cursor', basename(cursorSource)) : undefined, shim = cursor ? join(runtime, 'cursor', 'stdio-files.cjs') : undefined;
+if (cursor) {
+  cpSync(cursorSource, cursor, { recursive: true, dereference: false, errorOnExist: true });
+  copyFileSync(join(LAUNCHER_SOURCE, 'stdio-files.cjs'), shim);
+  settle(join(cursor, 'node.exe'), ['-e', '0']);
+}
 // Contained Node stats every ancestor of the paths it opens; this grants read-attributes only, never contents.
 const { capability } = JSON.parse(run(launcher, ['setup', runtime, stateRoot, ...extra.map(path => realpathSync.native(path))]));
 if (!/^S-1-15-3-[0-9-]+$/.test(capability)) fail('unexpected capability SID');
@@ -75,13 +91,22 @@ for (const name of ['forgemind.claude', 'forgemind.cursor']) {
   if (!/^S-1-15-2-[0-9-]+$/.test(sid)) fail('unexpected container SID');
   run(system32('CheckNetIsolation.exe'), ['LoopbackExempt', '-a', `-p=${sid}`]);
 }
+// The exemption reaches every 127.0.0.1 listener; persistent WFP filters narrow it to ForgeMind's own port range.
+run(launcher, ['loopback', String(WINDOWS_LOOPBACK_PORTS.first), String(WINDOWS_LOOPBACK_PORTS.last)]);
 for (const [mode, path] of [['private', folder], ['private', bin], ['private', launcher], ['private', stateRoot], ['trusted', runtime], ['trusted', node],
-  ...(claude ? [['trusted', claude]] : [])]) {
+  ...(claude ? [['trusted', claude]] : []), ...(cursor ? [['trusted', cursor], ['trusted', join(cursor, 'node.exe')], ['trusted', shim]] : [])]) {
   const check = JSON.parse(run(launcher, ['acl', mode, path]));
   if (check.ok !== true) fail(`${path} is not ${mode}: ${check.reason}`);
 }
 
+// Prove the lock before recording the host: a contained probe must reach the range and nothing else on loopback.
+for (const name of ['forgemind.claude', 'forgemind.cursor']) {
+  const problem = await checkLoopbackLock({ launcher, node, stateRoot, folder, container: name });
+  if (problem) fail(`loopback lock for ${name}: ${problem}`);
+}
+
 const host = { version: 1, launcher: { path: launcher, sha256: hashFile(launcher) }, sourceSha256: launcherSourceDigest(),
-  node: { path: node, sha256: hashFile(node) }, ...(claude ? { claude: { path: claude, sha256: hashFile(claude) } } : {}), stateRoot };
+  node: { path: node, sha256: hashFile(node) }, ...(claude ? { claude: { path: claude, sha256: hashFile(claude) } } : {}),
+  ...(cursor ? { cursor: { directory: cursor, shim: { path: shim, sha256: hashFile(shim) } } } : {}), stateRoot };
 writeFileSync(join(folder, 'windows-host.json'), JSON.stringify(host, null, 2) + '\n');
 process.stdout.write(`${JSON.stringify({ windowsHost: folder, ...host }, null, 2)}\n`);
