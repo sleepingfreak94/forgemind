@@ -113,7 +113,8 @@ static partial class Launcher {
       if (argv.Length >= 2 && argv[0] == "setup") return Setup(argv);
       if (argv.Length >= 2 && argv[0] == "acl") return Acl(argv);
       if (argv.Length == 2 && argv[0] == "sid") return ContainerSid(argv[1]);
-      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>... | acl user | acl private|trusted <path> | sid <fixed container>");
+      if (argv.Length >= 1 && argv[0] == "loopback") return Loopback(argv);
+      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>... | acl user | acl private|trusted <path> | sid <fixed container> | loopback <first port> <last port>");
       return 64;
     } catch (Exception error) {
       // Reached only before the report exists (or if writing it failed), so the host treats the run as unconfirmed.
