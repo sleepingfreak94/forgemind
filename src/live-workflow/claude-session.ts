@@ -4,6 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync }
 import { homedir, userInfo } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { supervised } from './process.js';
+import { isPrivate, isTrusted } from '../host-enforcement/owner-acl.js';
 import type { ProcessRequest } from './process.js';
 
 /** Reviewed Claude Code build (ADR-0014). A different binary needs a new Phase 0 review. */
@@ -12,6 +13,17 @@ export const REVIEWED_CLAUDE_CLI = Object.freeze({
   versionOutput: '2.1.309 (Claude Code)',
   sha256: '5eadc0009cdcdbc0d06e58110d7b2baf88ced6088b1c33a60a21217fe410619c',
 });
+/** Windows build, pinned 2026-10-30 from the owner's Windows 11 ARM VM. Contained conformance only (ADR-0017 phase 2a):
+ * the ADR-0014 Phase 0 review (terms, flags, stream shape) is pending, so its receipts record reviewedBuild: false. */
+export const PINNED_CLAUDE_CLI_WINDOWS = Object.freeze({
+  version: '2.1.314',
+  versionOutput: '2.1.314 (Claude Code)',
+  sha256: '7bb0bc6be25e71e7aa3be2dfa537fd4c9c06d4565eb4446b6b748a74ea0d3a28',
+});
+/** Hosts the contained Claude CLI may reach through the host's allow-list proxy (Windows). */
+export const CLAUDE_PROXY_HOSTS = Object.freeze(['api.anthropic.com']);
+const windows = process.platform === 'win32';
+const pinnedBuild = () => windows ? PINNED_CLAUDE_CLI_WINDOWS : REVIEWED_CLAUDE_CLI;
 export type ReviewedClaudeBuild = { readonly version: string; readonly versionOutput: string; readonly sha256: string };
 /** Only `pinClaudeCli` and `pinClaudeConformanceCli` create one; plain objects are refused at launch. */
 export interface ClaudeCli { readonly path: string; readonly version: string; readonly sha256: string; readonly reviewed: boolean }
@@ -25,7 +37,7 @@ const inside = (root: string, path: string) => { const r = relative(root, path);
 /** Pin the unmodified installed binary by canonical path, exact version and content hash.
  * Only the reviewed build is accepted. */
 export function pinClaudeCli(executable: string): ClaudeCli {
-  return pinBuild(executable, REVIEWED_CLAUDE_CLI);
+  return pinBuild(executable, pinnedBuild());
 }
 /** For conformance fakes only; production code must never call it. Runs the same pinning checks
  * against the supplied build; the result has `reviewed: false` unless the digest equals the reviewed one. */
@@ -33,12 +45,14 @@ export function pinClaudeConformanceCli(executable: string, build: ReviewedClaud
   return pinBuild(executable, build);
 }
 function pinBuild(executable: string, build: ReviewedClaudeBuild): ClaudeCli {
-  if (!isAbsolute(executable) || realpathSync(executable) !== executable) throw new Error('Canonical Claude executable required');
+  if (!isAbsolute(executable) || (windows ? realpathSync.native : realpathSync)(executable) !== executable) throw new Error('Canonical Claude executable required');
   const stat = lstatSync(executable);
-  if (!stat.isFile() || !(stat.mode & 0o111) || stat.mode & 0o022) throw new Error('Claude executable must be a non-writable regular file');
+  if (!stat.isFile() || (windows ? !executable.endsWith('.exe') || !isTrusted(executable, stat) : !(stat.mode & 0o111) || stat.mode & 0o022))
+    throw new Error('Claude executable must be a non-writable regular file');
   const digest = createHash('sha256').update(readFileSync(executable)).digest('hex');
   if (digest !== build.sha256) throw new Error('Claude executable is not the reviewed build');
-  const version = execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 15000, env: { PATH: '/usr/bin:/bin' } }).trim();
+  const version = execFileSync(executable, ['--version'], { encoding: 'utf8', timeout: 15000, windowsHide: true,
+    env: windows ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : { PATH: '/usr/bin:/bin' } }).trim();
   if (version !== build.versionOutput) throw new Error('Claude CLI version is not reviewed');
   const cli = Object.freeze({ path: executable, version: build.version, sha256: digest, reviewed: digest === REVIEWED_CLAUDE_CLI.sha256 });
   pinned.add(cli);
@@ -91,12 +105,30 @@ export class ClaudeSubscriptionSession {
   get subscriptionType(): string { return this.#state().subscriptionType; }
   /** Child launch for one invocation; the profile is shared, everything writable else is per-call scratch. */
   launch(cli: ClaudeCli, scratch: string, args: string[], input: string, limits: { timeoutMs: number; maxOutputBytes: number },
-    signal: AbortSignal, check: () => void, mcpPort?: number): ProcessRequest {
+    signal: AbortSignal, check: () => void, mcpPort?: number, proxyPort?: number): ProcessRequest {
     const state = this.#state();
     assertPinnedClaudeCli(cli);
     if (cli !== state.cli) throw new Error("Claude CLI differs from the session's pinned build");
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
     for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
+    if (windows) {
+      // ADR-0017: the fixed forgemind.claude container is the only one setup loopback-exempted, so it alone reaches the
+      // host proxy (CLAUDE_PROXY_HOSTS) and the MCP port; it has no internet capability, so nothing else leaves.
+      // The CLI copy is readable through the runtime capability; it writes only scratch and the profile.
+      if (proxyPort !== undefined && (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) throw new Error('Invalid proxy port');
+      const containment = { readPaths: [], writePaths: [scratch, state.profileDirectory], denyPaths: [], activeProcessLimit: 1, container: 'forgemind.claude' as const };
+      return {
+        executable: cli.path, executableSha256: cli.sha256, args, cwd: work, input, signal, check, ...limits, containment,
+        profile: JSON.stringify({ ...containment, mcpPort: mcpPort ?? null, proxyPort: proxyPort ?? null }),
+        env: {
+          SystemRoot: process.env.SystemRoot ?? 'C:\\Windows', LOCALAPPDATA: process.env.LOCALAPPDATA ?? '', USERPROFILE: scratch, HOME: scratch,
+          CLAUDE_CONFIG_DIR: state.profileDirectory, CLAUDE_CODE_TMPDIR: tmp,
+          DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          CLAUDE_CODE_MAX_RETRIES: '0',
+          ...(proxyPort ? { HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, NO_PROXY: '127.0.0.1' } : {}),
+        },
+      };
+    }
     return {
       executable: cli.path, executableSha256: cli.sha256, args, cwd: work, input, signal, check, ...limits,
       profile: claudeInferenceProfile(cli, scratch, state.profileDirectory, state.home, state.userCacheDirectory, mcpPort),
@@ -131,14 +163,15 @@ export async function openClaudeSubscriptionSession(options: {
 }): Promise<ClaudeSubscriptionSession> {
   const { profileDirectory, cli } = options;
   assertPinnedClaudeCli(cli);
-  if (!isAbsolute(profileDirectory) || realpathSync(profileDirectory) !== profileDirectory) throw new Error('Canonical Claude profile directory required');
+  if (!isAbsolute(profileDirectory) || (windows ? realpathSync.native : realpathSync)(profileDirectory) !== profileDirectory) throw new Error('Canonical Claude profile directory required');
   const stat = lstatSync(profileDirectory);
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || stat.mode & 0o077) throw new Error('Claude profile must be an owner-only directory');
+  if (!stat.isDirectory() || !isPrivate(profileDirectory, stat)) throw new Error('Claude profile must be an owner-only directory');
   for (const root of options.separateFrom ?? [])
     if (inside(root, profileDirectory) || inside(profileDirectory, root))
       throw new Error('Claude profile must be separate from project source, run state and worktrees');
   const home = realpathSync(homedir());
-  const userCacheDirectory = realpathSync(execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8' }).trim());
+  // The cache directory feeds only the macOS profile.
+  const userCacheDirectory = windows ? home : realpathSync(execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8' }).trim());
   const state: SessionState = { cli, profileDirectory, home, userCacheDirectory, subscriptionType: 'unknown', closed: false };
   const session = mint(state);
   const scratch = mkdtempSync(join(options.scratchRoot, 'claude-status-'));

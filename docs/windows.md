@@ -80,8 +80,10 @@ The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md)
 In an elevated PowerShell, from the checkout:
 
 ```powershell
-npm.cmd run windows:setup -- $env:USERPROFILE\forgemind-owner
+npm.cmd run windows:setup -- $env:USERPROFILE\forgemind-owner --claude $env:USERPROFILE\.local\bin\claude.exe
 ```
+
+`--claude` is optional. It copies Claude Code for the contained Claude route (ADR-0017 phase 2a), and you need to re-run setup after updating Claude Code. Setup also loopback-exempts ForgeMind's two provider containers, so they can reach the host's allow-list proxy.
 
 Setup does the following:
 1. Builds `bin\forgemind-sandbox.exe` from `src\host-enforcement\windows\*.cs` with the C# compiler that ships with Windows.

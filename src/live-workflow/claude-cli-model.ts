@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { sha256 } from './validation.js';
 import { supervised } from './process.js';
 import { claudeFailureSummary, claudeStreamShape, parseClaudeStream } from './claude-stream.js';
-import { assertClaudeSession, assertPinnedClaudeCli } from './claude-session.js';
+import { assertClaudeSession, assertPinnedClaudeCli, CLAUDE_PROXY_HOSTS } from './claude-session.js';
+import { createNativeTunnel } from './native-executor-tunnel.js';
+import type { NativeTunnel } from './native-executor-tunnel.js';
 import type { ClaudeCli, ClaudeRunner, ClaudeSubscriptionSession } from './claude-session.js';
 import { startMcpEndpoint } from './claude-mcp-server.js';
 import type { McpEndpoint } from './claude-mcp-server.js';
@@ -79,12 +81,16 @@ export class NativeClaudeModel implements ModelPort {
       '--setting-sources', '', '--disable-slash-commands', '--no-session-persistence',
       '--permission-prompts', 'none', '--system-prompt', call.mcp ? TOOLS_SYSTEM_PROMPT : SYSTEM_PROMPT];
     const scratch = mkdtempSync(join(authority.directory, 'claude-'));
-    let receipt: ActionReceipt | undefined;
+    let receipt: ActionReceipt | undefined, tunnel: NativeTunnel | undefined;
+    const refused: string[] = [];
     try {
       const source = this.options.source();
+      // Windows: the contained CLI reaches only CLAUDE_PROXY_HOSTS through this per-call relay (ADR-0017 phase 2a).
+      if (process.platform === 'win32' && !this.options.runner)
+        tunnel = await createNativeTunnel(0, () => receipt?.check(), CLAUDE_PROXY_HOSTS, target => { if (refused.length < 20) refused.push(target); });
       const request = session.launch(cli, scratch, args, prompt,
         { timeoutMs: Math.min(task.maxRuntimeMs, 600000), maxOutputBytes: task.maxOutputBytes }, call.signal, () => receipt!.check(),
-        call.mcp?.endpoint.port);
+        call.mcp?.endpoint.port, tunnel?.port);
       // One ForgeMind request per CLI invocation; upstream request count is unobservable without a broker.
       const requestNumber = authority.reserveRequest(promptBytes);
       receipt = authority.reserve({ kind: 'provider', source, detail: {
@@ -97,7 +103,10 @@ export class NativeClaudeModel implements ModelPort {
       } });
       receipt.check();
       call.signal.throwIfAborted();
-      const result = await (this.options.runner ?? supervised)(request);
+      const result = await (this.options.runner ?? supervised)(request).finally(() => {
+        // Recorded even when the call fails: what the CLI tried to reach is the evidence a failure needs.
+        if (refused.length) authority.phase('proxy-refused', source, { provider: 'anthropic', phase, targets: refused });
+      });
       if (call.mcp?.endpoint.fatal) throw call.mcp.endpoint.fatal;
       call.sourceAfter(source);
       if (result.code !== 0) {
@@ -125,6 +134,6 @@ export class NativeClaudeModel implements ModelPort {
     } catch (error) {
       try { receipt?.finish('indeterminate'); } catch {}
       throw error;
-    } finally { rmSync(scratch, { recursive: true, force: true }); }
+    } finally { await tunnel?.stop(); rmSync(scratch, { recursive: true, force: true }); }
   }
 }

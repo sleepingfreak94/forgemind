@@ -1,6 +1,6 @@
 # ADR-0017: Windows AppContainer sandbox for checks
 
-- Status: Proposed. Phase 1a (launcher, wrapper and Windows tests) and phase 1b (setup, Windows ownership checks, contained single-process checks) are implemented. Live coding is not wired yet.
+- Status: Proposed. Phase 1a (launcher, wrapper and Windows tests) and phase 1b (setup, Windows ownership checks, contained single-process checks) and phase 2a (the contained Claude CLI route through an allow-list proxy) are implemented. `project:run` does not load the Windows host yet (phase 3), and the Cursor route is blocked (phase 2b).
 - Date: 2026-10-30
 - Basis: the owner authorized building a Windows sandbox, designed and reviewed with Opus 5.5. The design was checked against a Windows 11 ARM VM (build 26300).
 
@@ -95,6 +95,46 @@ On Windows both call `launcher acl`:
 - `node-project` checks are refused.
 - `runtimeFiles` returns only the executable, and refuses a DLL beside it, because the loader searches that folder first.
 
+## Phase 2a: the Claude route
+
+**Container.**
+- `windows:setup -- <owner> --claude <claude.exe>` copies Claude Code (one executable) to `runtime\claude\` and settles it like `node.exe`. The installer's copy updates itself, so runs pin the private copy.
+- Setup gives two fixed containers, `forgemind.claude` and `forgemind.cursor`, a loopback exemption (`CheckNetIsolation LoopbackExempt`, admin, once).
+- A policy may name one of them as `container`. The launcher then keeps that profile instead of deleting it and journals `keep`.
+- Runs of the same container take turns through a `Global\` mutex, across logon sessions. Otherwise one run's cleanup would revoke another's grants.
+  - A run that waits 30 s gets a written `error` report ("fixed container busy"), not a missing one, so the host doesn't sweep.
+  - While holding the mutex, a run first sweeps leftovers of dead runs, so it never inherits a dead run's grants on the shared SID.
+- Sweep now skips a journal that a live launcher still holds open (sharing violation). A sweep can no longer revoke a running command's grants.
+- A kept profile's `%LOCALAPPDATA%\Packages\<name>\AC` folder persists across runs, and Windows points the container's `TEMP` there. It's writable only by that container, but it isn't per-run scratch (residual).
+- The window-station and desktop ACL edits are serialised by a session mutex, which fixes the concurrency race noted below.
+
+**Egress.**
+- The CONNECT relay (`native-executor-tunnel.ts`) now takes an exact host allow-list on port 443 and reports refused targets. Codex keeps `api.openai.com`.
+- On Windows, `NativeClaudeModel` starts one relay per call for `CLAUDE_PROXY_HOSTS` (`api.anthropic.com`). It passes the relay through `HTTPS_PROXY` and records refused targets as `proxy-refused` phase evidence.
+- The container has no internet capability, so a client that ignores the proxy fails.
+
+**Session.**
+- `claudeSession.launch` on Windows returns a containment policy: write scratch and the profile; read the CLI through the runtime capability; one process; the fixed container.
+- Its environment holds `SystemRoot`, the real `LOCALAPPDATA`, `USERPROFILE`/`HOME` set to scratch, `CLAUDE_CONFIG_DIR`, the same `DISABLE_*` and no-retry settings as macOS, and the proxy variables.
+- Pinning uses `isTrusted` and `PINNED_CLAUDE_CLI_WINDOWS` (2.1.314, win32-arm64). Only its contained conformance is checked here; the ADR-0014 Phase 0 review (terms, flags, stream shape) is pending, so receipts record `reviewedBuild: false`.
+- `runContained` now passes stdin into the container. The child inherits the open pipe and creates none, and the prompt arrives correctly.
+
+**Verified in the VM.**
+- Contained `claude auth status` reports the owner's sign-in.
+- A real `NativeClaudeModel.complete()` returned its structured answer in about 25 s. It ran contained, in one process, with no refused targets.
+- From the `forgemind.claude` container, a direct connection to `1.1.1.1:443` fails, and a CONNECT to another host is refused and reported.
+
+**Residual (needs explicit owner sign-off).**
+- The loopback exemption covers every listener on 127.0.0.1, not just the proxy and MCP ports. The test shows a container reaching an unrelated host listener. macOS pins one exact port.
+- The MCP endpoint takes a secret URL path, which mitigates this.
+- Closing it needs fixed ports plus per-package firewall rules, or accepting the residual.
+
+**Cursor (2b) is blocked.**
+- Cursor's bundled `node.exe` runs contained.
+- Its `index.js` stalls synchronously early in start-up. That happens with no child processes or workers, with the file credential store, and even with its install folder writable.
+- Uncontained it works.
+- The cause is not yet found, so the Cursor route stays refused on Windows.
+
 ## Verified in the VM (tests/host-enforcement/windows-sandbox.test.ts)
 
 - **Allowed:** reading source and writing scratch.
@@ -122,14 +162,14 @@ On Windows both call `launcher acl`:
 - **Cost:** a contained run costs about 5 s in a 2-vCPU VM, mostly profile creation. The host's backup timer is `timeoutMs + 60 s`, and only catches a hung launcher.
 - **Hardlinks:** one ACL covers every name of a hardlinked file, so `runContained` refuses any file with `nlink > 1` in a granted tree.
 - **Quiet tree:** the grant plan is made once, at launch. A `.env`, `.git` or `.codex` created during a run, under a folder that had no denied entry, inherits the read grant. The worktree must be quiet while a check runs, which the single-writer rule already requires.
-- **Concurrent runs:** they edit the shared window-station and desktop ACLs by read-modify-write, unlocked and outside the journal. A race can drop another run's ACE, which fails closed, or leave a dead SID's ACE behind.
-- **Sweep during a live run:** it revokes that run's grants, which also fails closed.
+- **Concurrent runs:** they edit the shared window-station and desktop ACLs by read-modify-write. Since phase 2a, a session mutex serialises those edits. Before that, a race could drop another run's ACE.
+- **Sweep during a live run:** since phase 2a it skips journals a live launcher holds.
 - **Leftover ACEs:** window-station and desktop ACEs for a killed run's SID can remain. The SID is random and its profile is deleted, so nothing can use them.
 - **Elevation:** the tests run elevated over SSH. Setup needs an administrator once; runs themselves don't.
 
 ## Next
 
-- **Phase 2:** the Claude CLI (2a), then the Cursor CLI (2b), each reaching only provider hosts through a host-side allow-list CONNECT proxy and a loopback exemption. Needs stdin in the container and the window-station lock for concurrent runs.
+- **Phase 2b:** find why Cursor's start-up stalls in an AppContainer, then mirror 2a with `forgemind.cursor`.
 - **Phase 3:** worktree, git and gh, artifacts and a draft PR on Windows, then a full `project:run`.
 - **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 

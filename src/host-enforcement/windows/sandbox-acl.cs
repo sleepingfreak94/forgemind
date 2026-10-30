@@ -6,6 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Threading;
 
 static partial class Launcher {
   // The report and journal live in the owner's state root. No AppContainer or capability may do more there than the
@@ -185,6 +186,31 @@ static partial class Launcher {
       Check(GetKernelObjectSecurity(handle, info, bytes, needed, out needed), "read security");
       return bytes;
     } finally { CloseHandle(handle); }
+  }
+
+  // Setup loopback-exempts these, so only they can reach the host's provider proxy (CheckNetIsolation, admin).
+  static bool FixedContainer(string name) { return name == "forgemind.claude" || name == "forgemind.cursor"; }
+  static int ContainerSid(string name) {
+    if (!FixedContainer(name)) throw new ArgumentException("unknown fixed container");
+    IntPtr derived;
+    int error = DeriveAppContainerSidFromAppContainerName(name, out derived);
+    if (error != 0) throw new Win32Exception(error, "AppContainer SID");
+    string sid = new SecurityIdentifier(derived).Value;
+    FreeSid(derived);
+    Print(new Dictionary<string, object> { { "name", name }, { "sid", sid } });
+    return 0;
+  }
+
+  // The window station and desktop DACLs are edited read-modify-write and are shared by every run in the session.
+  static IDisposable WindowTurn() { return new Turn(@"Local\ForgeMindWindowAccess"); }
+  sealed class Turn : IDisposable {
+    readonly Mutex mutex;
+    public Turn(string name) {
+      mutex = new Mutex(false, name);
+      try { if (!mutex.WaitOne(30000)) throw new TimeoutException("window access busy"); }
+      catch (AbandonedMutexException) { }
+    }
+    public void Dispose() { mutex.ReleaseMutex(); mutex.Dispose(); }
   }
 
   static void Print(Dictionary<string, object> value) { Console.Out.WriteLine(json.Serialize(value)); }
