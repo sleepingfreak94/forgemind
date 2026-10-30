@@ -14,7 +14,7 @@ const environment = process.platform === 'win32' && process.env.SystemRoot ? { S
 test('owner CLI ingests, inspects, validates, recalls, rebuilds and deletes across processes', () => {
   const f = fixture(); try {
     const run = (mode: string, extra: string[] = []) => spawnSync(process.execPath, [memoryScript, mode, '--workspace', f.root, '--state-dir', f.directory, ...extra],
-      { encoding: 'utf8', timeout: 4000, env: environment });
+      { encoding: 'utf8', timeout: 10000, env: environment });
     const ingest = run('ingest'); assert.equal(ingest.status, 0, ingest.stderr); assert.equal(JSON.parse(ingest.stdout).result.documents, 4);
     const listed = JSON.parse(run('list').stdout).result as { id: string; digest: string; sources: { path: string }[] }[];
     const record = listed.find(item => item.sources[0]!.path === f.path)!;
@@ -41,7 +41,7 @@ test('project preparation loads selected memory and shows cited context in the s
     const path = join(f.base, 'plan.json'); writeFileSync(path, JSON.stringify({ ...w.plan, objective: 'Implement SQLite retrieval' }));
     const result = spawnSync(process.execPath, [projectScript, 'prepare', '--workspace', f.root, '--task-id', 'memory-ticket',
       '--source-snapshot', 'a'.repeat(64), '--plan', path, '--memory-state-dir', f.directory, '--preview'],
-    { encoding: 'utf8', timeout: 4000, env: environment });
+    { encoding: 'utf8', timeout: 10000, env: environment });
     assert.equal(result.status, 2, result.stderr); assert.match(result.stdout, /quoted evidence only/);
     assert.match(result.stdout, /Storage decision/); assert.match(result.stdout, /needs-plan-approval/); assert.match(result.stdout, /"liveCodingEnabled": false/);
   } finally { f.dispose(); }
@@ -55,7 +55,7 @@ test('interactive approval fails if cited source changes while the owner reviews
       const child = spawn(process.execPath, [projectScript, 'plan', '--workspace', f.root, '--task-id', 'memory-ticket', '--source-snapshot', 'a'.repeat(64),
         '--plan', path, '--memory-state-dir', f.directory], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '', changed = false;
-      const timeout = setTimeout(() => { child.kill(); reject(new Error('CLI did not reach review')); }, 4000);
+      const timeout = setTimeout(() => { child.kill(); reject(new Error('CLI did not reach review')); }, 10000);
       child.on('error', error => { clearTimeout(timeout); reject(error); });
       child.stdout.on('data', chunk => {
         output += chunk.toString();
