@@ -19,12 +19,17 @@ export interface ContainedCommand {
   /** 1 also forbids creating any child process, like the macOS check profile. */
   activeProcessLimit: number;
   maxOutputBytes: number;
+  /** A fixed container from windows:setup, which alone may reach the loopback provider proxy. Omitted: a fresh random one. */
+  container?: 'forgemind.claude' | 'forgemind.cursor';
+  /** Written to the command's stdin; omitted, stdin is empty. The child inherits the open pipe, it does not create one. */
+  input?: string;
 }
 export type ContainedStatus = 'reaped' | 'deadline' | 'error' | 'cleanup-uncertain' | 'output-limit';
 export interface ContainedResult { status: ContainedStatus; exitCode: number | null; stdout: string; stderr: string; message: string }
 
 // The launcher enforces timeoutMs itself from the moment the command starts. This backup only catches a hung launcher, so
 // it also covers profile creation (about 5 s in a 2-vCPU VM) and ACL propagation over the granted trees.
+// A fixed container may also wait up to 30 s for its turn.
 // shortcut: fixed 60 s, enough for a source tree with no node_modules; scale it with tree size when node-project checks land.
 const GRACE_MS = 60000;
 
@@ -84,10 +89,11 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
   const id = randomUUID(), reportPath = join(stateRoot, `${id}.report`), journalPath = join(stateRoot, `${id}.journal`);
   const policy = { executable: command.executable, args: command.args, cwd: command.cwd, env: command.env, readPaths: command.readPaths,
     writePaths: command.writePaths, denyPaths: command.denyPaths, timeoutMs: command.timeoutMs, activeProcessLimit: command.activeProcessLimit,
-    reportPath, journalPath };
+    reportPath, journalPath, ...(command.container ? { container: command.container } : {}) };
   const encoded = Buffer.from(JSON.stringify(policy)).toString('base64url');
-  const child = spawn(launcher.path, ['run', encoded], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, shell: false,
+  const child = spawn(launcher.path, ['run', encoded], { stdio: [command.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true, shell: false,
     env: process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {} });
+  if (child.stdin) { child.stdin.on('error', () => {}); child.stdin.end(command.input); }
   const output: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
   let total = 0, overLimit = false;
   // Killing the launcher closes its job handle, and the kernel then ends every contained process.
@@ -95,7 +101,7 @@ export async function runContained(launcher: WindowsLauncher, command: Contained
   // Aborting kills the launcher too: no report, so the result is cleanup-uncertain and the caller sweeps.
   signal?.addEventListener('abort', abort, { once: true });
   for (const name of ['stdout', 'stderr'] as const)
-    child[name].on('data', (chunk: Buffer) => {
+    child[name]!.on('data', (chunk: Buffer) => {
       total += chunk.length;
       if (total > command.maxOutputBytes) { overLimit = true; child.kill(); return; }
       output[name].push(chunk);

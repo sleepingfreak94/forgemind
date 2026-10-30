@@ -65,3 +65,17 @@ test('revocation closes all idle tunnels and idempotent stop closes listener', a
   revoked = true; await closed; await tunnel.stop(); await tunnel.stop();
   assert.equal(s.destroyed, true);
 });
+test('CONNECT tunnel takes an exact host allow-list and reports refused targets', async () => {
+  await assert.rejects(createNativeTunnel(0, () => {}, []), /Invalid tunnel hosts/);
+  await assert.rejects(createNativeTunnel(0, () => {}, ['*.anthropic.com']), /Invalid tunnel hosts/);
+  const refused: string[] = [];
+  const tunnel = await createNativeTunnel(0, () => {}, ['api.anthropic.com'], target => refused.push(target));
+  try {
+    for (const frame of ['CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n',
+      'CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: evil.example:443\r\n\r\n',
+      'CONNECT api.anthropic.com:80 HTTP/1.1\r\nHost: api.anthropic.com:80\r\n\r\n',
+      'CONNECT api.\u0007openai.com:443 HTTP/1.1\r\nHost: x:443\r\n\r\n']) await rejected(tunnel.port, frame);
+    // The mismatched Host header is reported too; the CONNECT line itself was allowed.
+    assert.deepEqual(refused, ['CONNECT api.openai.com:443 HTTP/1.1', 'CONNECT api.anthropic.com:443 HTTP/1.1', 'CONNECT api.anthropic.com:80 HTTP/1.1', 'CONNECT api.?openai.com:443 HTTP/1.1']);
+  } finally { await tunnel.stop(); }
+});
