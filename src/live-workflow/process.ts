@@ -20,7 +20,7 @@ export interface ProcessRequest {
   signal?: AbortSignal;
   check?: () => void;
   /** Windows only: what the AppContainer may read and write. `profile` then holds its JSON for receipts. */
-  containment?: Pick<ContainedCommand, 'readPaths' | 'writePaths' | 'denyPaths' | 'activeProcessLimit'>;
+  containment?: Pick<ContainedCommand, 'readPaths' | 'writePaths' | 'denyPaths' | 'activeProcessLimit' | 'container'>;
 }
 export async function supervised(
   request: ProcessRequest,
