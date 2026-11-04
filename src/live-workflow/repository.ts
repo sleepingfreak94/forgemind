@@ -258,16 +258,24 @@ export function commitTicketChanges(root: string, expectedSourceIdentity: string
   if (committed.identity !== expectedSourceIdentity || dirtyPaths(info.root).length) throw new Error('Committed source does not match reviewed content');
   return committed;
 }
+/** POSIX: a plain absolute path with an execute bit. Windows: a drive-absolute .exe (NTFS has no execute bit). */
+export function isHelperExecutablePath(path: string, platform = process.platform): boolean {
+  if (platform === 'win32') return /^[A-Za-z]:\\(?:[A-Za-z0-9_.() -]+\\)*[A-Za-z0-9_.() -]+\.exe$/i.test(path);
+  return /^\/[A-Za-z0-9_./-]+$/.test(path) && (lstatSync(path).mode & 0o111) !== 0;
+}
+/** Git runs a credential helper through its shell. Windows paths may hold spaces ("Program Files"), so they are quoted. */
+export function credentialHelperCommand(ghPath: string, platform = process.platform): string {
+  return `${platform === 'win32' ? `"${ghPath.replaceAll('\\', '/')}"` : ghPath} auth git-credential`;
+}
 function credentialArgs(options: PublishOptions): string[] {
   const helper = options.gitCredentialHelper;
   if (!helper) return [];
   const { ghPath, sha256 } = helper;
-  if (!/^\/[A-Za-z0-9_./-]+$/.test(ghPath) || realpathSync(ghPath) !== ghPath || !lstatSync(ghPath).isFile() ||
-      !(lstatSync(ghPath).mode & 0o111) || !/^[a-f0-9]{64}$/.test(sha256) ||
+  if (!isHelperExecutablePath(ghPath) || realpathSync(ghPath) !== ghPath || !lstatSync(ghPath).isFile() || !/^[a-f0-9]{64}$/.test(sha256) ||
       createHash('sha256').update(readFileSync(ghPath)).digest('hex') !== sha256) throw new Error('Unverified GitHub credential helper');
   // Fixed Git helper syntax, no ! shell helper and no caller-supplied arguments.
   return ['-c', 'credential.helper=', '-c', 'credential.https://github.com.helper=',
-    '-c', `credential.https://github.com.helper=${ghPath} auth git-credential`];
+    '-c', `credential.https://github.com.helper=${credentialHelperCommand(ghPath)}`];
 }
 function verifyCandidate(input: DraftPullRequestInput): RepositoryInfo {
   const info = discoverRepository(input.root);
