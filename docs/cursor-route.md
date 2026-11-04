@@ -89,7 +89,7 @@ There is no Grok 4.7 tools-mode run yet.
 ## Limits
 
 - **Credential lockdown and residual risk:** a live canary probe on 2026-10-23 showed that, without the lockdown, ask mode's read tool read a canary file planted in the profile, where the login lives. With the deny-all lockdown, the same probe run through the real route code from an unlocked profile config got "Permission denied" from the read tool, and the canary appeared in no output. This is not a guarantee: it relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process itself with open `*:443` egress, and tool use is rejected by the stream parser only after a call. Keep this profile dedicated to ForgeMind, and sign out and back in if you suspect misuse.
-- Each session is bound to the workspace it was opened for. A personal-plan allowlist check can't be reused for another repository.
+- Each session is bound to the workspace it was opened for and can't be reused for another repository.
 - The CLI keeps chats, projects and ACP sessions in the profile, with no ephemeral mode, so prompts that include source excerpts persist there.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed.
 - Print mode has no JSON-schema option; the answer must parse and validate.

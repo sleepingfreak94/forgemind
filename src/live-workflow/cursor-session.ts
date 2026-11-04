@@ -208,7 +208,7 @@ export class CursorSubscriptionSession {
       },
     };
   }
-  /** A session is bound to the workspace its plan tier and allowlist were checked for. */
+  /** A session is bound to the workspace its plan tier was checked for. */
   assertWorkspace(workspace: string): void {
     if (realpathSync(workspace) !== this.#state().workspace) throw new Error('Cursor session was opened for a different workspace');
   }
@@ -229,8 +229,8 @@ export function assertCursorSession(value: unknown): asserts value is CursorSubs
   value.assertActive();
 }
 
-/** Validate the owner-private profile, ask the sandboxed CLI whether it is signed in and on which plan,
- * Only the sign-in line and plan tier are read. Any workspace may run on either plan (owner decision, 2026-11-05). */
+/** Validate the owner-private profile and ask the sandboxed CLI whether it is signed in and on which plan. Only the
+ * sign-in line and plan tier are read. Any workspace may run on either plan (owner decision, 2026-11-05). */
 export async function openCursorSubscriptionSession(options: {
   profileDirectory: string; cli: CursorCli; scratchRoot: string; workspace: string;
   separateFrom?: readonly string[]; signal?: AbortSignal; runner?: CursorRunner;
