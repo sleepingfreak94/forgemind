@@ -3,6 +3,11 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathS
 import { basename, isAbsolute, join, relative, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { supervised } from './process.js';
+import { isPrivate, isTrusted } from '../host-enforcement/owner-acl.js';
+import { windowsHost } from '../host-enforcement/windows-host.js';
+import { pinFile } from '../host-enforcement/manifest.js';
+import { createNativeTunnel } from './native-executor-tunnel.js';
+import type { NativeTunnel } from './native-executor-tunnel.js';
 import type { ProcessRequest } from './process.js';
 
 /** Reviewed Cursor CLI build (docs/cursor-route-plan.md Phase 0): the whole version directory is pinned. */
@@ -10,6 +15,15 @@ export const REVIEWED_CURSOR_CLI = Object.freeze({
   version: '2026.10.22-27dcf5f',
   manifestSha256: '84d8f8c27a8e33e868e17c4c7ce82094fbf0e628e8d08d9e084915aa1803dd07',
 });
+/** Windows build, pinned 2026-10-30 from the owner's Windows 11 ARM VM (setup's private copy). Contained conformance
+ * only (ADR-0017 phase 2b): the Phase 0 review is pending, so its receipts record reviewedBuild: false. */
+export const PINNED_CURSOR_CLI_WINDOWS = Object.freeze({
+  version: '2026.10.22-27dcf5f',
+  manifestSha256: 'c5065b1088005cae7a92c6f25c75e7a1f02c46ab7684ebcdfbfb3ceece1befbf',
+});
+/** Hosts the contained Cursor CLI may reach through the host's allow-list proxy (Windows): the API and the agent backend. */
+export const CURSOR_PROXY_HOSTS = Object.freeze(['api2.cursor.sh', 'agentn.global.api5.cursor.sh']);
+const windows = process.platform === 'win32';
 export type ReviewedCursorBuild = { readonly version: string; readonly manifestSha256: string };
 /** Only the pin functions create one; plain objects are refused at launch. */
 export interface CursorCli {
@@ -32,7 +46,8 @@ export function cursorBuildManifest(root: string): string {
       const path = join(directory, entry.name);
       if (entry.isSymbolicLink()) throw new Error('Cursor CLI directory contains a symlink');
       if (entry.isDirectory()) walk(path);
-      else if (entry.isFile()) { if (lstatSync(path).mode & 0o022) throw new Error('Cursor CLI file is group or world writable'); files.push(path); }
+      // Windows has no mode bits; pinBuild checks the copy's ACL instead (setup keeps it in the owner-controlled runtime).
+      else if (entry.isFile()) { if (!windows && lstatSync(path).mode & 0o022) throw new Error('Cursor CLI file is group or world writable'); files.push(path); }
       else throw new Error('Cursor CLI directory contains a special file');
     }
   };
@@ -42,15 +57,16 @@ export function cursorBuildManifest(root: string): string {
   return hash.digest('hex');
 }
 /** Pin the reviewed, unmodified installed build by canonical version directory and manifest digest. */
-export function pinCursorCli(directory: string): CursorCli { return pinBuild(directory, REVIEWED_CURSOR_CLI); }
+export function pinCursorCli(directory: string): CursorCli { return pinBuild(directory, windows ? PINNED_CURSOR_CLI_WINDOWS : REVIEWED_CURSOR_CLI); }
 /** For conformance fakes only; production code must never call it. */
 export function pinCursorConformanceCli(directory: string, build: ReviewedCursorBuild): CursorCli { return pinBuild(directory, build); }
 function pinBuild(directory: string, build: ReviewedCursorBuild): CursorCli {
-  if (!isAbsolute(directory) || realpathSync(directory) !== directory || basename(directory) !== build.version)
+  if (!isAbsolute(directory) || (windows ? realpathSync.native : realpathSync)(directory) !== directory || basename(directory) !== build.version)
     throw new Error('Canonical Cursor CLI version directory required');
-  const node = join(directory, 'node'), entry = join(directory, 'index.js');
+  const node = join(directory, windows ? 'node.exe' : 'node'), entry = join(directory, 'index.js');
   for (const file of [node, entry]) if (!lstatSync(file).isFile()) throw new Error('Cursor CLI entry point missing');
-  if (!(lstatSync(node).mode & 0o111)) throw new Error('Cursor CLI runtime is not executable');
+  if (windows ? !isTrusted(directory, lstatSync(directory)) || !isTrusted(node, lstatSync(node)) : !(lstatSync(node).mode & 0o111))
+    throw new Error(windows ? 'Cursor CLI copy must be owner-controlled' : 'Cursor CLI runtime is not executable');
   const digest = cursorBuildManifest(directory);
   if (digest !== build.manifestSha256) throw new Error('Cursor CLI is not the reviewed build');
   const cli = Object.freeze({ directory, node, entry, version: build.version, manifestSha256: digest,
@@ -83,7 +99,7 @@ function cursorConfigDirectory(parent: string): CheckedDirectory {
   const dir = join(parent, '.cursor');
   let stat = lstatSync(dir, { throwIfNoEntry: false });
   if (!stat) { mkdirSync(dir, { mode: 0o700 }); stat = lstatSync(dir); }
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o022) !== 0)
+  if (!stat.isDirectory() || (windows ? !isPrivate(dir, stat) : stat.uid !== process.getuid?.() || (stat.mode & 0o022) !== 0))
     throw new Error(`Cursor ${dir} (.cursor) must be a real directory owned by the current user`);
   return { dir, dev: stat.dev, ino: stat.ino };
 }
@@ -147,15 +163,39 @@ export class CursorSubscriptionSession {
   get company(): boolean { return this.#state().company; }
   /** Child launch for one invocation; the pinned build is re-verified and everything writable is per-call scratch or the profile. */
   launch(cli: CursorCli, scratch: string, args: string[], input: string, limits: { timeoutMs: number; maxOutputBytes: number },
-    signal: AbortSignal, check: () => void, mcp?: { url: string; port: number; tools: readonly string[] }): ProcessRequest {
+    signal: AbortSignal, check: () => void, mcp?: { url: string; port: number; tools: readonly string[] }, proxyPort?: number): ProcessRequest {
     const state = this.#state();
     assertPinnedCursorCli(cli);
     if (cli !== state.cli) throw new Error("Cursor CLI differs from the session's pinned build");
     if (cursorBuildManifest(cli.directory) !== cli.manifestSha256) throw new Error('Cursor CLI changed since it was pinned');
     if (mcp !== undefined && (typeof mcp.url !== 'string' || !mcp.url.startsWith(`http://127.0.0.1:${mcp.port}/mcp/`))) throw new Error('Invalid Cursor MCP grant');
     const tmp = join(scratch, 'tmp'), work = join(scratch, 'work');
-    for (const directory of [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
+    for (const directory of windows ? [work] : [tmp, work]) mkdirSync(directory, { mode: 0o700, recursive: true });
     lockCursorPermissions(state.profileDirectory, work, mcp && { url: mcp.url, tools: mcp.tools });
+    if (windows) {
+      // ADR-0017: the fixed forgemind.cursor container reaches only loopback (the host proxy for CURSOR_PROXY_HOSTS and
+      // the MCP port, inside setup's loopback lock). The CLI copy is readable through the runtime capability.
+      if (proxyPort !== undefined && (!Number.isSafeInteger(proxyPort) || proxyPort < 1024 || proxyPort > 65535)) throw new Error('Invalid proxy port');
+      const shim = windowsHost().cursorShim;
+      if (!shim) throw new Error('Windows Cursor runs need npm run windows:setup with --cursor');
+      if (pinFile(shim.path).digest !== shim.digest) throw new Error('The Cursor stdio shim changed since setup');
+      // Cursor starts rg, git and reg; a worker server and helpers stay within this limit.
+      const containment = { readPaths: [], writePaths: [scratch, state.profileDirectory], denyPaths: [], activeProcessLimit: 8, container: 'forgemind.cursor' as const };
+      return {
+        // The shim keeps child stdio off libuv pipes, which loop forever inside an AppContainer before libuv 1.53.
+        executable: cli.node, args: ['-r', shim.path, cli.entry, ...args], dependencies: [cli.entry, shim.path], cwd: work, input, signal, check, ...limits,
+        containment, profile: JSON.stringify({ ...containment, mcpPort: mcp?.port ?? null, proxyPort: proxyPort ?? null, shimSha256: shim.digest }),
+        env: {
+          SystemRoot: process.env.SystemRoot ?? 'C:\\Windows', PATH: join(process.env.SystemRoot ?? 'C:\\Windows', 'System32'),
+          // Windows points the container's TEMP at its own AC\Temp (under the real LOCALAPPDATA); the shim writes there.
+          LOCALAPPDATA: process.env.LOCALAPPDATA ?? '', USERPROFILE: state.profileDirectory, HOME: state.profileDirectory,
+          APPDATA: join(state.profileDirectory, 'AppData', 'Roaming'), CI: '1', AGENT_CLI_CREDENTIAL_STORE: 'file', NO_OPEN_BROWSER: '1',
+          // Without a proxy the container has no route out at all (no internet capability), so a missing port fails closed.
+          ...(proxyPort ? { NODE_USE_ENV_PROXY: '1', HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+            NO_PROXY: '127.0.0.1,localhost' } : {}),
+        },
+      };
+    }
     return {
       executable: cli.node, args: [cli.entry, ...args], dependencies: [cli.entry], cwd: work, input, signal, check, ...limits,
       profile: cursorProfile(cli, scratch, state.profileDirectory, mcp?.port),
@@ -177,6 +217,10 @@ export class CursorSubscriptionSession {
     return state;
   }
 }
+/** Windows: the per-call allow-list relay the contained CLI reaches its hosts through (ADR-0017). */
+export async function openCursorTunnel(real: boolean, check: () => void, onRefused?: (target: string) => void): Promise<NativeTunnel | undefined> {
+  return windows && real ? createNativeTunnel(0, check, CURSOR_PROXY_HOSTS, onRefused) : undefined;
+}
 export function assertCursorSession(value: unknown): asserts value is CursorSubscriptionSession {
   if (!(value instanceof CursorSubscriptionSession) || !sessions.has(value)) throw new Error('Untrusted Cursor session');
   value.assertActive();
@@ -194,10 +238,11 @@ export async function openCursorSubscriptionSession(options: {
   assertPinnedCursorCli(cli);
   for (const name of ['CURSOR_API_KEY', 'CURSOR_API_ENDPOINT'])
     if (process.env[name] !== undefined) throw new Error(`${name} is set; the Cursor route uses only the owner's own login`);
-  if (!isAbsolute(profileDirectory) || realpathSync(profileDirectory) !== profileDirectory) throw new Error('Canonical Cursor profile directory required');
+  if (!isAbsolute(profileDirectory) || (windows ? realpathSync.native : realpathSync)(profileDirectory) !== profileDirectory) throw new Error('Canonical Cursor profile directory required');
   const stat = lstatSync(profileDirectory);
-  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || stat.mode & 0o077) throw new Error('Cursor profile must be an owner-only directory');
-  if (inside(profileDirectory, realpathSync(homedir())) || profileDirectory === realpathSync(homedir())) throw new Error('Cursor profile must not be the home directory');
+  if (!stat.isDirectory() || !isPrivate(profileDirectory, stat)) throw new Error('Cursor profile must be an owner-only directory');
+  const home = (windows ? realpathSync.native : realpathSync)(homedir());
+  if (inside(profileDirectory, home) || profileDirectory === home) throw new Error('Cursor profile must not be the home directory');
   for (const root of [options.workspace, ...(options.separateFrom ?? [])])
     if (inside(root, profileDirectory) || inside(profileDirectory, root))
       throw new Error('Cursor profile must be separate from project source, run state and worktrees');
@@ -205,8 +250,13 @@ export async function openCursorSubscriptionSession(options: {
   const session = mint(state);
   const scratch = mkdtempSync(join(options.scratchRoot, 'cursor-status-'));
   try {
-    const run = (args: string[]) => (options.runner ?? supervised)(session.launch(cli, scratch, args, '',
-      { timeoutMs: 60000, maxOutputBytes: 65536 }, options.signal ?? AbortSignal.timeout(60000), () => {}));
+    const run = async (args: string[]) => {
+      const tunnel = await openCursorTunnel(!options.runner, () => {});
+      try {
+        return await (options.runner ?? supervised)(session.launch(cli, scratch, args, '',
+          { timeoutMs: 60000, maxOutputBytes: 65536 }, options.signal ?? AbortSignal.timeout(60000), () => {}, undefined, tunnel?.port));
+      } finally { await tunnel?.stop(); }
+    };
     const status = await run(['status']);
     if (status.code !== 0 || !/^\S*\s*Logged in as \S+/m.test(status.stdout))
       throw new Error('Cursor profile is not signed in; run `cursor-agent login` with this HOME and AGENT_CLI_CREDENTIAL_STORE=file yourself');

@@ -1,6 +1,7 @@
 import { createServer, connect } from 'node:net';
 import type { Socket, Server } from 'node:net';
 import { Transform } from 'node:stream';
+import { listenLoopback } from './loopback.js';
 export interface NativeTunnel { readonly port: number; stop(): Promise<void> }
 /** HTTPS CONNECT byte relay to an exact host allow-list on port 443. Never terminates TLS, parses Responses, or handles
  * tokens. `onRefused` hears each refused target, so a run can record what a CLI tried to reach. */
@@ -33,8 +34,10 @@ export async function createNativeTunnel(port: number, checkActive: () => void, 
       if (
           !lines.slice(1).every(line => /^[A-Za-z0-9-]+: [\x20-\x7e]*$/.test(line)) ||
           lines.slice(1).some(line => /^(Content-Length|Transfer-Encoding|Proxy-Authorization):/i.test(line)) ||
+          // Exactly one Host header naming the CONNECT target. Header names are case-insensitive and clients may omit
+          // the default port (Node's built-in proxy agent sends `host: <name>`).
           lines.filter(line => /^Host:/i.test(line)).length !== 1 ||
-          !lines.includes(`Host: ${host}:443`)) { refuse(); return; }
+          !lines.some(line => [`host: ${host}:443`, `host: ${host}`].includes(line.toLowerCase()))) { refuse(); return; }
       accepted = true; client.removeListener('data', receive); client.pause();
       upstream = connect({ host, port: 443 }); track(upstream);
       upstream.setTimeout(10000, fail); upstream.once('close', () => client.destroy());
@@ -56,9 +59,7 @@ export async function createNativeTunnel(port: number, checkActive: () => void, 
     };
     client.on('data', receive);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
-  });
+  await listenLoopback(server, port);
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing tunnel address');
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= new Promise<void>(resolve => {

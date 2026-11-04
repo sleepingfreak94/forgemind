@@ -79,3 +79,31 @@ test('CONNECT tunnel takes an exact host allow-list and reports refused targets'
     assert.deepEqual(refused, ['CONNECT api.openai.com:443 HTTP/1.1', 'CONNECT api.anthropic.com:443 HTTP/1.1', 'CONNECT api.anthropic.com:80 HTTP/1.1', 'CONNECT api.?openai.com:443 HTTP/1.1']);
   } finally { await tunnel.stop(); }
 });
+test('CONNECT accepts a lowercase Host header without the port, as Node\'s proxy agent sends it (offline dial fixture)', async () => {
+  const echo = createServer(socket => socket.end());
+  await new Promise<void>(resolve => echo.listen(0, '127.0.0.1', resolve));
+  const address = echo.address(); assert.ok(address && typeof address !== 'string');
+  const original = net.connect;
+  const dialed: unknown[] = [];
+  const mock = test.mock.method(net, 'connect', (...args: unknown[]) => {
+    if (typeof args[0] === 'object') { dialed.push(args[0]); return original(address.port, '127.0.0.1'); }
+    return original(args[0] as number, args[1] as string);
+  });
+  syncBuiltinESMExports();
+  const refused: string[] = [];
+  const tunnel = await createNativeTunnel(0, () => {}, ['api2.cursor.sh'], target => refused.push(target));
+  try {
+    const client = connect(tunnel.port, '127.0.0.1'); client.on('error', () => {});
+    const reply = await new Promise<string>(resolve => {
+      let text = ''; client.on('data', chunk => { text += chunk; }); client.once('close', () => resolve(text));
+      client.once('connect', () => client.write('CONNECT api2.cursor.sh:443 HTTP/1.1\r\nhost: api2.cursor.sh\r\nconnection: close\r\nproxy-connection: keep-alive\r\n\r\n'));
+    });
+    assert.match(reply, /^HTTP\/1\.1 200 Connection Established/);
+    assert.deepEqual(dialed, [{ host: 'api2.cursor.sh', port: 443 }]); assert.deepEqual(refused, []);
+    await rejected(tunnel.port, 'CONNECT api2.cursor.sh:443 HTTP/1.1\r\nhost: api2.cursor.sh:80\r\n\r\n');
+    await rejected(tunnel.port, 'CONNECT api2.cursor.sh:443 HTTP/1.1\r\nhost: api2.cursor.sh\r\nHost: api2.cursor.sh\r\n\r\n');
+  } finally {
+    await tunnel.stop(); mock.mock.restore(); syncBuiltinESMExports();
+    await new Promise<void>(resolve => echo.close(() => resolve()));
+  }
+});
