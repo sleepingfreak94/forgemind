@@ -263,9 +263,10 @@ export function isHelperExecutablePath(path: string, platform = process.platform
   if (platform === 'win32') return /^[A-Za-z]:\\(?:[A-Za-z0-9_.() -]+\\)*[A-Za-z0-9_.() -]+\.exe$/i.test(path);
   return /^\/[A-Za-z0-9_./-]+$/.test(path) && (lstatSync(path).mode & 0o111) !== 0;
 }
-/** Git runs a credential helper through its shell. Windows paths may hold spaces ("Program Files"), so they are quoted. */
+/** Git runs a credential helper through its shell, and only treats it as a path when it starts with one: so a Windows path
+ * ("Program Files") is not quoted, its spaces and parentheses are escaped. isHelperExecutablePath allows no other specials. */
 export function credentialHelperCommand(ghPath: string, platform = process.platform): string {
-  return `${platform === 'win32' ? `"${ghPath.replaceAll('\\', '/')}"` : ghPath} auth git-credential`;
+  return `${platform === 'win32' ? ghPath.replaceAll('\\', '/').replace(/[ ()]/g, '\\$&') : ghPath} auth git-credential`;
 }
 function credentialArgs(options: PublishOptions): string[] {
   const helper = options.gitCredentialHelper;

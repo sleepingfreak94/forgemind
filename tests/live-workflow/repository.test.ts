@@ -334,13 +334,14 @@ test('readiness and source discovery reject clean filters before executing any r
   assert.equal(f.actions.length, 0);
 });
 
-test('a Windows gh helper is a drive-absolute .exe and its helper command is quoted for Git\'s shell', () => {
+test('a Windows gh helper is a drive-absolute .exe and its helper command is escaped for Git\'s shell', () => {
   const gh = 'C:\\Program Files\\GitHub CLI\\gh.exe';
   assert.equal(isHelperExecutablePath(gh, 'win32'), true);
   assert.equal(isHelperExecutablePath('C:\\Program Files (x86)\\gh\\gh.exe', 'win32'), true);
   for (const bad of ['C:\\gh\\gh', 'gh.exe', '\\\\server\\share\\gh.exe', 'C:/gh/gh.exe', 'C:\\gh\\gh.exe auth git-credential;evil.exe',
     'C:\\a"b\\gh.exe', 'C:\\$x\\gh.exe', 'C:\\gh\\gh.exe\n'])
     assert.equal(isHelperExecutablePath(bad, 'win32'), false, bad);
-  assert.equal(credentialHelperCommand(gh, 'win32'), '"C:/Program Files/GitHub CLI/gh.exe" auth git-credential');
+  assert.equal(credentialHelperCommand(gh, 'win32'), 'C:/Program\\ Files/GitHub\\ CLI/gh.exe auth git-credential');
+  assert.equal(credentialHelperCommand('C:\\Program Files (x86)\\gh\\gh.exe', 'win32'), 'C:/Program\\ Files\\ \\(x86\\)/gh/gh.exe auth git-credential');
   assert.equal(credentialHelperCommand('/opt/homebrew/bin/gh', 'darwin'), '/opt/homebrew/bin/gh auth git-credential');
 });
