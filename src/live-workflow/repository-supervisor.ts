@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 
 const raw = process.argv[2];
 if (!raw) throw new Error('Missing repository command');
@@ -23,7 +24,19 @@ const remaining = Math.min(config.timeoutMs, config.deadline - Date.now());
 if (!Number.isFinite(remaining) || remaining <= 0)
   throw new Error('Repository deadline exhausted before launch');
 const windows = process.platform === 'win32';
-const child = spawn(config.executable, config.args, {
+// Windows looks a bare command up in the current directory (the worktree) before PATH, so a git.exe or gh.exe in the
+// repository would run on the host. Resolve it from absolute PATH folders outside the worktree and launch that path.
+function windowsCommand(name: string): string {
+  for (const dir of (process.env.PATH ?? '').split(';')) {
+    const inside = relative(config.cwd, dir);
+    const outside = inside === '..' || inside.startsWith('..\\') || isAbsolute(inside);
+    if (!/^[A-Za-z]:\\/.test(dir) || !outside) continue;
+    const file = join(dir, `${name}.exe`);
+    if (existsSync(file) && statSync(file).isFile()) return file;
+  }
+  throw new Error(`${name}.exe not found on PATH`);
+}
+const child = spawn(windows ? windowsCommand(config.executable) : config.executable, config.args, {
   cwd: config.cwd,
   env: process.env,
   // POSIX: own process group, so kill(-pid) reaches every descendant. Windows has no groups (see kill).
