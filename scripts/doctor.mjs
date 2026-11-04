@@ -34,7 +34,7 @@ if (flags.some(flag => !['--json', '--require-host'].includes(flag)) || new Set(
       profileReady: ownerOnly(join(home, '.forgemind/claude-profile')),
       probeCommand: `npm run probe:claude -- ~/.local/share/claude/versions/${claudeVersion} ~/.forgemind/claude-profile` },
     cursor: { reviewedVersion: cursorVersion, buildPresent: st(cursorDir)?.isDirectory() === true && ['node', 'index.js'].every(name => st(join(cursorDir, name))?.isFile() === true),
-      profileReady: ownerOnly(join(home, '.forgemind/cursor-profile')), personalAllowlistPresent: st(join(home, '.forgemind/cursor-route.json'))?.isFile() === true,
+      profileReady: ownerOnly(join(home, '.forgemind/cursor-profile')),
       probeCommand: `npm run probe:cursor -- ~/.local/share/cursor-agent/versions/${cursorVersion} ~/.forgemind/cursor-profile <workspace>` } };
   const report = { platform: process.platform, architecture: process.arch, nodeVersion: process.versions.node,
     requiredNode: pkg.engines.node, nodeSupported, dependenciesInstalled, sqliteAvailable,

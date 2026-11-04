@@ -13,14 +13,7 @@ Supervised `project:run` coding (plan, code, review, checks, receipts, draft PR)
    ```
 
    The file credential store keeps the login in the profile and out of the Keychain. ForgeMind passes only paths. It never reads, copies, stores, injects or logs the credential, never passes `--api-key`, and refuses to start when `CURSOR_API_KEY` or `CURSOR_API_ENDPOINT` is set.
-3. On a personal plan, list the workspaces allowed to run in `~/.forgemind/cursor-route.json` (mode 600), using canonical paths:
-
-   ```json
-   {"schemaVersion":1,"personalWorkspaces":["/canonical/path"]}
-   ```
-
-   Company seats on Business, Teams or Enterprise do not need it. Company code needs a company seat and never goes through a personal account; routes are not mixed within a run.
-4. Check readiness. This makes no model request:
+3. Check readiness. This makes no model request:
 
    ```sh
    npm run probe:cursor -- <version dir> <profile> <workspace>

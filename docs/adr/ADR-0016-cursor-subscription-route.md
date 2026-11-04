@@ -49,7 +49,7 @@ Add Cursor as a `project:run` provider (`--provider cursor`) by running the owne
   - one successful result whose text is a JSON object that the existing validators accept.
 
   Plan-limit errors, upgrade notices, tool calls, unknown events and malformed answers stop the task with a receipt.
-- **Account boundary.** `about` reports the plan tier, and each session is bound to the workspace it was checked for. On a personal tier (anything but Business, Teams or Enterprise), only workspaces listed in the owner's `~/.forgemind/cursor-route.json` may run. Company code needs a company seat. Company code never goes through personal accounts, and routes are not mixed within a run.
+- **Account boundary.** `about` reports the plan tier, and each session is bound to the workspace it was checked for. The tier is recorded in receipts. Any workspace may run on either tier: the owner dropped the personal-plan workspace allowlist (`~/.forgemind/cursor-route.json`) on 2026-11-05, because they work alone and keep everything on GitHub. Routes are still not mixed within a run.
 - **Auto test mode.** With `--cursor-mode test-auto`, the owner may run an `auto` task:
   - Auto picks its own model, so receipts are marked test-only;
   - draft publication is refused.

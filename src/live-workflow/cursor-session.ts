@@ -230,11 +230,9 @@ export function assertCursorSession(value: unknown): asserts value is CursorSubs
 }
 
 /** Validate the owner-private profile, ask the sandboxed CLI whether it is signed in and on which plan,
- * and on a personal plan allow only owner-listed workspaces. Only the sign-in line and plan tier are read. */
+ * Only the sign-in line and plan tier are read. Any workspace may run on either plan (owner decision, 2026-11-05). */
 export async function openCursorSubscriptionSession(options: {
   profileDirectory: string; cli: CursorCli; scratchRoot: string; workspace: string;
-  /** Owner-listed workspaces a personal plan may run on; company code needs a company seat. */
-  personalWorkspaces: readonly string[];
   separateFrom?: readonly string[]; signal?: AbortSignal; runner?: CursorRunner;
 }): Promise<CursorSubscriptionSession> {
   const { profileDirectory, cli } = options;
@@ -267,8 +265,6 @@ export async function openCursorSubscriptionSession(options: {
     const tier = /^Subscription Tier\s+([A-Za-z+ ]{1,30}?)\s*$/m.exec(about.stdout)?.[1];
     if (about.code !== 0 || !tier) throw new Error('Cursor plan tier unavailable');
     state.tier = tier; state.company = COMPANY_TIERS.has(tier);
-    if (!state.company && !options.personalWorkspaces.includes(options.workspace))
-      throw new Error(`Cursor ${tier} plan is personal; this workspace is not on the owner's personal allowlist`);
     return session;
   } catch (error) {
     session.close();

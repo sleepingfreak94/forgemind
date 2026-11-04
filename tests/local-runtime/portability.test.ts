@@ -34,7 +34,7 @@ test('setup doctor is credential-free and never certifies an untested host', () 
   const { claude, cursor } = report.routes;
   assert.equal(claude.reviewedVersion, REVIEWED_CLAUDE_CLI.version); assert.equal(cursor.reviewedVersion, REVIEWED_CURSOR_CLI.version);
   for (const route of [claude, cursor]) { assert.equal(route.buildPresent, false); assert.equal(route.profileReady, false); }
-  assert.equal(cursor.personalAllowlistPresent, false);
+  assert.equal('personalAllowlistPresent' in cursor, false);
   assert.equal(claude.probeCommand, `npm run probe:claude -- ~/.local/share/claude/versions/${REVIEWED_CLAUDE_CLI.version} ~/.forgemind/claude-profile`);
   assert.equal(cursor.probeCommand, `npm run probe:cursor -- ~/.local/share/cursor-agent/versions/${REVIEWED_CURSOR_CLI.version} ~/.forgemind/cursor-profile <workspace>`);
   const source = readFileSync(sourceScript, 'utf8');

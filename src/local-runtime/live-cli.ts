@@ -15,7 +15,6 @@ import { pinFile } from '../host-enforcement/manifest.js';
 import { pinClaudeCli, openClaudeSubscriptionSession } from '../live-workflow/claude-session.js';
 import { nodeProjectRuntime } from '../live-workflow/check-runtime.js';
 import { pinCursorCli, openCursorSubscriptionSession } from '../live-workflow/cursor-session.js';
-import { cursorPersonalWorkspaces } from './cursor-route-config.js';
 import { BrainStore, defaultBrainDirectory } from '../memory/brain.js';
 import { brainSpaceFor } from '../memory/brain-spaces.js';
 import { contextText } from '../memory/brain-mcp.js';
@@ -175,7 +174,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       return { claude: { cli, session } };
     })() : cursorCli ? await (async () => {
       const session = await openCursorSubscriptionSession({ profileDirectory: args['--cursor-profile']!, cli: cursorCli, workspace: root,
-        personalWorkspaces: cursorPersonalWorkspaces(), scratchRoot: runDirectory, separateFrom: [states, worktrees], signal: controller.signal });
+        scratchRoot: runDirectory, separateFrom: [states, worktrees], signal: controller.signal });
       routeSession = session;
       const testAuto = args['--cursor-mode'] === 'test-auto';
       process.stderr.write(`Cursor ${cursorCli.version} signed in (${session.tier}${session.company ? ', company seat' : ', personal plan'})` +

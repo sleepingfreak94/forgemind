@@ -97,13 +97,12 @@ test('a malformed tools profile is refused, not treated as no tools', () => {
 });
 
 
-test('sessions need the owner login, an owner-only profile and, on a personal plan, an allowlisted workspace', async () => {
+test('sessions need the owner login and an owner-only profile, and any workspace runs on either plan', async () => {
   const f = fixture();
   try {
     const personal = await open(f, 'Free');
     assert.equal(personal.tier, 'Free'); assert.equal(personal.company, false);
-    assert.equal((await open(f, 'Business', { personalWorkspaces: [] })).company, true, 'a company seat needs no personal allowlist');
-    await assert.rejects(open(f, 'Free', { personalWorkspaces: [] }), /personal; this workspace is not on the owner's personal allowlist/);
+    assert.equal((await open(f, 'Business')).company, true);
     await assert.rejects(open(f, 'Free', { runner: statusRunner('Free', false) }), /not signed in/);
     await assert.rejects(open(f, 'Free', { separateFrom: [f.root] }), /separate from project source/);
     await assert.rejects(open(f, 'Free', { cli: { ...f.cli } }), /Untrusted Cursor CLI pin/);

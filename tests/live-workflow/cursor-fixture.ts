@@ -33,7 +33,7 @@ export const statusRunner = (tier: string, signedIn = true): CursorRunner => asy
   stdout: request.args.includes('status') ? (signedIn ? '✓ Logged in as owner@example.invalid\n' : 'Not logged in\n') : `About Cursor CLI\n\nSubscription Tier   ${tier}\n` });
 export const open = (f: ReturnType<typeof fixture>, tier: string, extra: Partial<Parameters<typeof openCursorSubscriptionSession>[0]> = {}) =>
   openCursorSubscriptionSession({ profileDirectory: f.profile, cli: f.cli, scratchRoot: f.scratch, workspace: f.workspace,
-    personalWorkspaces: [f.workspace], runner: statusRunner(tier), ...extra });
+    runner: statusRunner(tier), ...extra });
 
 export function cursorTask(model = grok, extra: Record<string, unknown> = {}): LiveTask {
   return validateTask({ schemaVersion: 1, taskId: 'cursor-task', objective: 'x', readPaths: ['v.txt'], writePaths: ['v.txt'],
