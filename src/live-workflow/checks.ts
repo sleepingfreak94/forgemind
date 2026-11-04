@@ -1,5 +1,7 @@
 import { lstatSync, realpathSync, mkdirSync, mkdtempSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { protectedPaths } from '../host-enforcement/windows-sandbox.js';
+import { windowsHost } from '../host-enforcement/windows-host.js';
 import { runtimeFiles, supervised } from './process.js';
 import { sha256 } from './validation.js';
 import { sourceIdentity } from './repository.js';
@@ -26,6 +28,11 @@ function checkProfile(root: string, scratch: string, executable: string, files: 
     `(deny file-read* ${subpath(join(root, '.git'))} ${subpath(join(root, '.codex'))} (regex #"(^|/)\\.env($|\\.)"))`,
     `(allow file-write* ${subpath(scratch)}${nodeModules ? ' (literal "/dev/null")' : ''})`,
   ].join('\n');
+}
+/** Windows form of checkProfile: read the tree, write scratch, never .git, .codex or .env*, and no child processes.
+ * The pinned node.exe is readable through the runtime capability that windows:setup granted. */
+export function windowsCheckPolicy(root: string, scratch: string) {
+  return { readPaths: [root], writePaths: [scratch], denyPaths: protectedPaths(root), activeProcessLimit: 1 };
 }
 /** Tools such as tsc resolve packages upward from the sources, so a node-project phase links the selected
  * node_modules into the checked tree. The link must be ignored (source identity unchanged) and is removed after. */
@@ -60,25 +67,29 @@ export async function runChecks(
   phaseEvidence = true,
 ): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
+  const windows = process.platform === 'win32', canonical = windows ? realpathSync.native : realpathSync;
   // All node-project checks of one phase share a scratch, in manifest order (build, then test).
   let shared: string | undefined, unlink: (() => void) | undefined;
   try {
     for (const command of commands) {
       signal.throwIfAborted();
       const node = command.profile === 'node-project';
+      if (windows && node) throw new Error('node-project checks are not supported on Windows yet');
       if (node) {
         if (!runtime) throw new Error('node-project checks require an owner-selected --node-modules');
         assertCheckRuntime(runtime, root);
       }
-      const executable = realpathSync(command.executable),
+      const executable = canonical(command.executable),
         files = runtimeFiles(executable);
+      if (windows && executable !== windowsHost().node.path)
+        throw new Error('Windows checks must run the node.exe that windows:setup pinned');
       // Either the pinned Node runtime or an owner-installed tool such as the native TypeScript compiler.
     if (node && executable !== runtime!.node && !executable.startsWith(runtime!.nodeModules + '/'))
       throw new Error('node-project checks must run the pinned Node runtime or a tool inside the selected node_modules');
       let scratch: string;
       if (node && shared) scratch = shared;
       else {
-        scratch = realpathSync(mkdtempSync(join(scratchParent, node ? 'node-project-' : 'check-')));
+        scratch = canonical(mkdtempSync(join(scratchParent, node ? 'node-project-' : 'check-')));
         mkdirSync(join(scratch, 'tmp'), { mode: 0o700 });
         if (node) {
           symlinkSync(runtime!.nodeModules, join(scratch, 'node_modules'), 'dir'); shared = scratch;
@@ -88,7 +99,8 @@ export async function runChecks(
       const args = node
         ? command.args.map(a => a.replaceAll('{scratch}', scratch).replaceAll('{nodeModules}', runtime!.nodeModules))
         : command.args;
-      const profile = checkProfile(root, scratch, executable, files, node ? runtime!.nodeModules : undefined);
+      const containment = windows ? windowsCheckPolicy(root, scratch) : undefined;
+      const profile = containment ? JSON.stringify(containment) : checkProfile(root, scratch, executable, files, node ? runtime!.nodeModules : undefined);
       const receipt = authority.reserve({
         kind: 'command',
         source,
@@ -110,7 +122,14 @@ export async function runChecks(
           dependencies: files,
           args,
           cwd: root,
-          env: {
+          env: windows ? {
+            SystemRoot: process.env.SystemRoot ?? 'C:\\Windows',
+            // Windows points TEMP and TMP of an AppContainer at <LOCALAPPDATA>\Packages\<container>\AC\Temp, which the
+            // profile creates and deletes, so LOCALAPPDATA must be the real one. The container can't read the rest of it.
+            LOCALAPPDATA: process.env.LOCALAPPDATA ?? '',
+            USERPROFILE: scratch, HOME: scratch,
+            FORGEMIND_NESTED_SANDBOX: '1',
+          } : {
             PATH: '/usr/bin:/bin',
             HOME: scratch,
             TMPDIR: join(scratch, 'tmp'),
@@ -121,6 +140,7 @@ export async function runChecks(
             FORGEMIND_NESTED_SANDBOX: '1',
           },
           profile,
+          ...(containment ? { containment } : {}),
           timeoutMs: command.timeoutMs,
           maxOutputBytes: 1048576,
           signal,

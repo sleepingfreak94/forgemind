@@ -3,6 +3,7 @@ import { join, resolve, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { LocalPolicyRuntime } from '../policy/runtime.js';
+import { isPrivate } from '../host-enforcement/owner-acl.js';
 import { serialize } from '../context-engine/validation.js';
 import { sha256 } from './validation.js';
 import type { ActionAuthority, ActionEnvelope, ActionReceipt, LiveTask } from './contracts.js';
@@ -14,8 +15,7 @@ export function privateDirectory(path: string): string {
     realpathSync(absolute) !== absolute ||
     s.isSymbolicLink() ||
     !s.isDirectory() ||
-    s.uid !== process.getuid?.() ||
-    s.mode & 0o077
+    !isPrivate(absolute, s)
   )
     throw new Error('Private owner state directory required');
   return absolute;
@@ -47,7 +47,7 @@ export class RunAuthority implements ActionAuthority {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
     }
     const s = lstatSync(dbPath);
-    if (!s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.() || s.mode & 0o077)
+    if (!s.isFile() || s.nlink !== 1 || !isPrivate(dbPath, s))
       throw new Error('Unsafe ledger');
     this.#db = new DatabaseSync(dbPath);
     this.#db.exec(

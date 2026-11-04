@@ -1,6 +1,6 @@
 # Windows clone verification
 
-Start with native Windows and PowerShell for setup and deterministic fixture testing. The portable checks are implemented; actual Windows execution has not been verified on this macOS development machine. Native Windows authorization and an enforced sandbox host are still pending, so live coding remains disabled.
+Start with native Windows and PowerShell for setup and deterministic fixture testing. The portable checks pass on a Windows 11 ARM VM. Single-process checks run in the Windows sandbox after the one-time setup below. Live coding is still disabled on Windows until the provider routes land (ADR-0017 phase 2).
 
 ## After cloning
 
@@ -70,18 +70,46 @@ The portable [project onboarding/planning CLI](./project-workflow.md) is also av
 
 Implement SID-based identity and private ACL-protected policy/artifact storage; explicit handling of reparse points, alternate data streams and device paths; a default-deny process/filesystem/network boundary; and independently supervised process-tree shutdown with durable evidence. Then test denied reads/writes/network, revocation, fencing, cancellation and restart recovery on Windows.
 
-The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md): an owner-built launcher that runs a command in a fresh [AppContainer](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation) inside a kill-on-close [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects). Phase 1a (the launcher, `src/host-enforcement/windows-sandbox.ts` and its tests) is implemented. Runs don't use it yet, so live coding and checks are still refused on Windows. Existing credential, egress, spend and write gates still apply to both drivers.
+The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md): a launcher, built on each machine from reviewed source, that runs a command in a fresh [AppContainer](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation) inside a kill-on-close [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+- Phase 1a (the launcher and `src/host-enforcement/windows-sandbox.ts`) and phase 1b are implemented.
+- Phase 1b adds the setup command, Windows ownership checks (ACLs instead of uid and mode bits) and single-process checks run through `runChecks`.
+- Live coding is still refused on Windows: provider CLIs are phase 2. Existing credential, egress, spend and write gates still apply.
+
+## One-time setup
+
+In an elevated PowerShell, from the checkout:
+
+```powershell
+npm.cmd run windows:setup -- $env:USERPROFILE\forgemind-owner
+```
+
+Setup does the following:
+1. Builds `bin\forgemind-sandbox.exe` from `src\host-enforcement\windows\*.cs` with the C# compiler that ships with Windows.
+2. Copies `node.exe` to `runtime\`.
+3. Makes the folder owner-only: you, SYSTEM and Administrators.
+4. Writes `windows-host.json`.
+
+Runs load that file with `loadWindowsHost` and then:
+- re-check the folder's ACL, the launcher digest and the node.exe digest;
+- refuse to run when the launcher source in the checkout has changed since setup.
+
+Each machine pins its own build, so the binary doesn't need to be reproducible.
+
+Put the owner folder inside a folder only you can reach, such as your user profile: setup runs elevated and locks the folder first, but a handle someone opened before that keeps its access.
+
+If runs fail with `file identity changed (ctime)`, Windows has re-stamped a pinned executable, for example after an update or a code-integrity policy change. Run setup again.
+
+Extra folders after the owner folder get read-attributes for contained runs. Contained Node stats every ancestor of a path it opens, so pass the parents of the worktree and state roots you use.
 
 ## Windows sandbox tests
 
-In an elevated PowerShell (setup needs administrator once):
+After setup, in the same elevated PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Force $env:USERPROFILE\forgemind-owner | Out-Null
-npm.cmd run build:windows-launcher -- $env:USERPROFILE\forgemind-owner
-$env:FORGEMIND_WINDOWS_LAUNCHER = "$env:USERPROFILE\forgemind-owner\forgemind-sandbox.exe"
-$env:FORGEMIND_WINDOWS_LAUNCHER_SHA256 = '<sha256 printed by the build>'
-node --test dist\tests\host-enforcement\windows-sandbox.test.js
+$env:FORGEMIND_WINDOWS_HOST = "$env:USERPROFILE\forgemind-owner"
+$env:FORGEMIND_WINDOWS_LAUNCHER = "$env:FORGEMIND_WINDOWS_HOST\bin\forgemind-sandbox.exe"
+$env:FORGEMIND_WINDOWS_LAUNCHER_SHA256 = (Get-Content "$env:FORGEMIND_WINDOWS_HOST\windows-host.json" | ConvertFrom-Json).launcher.sha256
+node --test dist\tests\host-enforcement\windows-sandbox.test.js dist\tests\host-enforcement\windows-checks.test.js
 ```
 
-Without the two variables, the contained tests are skipped and only the portable ones run. The launcher's digest is pinned before every run. Rebuild it and update the digest after any change to `sandbox-launcher.cs`.
+Without these variables, the contained tests are skipped and only the portable ones run. Re-run setup after any change to the launcher source.

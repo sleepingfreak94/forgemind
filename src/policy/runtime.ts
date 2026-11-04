@@ -5,6 +5,7 @@ import { FakeAdapter } from '../agent-drivers/fake.js';
 import type { ActionRequest, ExecutionResult, ExternalReservation, GrantInput, InvocationContext, LocalPrincipal, PolicyDecision, Receipt, TaskGrant } from './contracts.js';
 import { contains, evaluate } from './evaluator.js';
 import { PolicyStore } from './store.js';
+import { ownerIdentity } from '../host-enforcement/owner-acl.js';
 import { grantInput, inside, request, text } from './validation.js';
 import { dataSnapshot, object, serialize } from '../context-engine/validation.js';
 
@@ -39,13 +40,13 @@ export class LocalPolicyRuntime {
     this.workspaceRoot = realpathSync(options.workspaceRoot);
     const state = resolve(options.stateDirectory);
     if (inside(this.workspaceRoot, state)) throw new Error('state directory must be outside agent workspace');
-    if (!process.getuid) throw new Error('local owner mode currently requires a POSIX user identity');
-    this.#store = new PolicyStore(state, process.getuid());
+    const owner = ownerIdentity();
+    this.#store = new PolicyStore(state);
     try {
       const boot = this.#store.transaction(() => {
         const stored = this.#store.meta('principal');
-        const principal: LocalPrincipal = stored ? JSON.parse(stored) as LocalPrincipal : { id: this.#id(), osUid: process.getuid!() };
-        if (principal.osUid !== process.getuid!()) throw new Error('owner mismatch');
+        const principal: LocalPrincipal = stored ? JSON.parse(stored) as LocalPrincipal : { id: this.#id(), osUid: owner };
+        if (principal.osUid !== owner) throw new Error('owner mismatch');
         const registration = JSON.stringify({ repositoryId: options.repositoryId, workspaceRoot: this.workspaceRoot });
         const existing = this.#store.meta('registration');
         if (existing && existing !== registration) throw new Error('state belongs to another workspace');

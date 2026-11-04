@@ -2,22 +2,23 @@ import { DatabaseSync } from 'node:sqlite';
 import { lstatSync, mkdirSync, openSync, closeSync, realpathSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import type { Approval, ExternalAttempt, Receipt, TaskGrant } from './contracts.js';
+import { isPrivate } from '../host-enforcement/owner-acl.js';
 
 /** Trusted host only. Never expose this object or its state directory to an agent. */
 export class PolicyStore {
   readonly #db: DatabaseSync;
-  constructor(directory: string, uid: number) {
+  constructor(directory: string) {
     if (!isAbsolute(directory)) throw new Error('state directory must be absolute');
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const dir = lstatSync(directory);
-    if (!dir.isDirectory() || realpathSync(directory) !== directory || dir.uid !== uid || (dir.mode & 0o077)) {
+    if (!dir.isDirectory() || realpathSync(directory) !== directory || !isPrivate(directory, dir)) {
       throw new Error('state directory must be private, canonical and owner-controlled');
     }
     const path = join(directory, 'policy.sqlite');
     try { closeSync(openSync(path, 'wx', 0o600)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     const file = lstatSync(path);
-    if (!file.isFile() || file.nlink !== 1 || file.uid !== uid || (file.mode & 0o077)) throw new Error('unsafe policy database');
+    if (!file.isFile() || file.nlink !== 1 || !isPrivate(path, file)) throw new Error('unsafe policy database');
     this.#db = new DatabaseSync(path, { timeout: 1000, enableForeignKeyConstraints: true });
     this.#db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;');
     const version = this.#db.prepare('PRAGMA user_version').get()?.user_version;

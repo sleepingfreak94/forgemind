@@ -1,8 +1,10 @@
 import { fork, execFileSync } from 'node:child_process';
-import { realpathSync, existsSync } from 'node:fs';
+import { realpathSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pinFile, verifyFile } from '../host-enforcement/manifest.js';
+import type { ContainedCommand } from '../host-enforcement/windows-sandbox.js';
+import { supervisedWindows } from './windows-process.js';
 export interface ProcessRequest {
   executable: string;
   /** When set, the pinned executable's content must have exactly this SHA-256. */
@@ -17,11 +19,14 @@ export interface ProcessRequest {
   input?: string;
   signal?: AbortSignal;
   check?: () => void;
+  /** Windows only: what the AppContainer may read and write. `profile` then holds its JSON for receipts. */
+  containment?: Pick<ContainedCommand, 'readPaths' | 'writePaths' | 'denyPaths' | 'activeProcessLimit'>;
 }
 export async function supervised(
   request: ProcessRequest,
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  if (process.platform !== 'darwin') throw new Error('Live process enforcement currently requires macOS');
+  if (process.platform === 'win32') return await supervisedWindows(request);
+  if (process.platform !== 'darwin') throw new Error('Live process enforcement currently requires macOS or Windows');
   request.signal?.throwIfAborted();
   const executable = pinFile(request.executable),
     supervisor = pinFile(fileURLToPath(new URL('./supervisor.js', import.meta.url)));
@@ -129,6 +134,12 @@ const literal = (p: string) => `(literal ${JSON.stringify(p)})`;
 export function runtimeFiles(executable: string): string[] {
   const files = new Set<string>(),
     entry = realpathSync(executable);
+  if (process.platform === 'win32') {
+    // No otool walk: system DLLs come from Windows, and the loader searches the executable's folder first, so it must hold no DLL.
+    if (readdirSync(dirname(entry)).some((name) => /\.dll$/i.test(name)))
+      throw new Error('A contained executable must not have DLLs beside it');
+    return [entry];
+  }
   const visit = (path: string, inherited: string[]) => {
     const p = realpathSync(path);
     if (files.has(p)) return;

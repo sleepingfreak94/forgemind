@@ -7,7 +7,8 @@ export type Role = 'lead' | 'researcher' | 'architect' | 'coder' | 'qa' | 'revie
 
 export interface LocalPrincipal {
   readonly id: string;
-  readonly osUid: number;
+  /** The uid on POSIX, the user SID on Windows. */
+  readonly osUid: number | string;
 }
 
 /** Exact resources only; no glob, shell, URL-prefix, or directory expansion. */
