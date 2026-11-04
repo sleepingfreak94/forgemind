@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, type Stats } from 'node:fs';
+import { lstatSync, readFileSync, type Stats } from 'node:fs';
 import type { WindowsLauncher } from './windows-sandbox.js';
 
 // POSIX ownership checks (owner uid, no group or world bits). Node cannot read Windows ACLs, so on Windows the pinned
@@ -9,7 +9,7 @@ let launcher: WindowsLauncher | undefined;
 let user: string | undefined;
 
 /** Called by loadWindowsHost once the launcher is pinned. */
-export function useWindowsAclLauncher(pinned: WindowsLauncher): void { launcher = pinned; user = undefined; }
+export function useWindowsAclLauncher(pinned: WindowsLauncher): void { launcher = pinned; user = undefined; answers.clear(); }
 
 function windowsAcl(args: string[]): { user: string; ok?: boolean; reason?: string } {
   if (!launcher) throw new Error('Windows ownership checks need the pinned sandbox launcher; run npm run windows:setup');
@@ -29,14 +29,26 @@ export function ownerIdentity(): number | string {
   return process.getuid();
 }
 
+// Each launcher check costs a process start (~1 s), and a run checks the same files many times. Any ACL edit on NTFS,
+// inherited ones included, changes the object's change time, so an answer is reused only for the identical object.
+const answers = new Map<string, { identity: string; ok: boolean }>();
+function cachedAcl(mode: 'private' | 'trusted', path: string): boolean {
+  const identity = (() => { const s = lstatSync(path, { bigint: true }); return `${s.dev}:${s.ino}:${s.ctimeNs}:${s.mtimeNs}`; })();
+  const key = `${mode}\0${path}`, known = answers.get(key);
+  if (known?.identity === identity) return known.ok;
+  const ok = windowsAcl([mode, path]).ok === true;
+  answers.set(key, { identity, ok });
+  return ok;
+}
+
 /** Owner state: only the owner (plus SYSTEM and Administrators on Windows) can reach it. */
 export function isPrivate(path: string, stat: Stats): boolean {
-  if (process.platform === 'win32') return windowsAcl(['private', path]).ok === true;
+  if (process.platform === 'win32') return cachedAcl('private', path);
   return stat.uid === process.getuid?.() && (stat.mode & 0o077) === 0;
 }
 
 /** An executable or runtime file that nobody but the owner, root or the system can change. */
 export function isTrusted(path: string, stat: Stats): boolean {
-  if (process.platform === 'win32') return windowsAcl(['trusted', path]).ok === true;
+  if (process.platform === 'win32') return cachedAcl('trusted', path);
   return (stat.mode & 0o6022) === 0 && [0, process.getuid?.()].includes(stat.uid);
 }

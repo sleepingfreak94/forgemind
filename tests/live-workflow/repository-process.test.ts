@@ -9,9 +9,12 @@ import {
   readFileSync,
   rmSync,
   existsSync,
+  statSync,
+  utimesSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { repositoryProcess, authorizedRepositoryProcess, withRepositoryBudget } from '../../src/live-workflow/repository-process.js';
 
 test(
@@ -87,11 +90,12 @@ test('deadline consumed by executable validation prevents launch instead of exte
 for (const failure of ['expired', 'revoked', 'fenced']) test(`protected repository launch rechecks async authority after pinning: ${failure}`, async t => {
   const fs = await import('node:fs');
   const { syncBuiltinESMExports } = await import('node:module');
-  const originalRead = fs.default.readFileSync;
+  // The runtime pin is cached, but its identity is re-checked (realpath + lstat) before every command.
+  const originalRealpath = fs.default.realpathSync;
   let invalid = false, launches = 0, dispatches = 0, checks = 0;
-  t.mock.method(fs.default, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
-    const result = Reflect.apply(originalRead, fs.default, args);
-    if (String(args[0]) === realpathSync(process.execPath)) invalid = true;
+  t.mock.method(fs.default, 'realpathSync', (...args: Parameters<typeof originalRealpath>) => {
+    const result = Reflect.apply(originalRealpath, fs.default, args);
+    if (String(args[0]) === process.execPath) invalid = true;
     return result;
   });
   syncBuiltinESMExports();
@@ -103,6 +107,17 @@ for (const failure of ['expired', 'revoked', 'fenced']) test(`protected reposito
     }, () => { dispatches++; })), new RegExp(failure));
   assert.equal(checks, 1); assert.equal(invalid, true);
   assert.equal(launches, 0); assert.equal(dispatches, 0);
+});
+
+test('a pinned runner whose identity changes is pinned afresh instead of refusing every later command', t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-repository-pin-')));
+  const runner = fileURLToPath(new URL('../../src/live-workflow/repository-supervisor.js', import.meta.url));
+  const { atime, mtime } = statSync(runner);
+  t.after(() => { utimesSync(runner, atime, mtime); rmSync(root, { recursive: true, force: true }); });
+  const env = { PATH: '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+  assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
+  utimesSync(runner, atime, new Date(mtime.getTime() + 5000));
+  assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
 });
 
 test('protected repository launch rechecks budget after awaited authority decision', async t => {

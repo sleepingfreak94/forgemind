@@ -1,4 +1,5 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 
 const raw = process.argv[2];
 if (!raw) throw new Error('Missing repository command');
@@ -21,15 +22,25 @@ if (
 const remaining = Math.min(config.timeoutMs, config.deadline - Date.now());
 if (!Number.isFinite(remaining) || remaining <= 0)
   throw new Error('Repository deadline exhausted before launch');
+const windows = process.platform === 'win32';
 const child = spawn(config.executable, config.args, {
   cwd: config.cwd,
   env: process.env,
-  detached: true,
+  // POSIX: own process group, so kill(-pid) reaches every descendant. Windows has no groups (see kill).
+  detached: !windows,
+  windowsHide: true,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let failure = false,
   bytes = 0;
 const kill = () => {
+  if (child.pid && windows) {
+    // shortcut: no process group on Windows. taskkill /T ends the tree while the command runs; a descendant that
+    // outlives it is not reaped. Upgrade to the launcher's job-only mode (ADR-0017 "Later").
+    if (child.exitCode === null && child.signalCode === null)
+      spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true });
+    return;
+  }
   if (child.pid)
     try {
       process.kill(-child.pid, 'SIGKILL');

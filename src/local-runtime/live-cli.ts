@@ -21,6 +21,7 @@ import { brainSpaceFor } from '../memory/brain-spaces.js';
 import { contextText } from '../memory/brain-mcp.js';
 import { recordHarnessRun } from '../memory/brain-runs.js';
 import { defaultMemoryDirectory } from '../memory/location.js';
+import { loadWindowsHost } from '../host-enforcement/windows-host.js';
 import type { AutomaticHistoryOptions } from '../live-workflow/automatic-run-history.js';
 
 const memoryDirectory = (): string | undefined => {
@@ -62,7 +63,7 @@ export function parseLiveArguments(argv: readonly string[]) {
   const accountMode = ['connect', 'auth-status', 'billing-reset'].includes(mode!);
   const allowed = accountMode ? ['--connection'] :
     ['--workspace', ...(mode === 'run' ? ['--task', '--connection', '--codex', '--state-root', '--worktree-root', '--gh', '--author-name', '--author-email', '--browser-qa-config',
-      '--provider', '--claude', '--claude-profile', '--cursor', '--cursor-profile', '--cursor-mode', '--node-modules'] : [])];
+      '--provider', '--claude', '--claude-profile', '--cursor', '--cursor-profile', '--cursor-mode', '--node-modules', '--windows-host'] : [])];
   const values: Record<string, string> = Object.create(null);
   for (let i = 0; i < raw.length; i += 2) {
     const key = raw[i]!, value = raw[i + 1];
@@ -134,7 +135,12 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       reason: LIVE_BLOCK_REASON, worktreeCreated: false, providerRequests: 0 });
     process.exitCode = 2; return;
   }
-  if (process.platform !== 'darwin') throw new Error('Supervised live coding currently requires macOS');
+  // Windows: every model, check and provider process runs in the sandbox that npm run windows:setup built (ADR-0017).
+  if (process.platform === 'win32') {
+    if (!args['--windows-host']) throw new Error('Supervised live coding on Windows needs --windows-host <folder from npm run windows:setup>');
+    await loadWindowsHost(args['--windows-host']);
+  } else if (args['--windows-host']) throw new Error('--windows-host is Windows only');
+  else if (process.platform !== 'darwin') throw new Error('Supervised live coding currently requires macOS or Windows');
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Supervised execution requires an owner terminal');
   for (const key of [claude ? '--claude-profile' : cursor ? '--cursor-profile' : '--connection', '--state-root', '--worktree-root']) {
     const path = args[key]!;

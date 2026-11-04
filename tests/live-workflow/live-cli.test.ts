@@ -53,6 +53,18 @@ test('node-modules option is accepted for run only', () => {
   assert.equal(values['--node-modules'], '/absolute/project/node_modules');
   assert.throws(() => parseLiveArguments(['inspect', '--workspace', '/absolute/project', '--node-modules', '/absolute/project/node_modules']));
 });
+test('--windows-host is a run option and is refused off Windows', { skip: process.platform === 'win32' }, async t => {
+  assert.equal(parseLiveArguments(['run', '--workspace', '/absolute/project', '--task', '/absolute/task.json',
+    '--windows-host', '/host']).values['--windows-host'], '/host');
+  assert.throws(() => parseLiveArguments(['inspect', '--workspace', '/absolute/project', '--windows-host', '/host']));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-windows-host-cli-'))), manifest = join(root, 'task.json');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(manifest, JSON.stringify({ schemaVersion: 1, taskId: 'windows-host', objective: 'Fixture', provider: 'anthropic',
+    readPaths: ['a'], writePaths: ['a'], checks: [{ id: 'unit', executable: '/node', args: ['--test'], timeoutMs: 60000 }], model: 'claude-sonnet-5-5', effort: 'high', maxModelRequests: 1, maxPromptBytes: 100,
+    maxOutputBytes: 100, maxRuntimeMs: 120000, draftPr: false }));
+  await assert.rejects(liveMain(['run', '--workspace', root, '--task', manifest, '--provider', 'anthropic', '--claude', '/claude',
+    '--claude-profile', '/profile', '--state-root', '/runs', '--worktree-root', '/trees', '--windows-host', '/host']), /Windows only/);
+});
 test('connection CLI refuses noninteractive authentication before any network or state access', () => {
   const executable = fileURLToPath(new URL('../../src/local-runtime/live-cli.js', import.meta.url));
   assert.throws(() => execFileSync(process.execPath, [executable, 'connect', '--connection', '/nonexistent/forgemind-test'],

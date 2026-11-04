@@ -1,6 +1,6 @@
 # ADR-0017: Windows AppContainer sandbox for checks
 
-- Status: Proposed. Phase 1a (launcher, wrapper and Windows tests) and phase 1b (setup, Windows ownership checks, contained single-process checks) and phase 2a (the contained Claude CLI route through an allow-list proxy) are implemented. `project:run` does not load the Windows host yet (phase 3), and the Cursor route is blocked (phase 2b).
+- Status: Proposed. Phases 1a (launcher, wrapper and Windows tests), 1b (setup, Windows ownership checks, contained single-process checks), 2a (the contained Claude CLI route through an allow-list proxy) and 2b (the contained Cursor route) are implemented. Phase 3's first part is too: `project:run --windows-host` completes a full local run on Windows. Draft PRs on Windows are not verified yet.
 - Date: 2026-10-30
 - Basis: the owner authorized building a Windows sandbox, designed and reviewed with Opus 5.5. The design was checked against a Windows 11 ARM VM (build 26300).
 
@@ -189,7 +189,8 @@ On Windows both call `launcher acl`:
 
 ## Next
 
-- **Phase 3:** worktree, git and gh, artifacts and a draft PR on Windows, then a full `project:run`.
+- **Phase 3 (done):** `project:run --windows-host` loads the host. Worktree, git, checks, coding, review and artifacts run on Windows. Git uses `NUL` for hooks and global config. A timed-out git command's tree is ended with `taskkill /T`. Ownership answers and runtime pins are cached per file identity: each check started a process, and each git command re-hashed node.exe.
+- **Phase 3 (next):** `gh` and a draft PR on Windows.
 - **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 
 ## Owner questions
