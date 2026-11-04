@@ -73,7 +73,7 @@ Implement SID-based identity and private ACL-protected policy/artifact storage; 
 The chosen backend is [ADR-0017](./adr/ADR-0017-windows-appcontainer-sandbox.md): a launcher, built on each machine from reviewed source, that runs a command in a fresh [AppContainer](https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation) inside a kill-on-close [Job Object](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
 - Phase 1a (the launcher and `src/host-enforcement/windows-sandbox.ts`) and phase 1b are implemented.
 - Phase 1b adds the setup command, Windows ownership checks (ACLs instead of uid and mode bits) and single-process checks run through `runChecks`.
-- Live coding is still refused on Windows: provider CLIs are phase 2. Existing credential, egress, spend and write gates still apply.
+- Phases 2a and 2b add the contained Claude and Cursor routes. Phase 3 (first part) lets `project:run` load the Windows host: pass `--windows-host <owner folder>`. Model and check processes run contained; git runs on the host under the repository supervisor, as on macOS. Draft PRs (`gh`) on Windows are not verified yet. Existing credential, egress, spend and write gates still apply.
 
 ## One-time setup
 

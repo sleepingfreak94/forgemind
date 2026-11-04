@@ -10,8 +10,10 @@ import {
   rmSync,
   existsSync,
 } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { repositoryProcess, authorizedRepositoryProcess, withRepositoryBudget } from '../../src/live-workflow/repository-process.js';
 
 test(
@@ -87,11 +89,12 @@ test('deadline consumed by executable validation prevents launch instead of exte
 for (const failure of ['expired', 'revoked', 'fenced']) test(`protected repository launch rechecks async authority after pinning: ${failure}`, async t => {
   const fs = await import('node:fs');
   const { syncBuiltinESMExports } = await import('node:module');
-  const originalRead = fs.default.readFileSync;
+  // The runtime pin is cached, but its identity is re-checked (realpath + lstat) before every command.
+  const originalRealpath = fs.default.realpathSync;
   let invalid = false, launches = 0, dispatches = 0, checks = 0;
-  t.mock.method(fs.default, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
-    const result = Reflect.apply(originalRead, fs.default, args);
-    if (String(args[0]) === realpathSync(process.execPath)) invalid = true;
+  t.mock.method(fs.default, 'realpathSync', (...args: Parameters<typeof originalRealpath>) => {
+    const result = Reflect.apply(originalRealpath, fs.default, args);
+    if (String(args[0]) === process.execPath) invalid = true;
     return result;
   });
   syncBuiltinESMExports();
@@ -103,6 +106,33 @@ for (const failure of ['expired', 'revoked', 'fenced']) test(`protected reposito
     }, () => { dispatches++; })), new RegExp(failure));
   assert.equal(checks, 1); assert.equal(invalid, true);
   assert.equal(launches, 0); assert.equal(dispatches, 0);
+});
+
+test('a pinned runner whose identity changes is pinned afresh instead of refusing every later command', async t => {
+  const fs = await import('node:fs');
+  const { syncBuiltinESMExports } = await import('node:module');
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-repository-pin-')));
+  const runner = realpathSync(fileURLToPath(new URL('../../src/live-workflow/repository-supervisor.js', import.meta.url)));
+  const env = { PATH: '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+  assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
+  // Report one changed mtime for the runner in-process; touching the shared file would race other test processes.
+  const originalLstat = fs.default.lstatSync, originalRead = fs.default.readFileSync;
+  let changed = false, hashes = 0;
+  t.mock.method(fs.default, 'lstatSync', (...args: Parameters<typeof originalLstat>) => {
+    const stat = Reflect.apply(originalLstat, fs.default, args) as BigIntStats;
+    if (changed || String(args[0]) !== runner || !(args[1] as { bigint?: boolean } | undefined)?.bigint) return stat;
+    changed = true;
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { mtimeNs: stat.mtimeNs + 1n });
+  });
+  t.mock.method(fs.default, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
+    if (String(args[0]) === runner) hashes++;
+    return Reflect.apply(originalRead, fs.default, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(root, { recursive: true, force: true }); });
+  assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
+  assert.equal(changed, true);
+  assert.equal(hashes, 1, 'the changed runner is hashed again once');
 });
 
 test('protected repository launch rechecks budget after awaited authority decision', async t => {

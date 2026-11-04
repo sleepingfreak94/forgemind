@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { fileURLToPath } from 'node:url';
 import childProcess from 'node:child_process';
-import { pinFile, verifyFile } from '../host-enforcement/manifest.js';
+import { pinFile, verifyFile, type PinnedFile } from '../host-enforcement/manifest.js';
 
 export interface RepositoryBudget {
   deadline: number;
@@ -14,6 +14,17 @@ export function withRepositoryBudget<T>(scope: RepositoryBudget, operation: () =
   scope.signal?.throwIfAborted();
   return budget.run(scope, operation);
 }
+// Hashing node (~90 MB) before and after every git command cost seconds per command on Windows. Each file is hashed
+// and trust-checked once per identity; around every command its identity (dev, ino, size, mode, mtime, ctime) is
+// re-checked, as the supervisors' drift polls do, and a changed identity is pinned afresh.
+const pins = new Map<string, PinnedFile>();
+function pinned(path: string): PinnedFile {
+  const known = pins.get(path);
+  if (known) try { verifyFile(known, false); return known; } catch { pins.delete(path); }
+  const file = pinFile(path);
+  pins.set(path, file);
+  return file;
+}
 function prepareRepositoryProcess(
   executable: 'git' | 'gh',
   args: readonly string[],
@@ -25,13 +36,13 @@ function prepareRepositoryProcess(
   scope?.signal?.throwIfAborted();
   const commandDeadline = Math.min(Date.now() + 30000, scope?.deadline ?? Infinity);
   if (commandDeadline <= Date.now()) throw new Error('Repository deadline exhausted');
-  const runner = pinFile(fileURLToPath(new URL('./repository-supervisor.js', import.meta.url)));
-  const runtime = pinFile(process.execPath);
+  const runner = pinned(fileURLToPath(new URL('./repository-supervisor.js', import.meta.url)));
+  const runtime = pinned(process.execPath);
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => !/^(NODE_OPTIONS|NODE_PATH|DYLD_.*|LD_.*)$/.test(key)),
   );
-  verifyFile(runner);
-  verifyFile(runtime);
+  verifyFile(runner, false);
+  verifyFile(runtime, false);
   const launch = (onDispatch?: () => void): Buffer => {
     scope?.signal?.throwIfAborted();
     const remaining = commandDeadline - Date.now();
@@ -52,8 +63,8 @@ function prepareRepositoryProcess(
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
-    verifyFile(runner);
-    verifyFile(runtime);
+    verifyFile(runner, false);
+    verifyFile(runtime, false);
     scope?.signal?.throwIfAborted();
     if (scope && Date.now() >= scope.deadline)
       throw new Error('Repository deadline exhausted after command; outcome indeterminate');

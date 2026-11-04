@@ -8,6 +8,7 @@ import { isPrivate, isTrusted } from '../../src/host-enforcement/owner-acl.js';
 import { launcherSourceDigest, loadWindowsHost } from '../../src/host-enforcement/windows-host.js';
 import { RunAuthority } from '../../src/live-workflow/authority.js';
 import { runChecks, windowsCheckPolicy } from '../../src/live-workflow/checks.js';
+import { repositoryProcess } from '../../src/live-workflow/repository-process.js';
 import type { ActionAuthority, LiveTask } from '../../src/live-workflow/contracts.js';
 
 test('the Windows check policy reads the tree, writes scratch and never grants protected paths', t => {
@@ -96,4 +97,15 @@ test('Windows checks refuse other executables and node-project, and a deadline r
   await assert.rejects(runChecks(repo, 'a'.repeat(64), [{ id: 'cancel', executable: host.node.path, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 60000 }],
     runs, authority, cancel.signal), /cancelled/);
   assert.deepEqual(readdirSync(host.stateRoot), [], 'cancelling swept the grants and left no journal or report');
+});
+
+test('a git.exe or gh.exe planted in the worktree never runs in place of the real one', windows, async t => {
+  await loadWindowsHost(hostFolder!);
+  const repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'fm-win-planted-'))); t.after(() => rmSync(repo, { recursive: true, force: true }));
+  for (const name of ['git.exe', 'gh.exe']) copyFileSync(process.execPath, join(repo, name));
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+  assert.match(repositoryProcess('git', ['--version'], repo, env).toString(), /^git version/);
+  assert.match(repositoryProcess('gh', ['--version'], repo, env).toString(), /^gh version/);
+  // The planted copies are node: run in place of git, they would evaluate this and print PLANTED.
+  assert.throws(() => repositoryProcess('git', ['-p', '"PLANTED"'], repo, env), (error: Error) => !/PLANTED/.test(String((error as { stdout?: Buffer }).stdout ?? '')));
 });

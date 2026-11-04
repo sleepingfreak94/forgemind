@@ -27,11 +27,12 @@ export interface PublishedDraftPullRequest { url: string; existing: boolean }
 /** Host-selected, reviewed gh binary. No arbitrary helper commands or tokens are accepted. */
 export interface PublishOptions { gitCredentialHelper?: { ghPath: string; sha256: string } }
 
-const gitOptions = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.filemode=true'];
+const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
+const gitOptions = ['-c', `core.hooksPath=${nullDevice}`, '-c', 'core.fsmonitor=false', '-c', 'core.filemode=true'];
 function run(executable: 'git' | 'gh', args: readonly string[], cwd: string): Buffer {
   // Prevent ambient GIT_DIR / worktree / injected config from redirecting operations.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0',
+  Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullDevice, GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GH_HOST: 'github.com' });
   return repositoryProcess(executable, args, cwd, env);
 }

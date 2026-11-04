@@ -20,8 +20,8 @@ export const PINNED_CLAUDE_CLI_WINDOWS = Object.freeze({
   versionOutput: '2.1.314 (Claude Code)',
   sha256: '7bb0bc6be25e71e7aa3be2dfa537fd4c9c06d4565eb4446b6b748a74ea0d3a28',
 });
-/** Hosts the contained Claude CLI may reach through the host's allow-list proxy (Windows). */
-export const CLAUDE_PROXY_HOSTS = Object.freeze(['api.anthropic.com']);
+/** Hosts the contained Claude CLI may reach through the host's allow-list proxy (Windows): the API and the sign-in token refresh. */
+export const CLAUDE_PROXY_HOSTS = Object.freeze(['api.anthropic.com', 'platform.claude.com']);
 const windows = process.platform === 'win32';
 const pinnedBuild = () => windows ? PINNED_CLAUDE_CLI_WINDOWS : REVIEWED_CLAUDE_CLI;
 export type ReviewedClaudeBuild = { readonly version: string; readonly versionOutput: string; readonly sha256: string };
