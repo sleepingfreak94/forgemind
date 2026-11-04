@@ -9,9 +9,8 @@ import {
   readFileSync,
   rmSync,
   existsSync,
-  statSync,
-  utimesSync,
 } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,15 +108,31 @@ for (const failure of ['expired', 'revoked', 'fenced']) test(`protected reposito
   assert.equal(launches, 0); assert.equal(dispatches, 0);
 });
 
-test('a pinned runner whose identity changes is pinned afresh instead of refusing every later command', t => {
+test('a pinned runner whose identity changes is pinned afresh instead of refusing every later command', async t => {
+  const fs = await import('node:fs');
+  const { syncBuiltinESMExports } = await import('node:module');
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-repository-pin-')));
-  const runner = fileURLToPath(new URL('../../src/live-workflow/repository-supervisor.js', import.meta.url));
-  const { atime, mtime } = statSync(runner);
-  t.after(() => { utimesSync(runner, atime, mtime); rmSync(root, { recursive: true, force: true }); });
+  const runner = realpathSync(fileURLToPath(new URL('../../src/live-workflow/repository-supervisor.js', import.meta.url)));
   const env = { PATH: '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
   assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
-  utimesSync(runner, atime, new Date(mtime.getTime() + 5000));
+  // Report one changed mtime for the runner in-process; touching the shared file would race other test processes.
+  const originalLstat = fs.default.lstatSync, originalRead = fs.default.readFileSync;
+  let changed = false, hashes = 0;
+  t.mock.method(fs.default, 'lstatSync', (...args: Parameters<typeof originalLstat>) => {
+    const stat = Reflect.apply(originalLstat, fs.default, args) as BigIntStats;
+    if (changed || String(args[0]) !== runner || !(args[1] as { bigint?: boolean } | undefined)?.bigint) return stat;
+    changed = true;
+    return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { mtimeNs: stat.mtimeNs + 1n });
+  });
+  t.mock.method(fs.default, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
+    if (String(args[0]) === runner) hashes++;
+    return Reflect.apply(originalRead, fs.default, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(root, { recursive: true, force: true }); });
   assert.match(repositoryProcess('git', ['--version'], root, env).toString(), /^git version/);
+  assert.equal(changed, true);
+  assert.equal(hashes, 1, 'the changed runner is hashed again once');
 });
 
 test('protected repository launch rechecks budget after awaited authority decision', async t => {

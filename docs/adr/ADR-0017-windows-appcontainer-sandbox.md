@@ -110,7 +110,7 @@ On Windows both call `launcher acl`:
 
 **Egress.**
 - The CONNECT relay (`native-executor-tunnel.ts`) now takes an exact host allow-list on port 443 and reports refused targets. Codex keeps `api.openai.com`.
-- On Windows, `NativeClaudeModel` starts one relay per call for `CLAUDE_PROXY_HOSTS` (`api.anthropic.com`). It passes the relay through `HTTPS_PROXY` and records refused targets as `proxy-refused` phase evidence.
+- On Windows, `NativeClaudeModel` starts one relay per call for `CLAUDE_PROXY_HOSTS`: `api.anthropic.com`, and `platform.claude.com` for the sign-in token refresh (added in phase 3). It passes the relay through `HTTPS_PROXY` and records refused targets as `proxy-refused` phase evidence.
 - The container has no internet capability, so a client that ignores the proxy fails.
 
 **Session.**
@@ -191,6 +191,7 @@ On Windows both call `launcher acl`:
 
 - **Phase 3 (done):** `project:run --windows-host` loads the host. Worktree, git, checks, coding, review and artifacts run on Windows. Git uses `NUL` for hooks and global config. A timed-out git command's tree is ended with `taskkill /T`. Ownership answers and runtime pins are cached per file identity: each check started a process, and each git command re-hashed node.exe.
 - **Phase 3 (next):** `gh` and a draft PR on Windows.
+- **Phase 3 limit:** git keeps `core.filemode=true`. Git for Windows sees no execute bit, so a tracked `100755` file would show a mode change and fail the scope check. Neither test repository has one.
 - **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 
 ## Owner questions
