@@ -8,8 +8,6 @@ import type { ProcessRequest } from './process.js';
 export async function supervisedWindows(request: ProcessRequest): Promise<{ stdout: string; stderr: string; code: number | null }> {
   const host = windowsHost();
   if (!request.containment) throw new Error('Windows runs need a containment policy');
-  // shortcut: stdin is not passed into the container yet; provider CLIs (phase 2a) need it.
-  if (request.input) throw new Error('Contained stdin is not supported yet');
   request.signal?.throwIfAborted();
   const executable = pinFile(request.executable);
   if (request.executableSha256 !== undefined && executable.digest !== request.executableSha256)
@@ -29,7 +27,7 @@ export async function supervisedWindows(request: ProcessRequest): Promise<{ stdo
   let result;
   try {
     result = await runContained(host.launcher, { executable: executable.path, args: request.args, cwd: request.cwd, env: request.env,
-      ...request.containment, timeoutMs: request.timeoutMs, maxOutputBytes: request.maxOutputBytes }, host.stateRoot, controller.signal);
+      ...request.containment, ...(request.input ? { input: request.input } : {}), timeoutMs: request.timeoutMs, maxOutputBytes: request.maxOutputBytes }, host.stateRoot, controller.signal);
   } finally {
     clearInterval(poll);
     request.signal?.removeEventListener('abort', cancel);

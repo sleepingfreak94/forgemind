@@ -2,9 +2,12 @@ import { createServer, connect } from 'node:net';
 import type { Socket, Server } from 'node:net';
 import { Transform } from 'node:stream';
 export interface NativeTunnel { readonly port: number; stop(): Promise<void> }
-/** HTTPS CONNECT byte relay. Never terminates TLS, parses Responses, or handles tokens. */
-export async function createNativeTunnel(port: number, checkActive: () => void): Promise<NativeTunnel> {
+/** HTTPS CONNECT byte relay to an exact host allow-list on port 443. Never terminates TLS, parses Responses, or handles
+ * tokens. `onRefused` hears each refused target, so a run can record what a CLI tried to reach. */
+export async function createNativeTunnel(port: number, checkActive: () => void, hosts: readonly string[] = ['api.openai.com'],
+  onRefused?: (target: string) => void): Promise<NativeTunnel> {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid tunnel port');
+  if (!hosts.length || hosts.some(host => !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host))) throw new Error('Invalid tunnel hosts');
   checkActive();
   const sockets = new Set<Socket>();
   let closed = false;
@@ -24,13 +27,16 @@ export async function createNativeTunnel(port: number, checkActive: () => void):
       const end = header.indexOf('\r\n\r\n');
       if (end < 0) return;
       const text = header.subarray(0, end).toString('ascii'), lines = text.split('\r\n');
-      if (lines[0] !== 'CONNECT api.openai.com:443 HTTP/1.1' ||
+      const host = /^CONNECT ([a-z0-9.-]+):443 HTTP\/1\.1$/.exec(lines[0] ?? '')?.[1];
+      const refuse = () => { onRefused?.((lines[0] ?? '').replace(/[^\x20-\x7e]/g, '?').slice(0, 200)); fail(); };
+      if (!host || !hosts.includes(host)) { refuse(); return; }
+      if (
           !lines.slice(1).every(line => /^[A-Za-z0-9-]+: [\x20-\x7e]*$/.test(line)) ||
           lines.slice(1).some(line => /^(Content-Length|Transfer-Encoding|Proxy-Authorization):/i.test(line)) ||
           lines.filter(line => /^Host:/i.test(line)).length !== 1 ||
-          !lines.includes('Host: api.openai.com:443')) { fail(); return; }
+          !lines.includes(`Host: ${host}:443`)) { refuse(); return; }
       accepted = true; client.removeListener('data', receive); client.pause();
-      upstream = connect({ host: 'api.openai.com', port: 443 }); track(upstream);
+      upstream = connect({ host, port: 443 }); track(upstream);
       upstream.setTimeout(10000, fail); upstream.once('close', () => client.destroy());
       upstream.once('connect', () => {
         try { guard(); } catch { fail(); return; }

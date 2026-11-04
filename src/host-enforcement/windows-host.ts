@@ -17,7 +17,7 @@ export function launcherSourceDigest(directory = LAUNCHER_SOURCE): string {
   return hash.digest('hex');
 }
 
-export interface WindowsHost { folder: string; launcher: WindowsLauncher; node: PinnedFile; stateRoot: string }
+export interface WindowsHost { folder: string; launcher: WindowsLauncher; node: PinnedFile; claude?: PinnedFile; stateRoot: string }
 let current: WindowsHost | undefined;
 
 /** The host loaded by loadWindowsHost. Every Windows run needs it; there is no uncontained fallback. */
@@ -37,11 +37,13 @@ export async function loadWindowsHost(folder: string): Promise<WindowsHost> {
   if (!stat.isFile() || stat.nlink !== 1 || stat.size > 4096) throw new Error('Invalid windows-host.json');
   const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
   const launcherEntry = raw.launcher as { path?: unknown; sha256?: unknown } | undefined,
-    nodeEntry = raw.node as { path?: unknown; sha256?: unknown } | undefined;
+    nodeEntry = raw.node as { path?: unknown; sha256?: unknown } | undefined,
+    claudeEntry = raw.claude as { path?: unknown; sha256?: unknown } | undefined;
   if (raw.version !== 1 || typeof launcherEntry?.path !== 'string' || typeof launcherEntry.sha256 !== 'string' ||
       typeof nodeEntry?.path !== 'string' || typeof nodeEntry.sha256 !== 'string' || typeof raw.stateRoot !== 'string' ||
-      typeof raw.sourceSha256 !== 'string') throw new Error('Invalid windows-host.json');
-  for (const path of [launcherEntry.path, nodeEntry.path, raw.stateRoot])
+      typeof raw.sourceSha256 !== 'string' ||
+      (claudeEntry !== undefined && (typeof claudeEntry.path !== 'string' || typeof claudeEntry.sha256 !== 'string'))) throw new Error('Invalid windows-host.json');
+  for (const path of [launcherEntry.path, nodeEntry.path, raw.stateRoot, ...(claudeEntry ? [claudeEntry.path as string] : [])])
     if (!inside(path, folder)) throw new Error('windows-host.json paths must stay inside the host folder');
   if (raw.sourceSha256 !== launcherSourceDigest()) throw new Error('The launcher source changed since setup; run npm run windows:setup again');
   const launcher = pinWindowsLauncher(launcherEntry.path, launcherEntry.sha256);
@@ -51,7 +53,9 @@ export async function loadWindowsHost(folder: string): Promise<WindowsHost> {
   if (!isTrusted(dirname(nodeEntry.path), lstatSync(dirname(nodeEntry.path)))) throw new Error('The Windows host runtime folder must be owner-controlled');
   const node = pinFile(nodeEntry.path);
   if (node.digest !== nodeEntry.sha256) throw new Error('node.exe is not the copy setup pinned');
+  const claude = claudeEntry ? pinFile(claudeEntry.path as string) : undefined;
+  if (claude && claude.digest !== claudeEntry!.sha256) throw new Error('claude.exe is not the copy setup pinned');
   if (await sweepWindowsSandbox(launcher, raw.stateRoot) !== 0) throw new Error('Leftover sandbox grants could not be removed');
-  current = Object.freeze({ folder, launcher, node, stateRoot: raw.stateRoot });
+  current = Object.freeze({ folder, launcher, node, ...(claude ? { claude } : {}), stateRoot: raw.stateRoot });
   return current;
 }

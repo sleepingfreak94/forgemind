@@ -30,6 +30,8 @@ public class Policy {
   public int activeProcessLimit { get; set; }
   public string reportPath { get; set; }
   public string journalPath { get; set; }
+  /// A fixed container from setup (loopback-exempt for the provider proxy), or null for a fresh random one.
+  public string container { get; set; }
 }
 
 public class Journal {
@@ -37,6 +39,7 @@ public class Journal {
   public string sid { get; set; }
   public string[] trees { get; set; }
   public string[] objects { get; set; }
+  public bool keep { get; set; }
 }
 
 static partial class Launcher {
@@ -102,10 +105,15 @@ static partial class Launcher {
   static int Main(string[] argv) {
     try {
       if (argv.Length == 2 && argv[0] == "run") return Run(json.Deserialize<Policy>(Encoding.UTF8.GetString(FromBase64Url(argv[1]))));
-      if (argv.Length == 2 && argv[0] == "sweep") return Sweep(argv[1]);
+      if (argv.Length == 2 && argv[0] == "sweep") {
+        int failures = Sweep(argv[1]);
+        Console.Out.WriteLine(json.Serialize(new Dictionary<string, object> { { "failures", failures } }));
+        return failures == 0 ? 0 : 3;
+      }
       if (argv.Length >= 2 && argv[0] == "setup") return Setup(argv);
       if (argv.Length >= 2 && argv[0] == "acl") return Acl(argv);
-      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>... | acl user | acl private|trusted <path>");
+      if (argv.Length == 2 && argv[0] == "sid") return ContainerSid(argv[1]);
+      Console.Error.WriteLine("forgemind-launcher: usage: run <policy> | sweep <journal directory> | setup <directory>... | acl user | acl private|trusted <path> | sid <fixed container>");
       return 64;
     } catch (Exception error) {
       // Reached only before the report exists (or if writing it failed), so the host treats the run as unconfirmed.
@@ -140,6 +148,7 @@ static partial class Launcher {
     if (!p.journalPath.EndsWith(".journal")) throw new ArgumentException("journal must end in .journal");
     if (File.Exists(p.reportPath) || File.Exists(p.journalPath)) throw new ArgumentException("report or journal already exists");
     PrivateFolder(Path.GetDirectoryName(p.reportPath)); PrivateFolder(Path.GetDirectoryName(p.journalPath));
+    if (p.container != null && !FixedContainer(p.container)) throw new ArgumentException("unknown fixed container");
     foreach (string arg in p.args) if (arg == null || arg.IndexOf('\0') >= 0) throw new ArgumentException("invalid argument");
     foreach (KeyValuePair<string, string> pair in p.env)
       if (pair.Key.Length == 0 || pair.Key.IndexOf('=') >= 0 || pair.Key.IndexOf('\0') >= 0 || pair.Value == null || pair.Value.IndexOf('\0') >= 0) throw new ArgumentException("invalid environment");
@@ -149,12 +158,26 @@ static partial class Launcher {
   static int Run(Policy p) {
     Validate(p);
     // Opened exclusively before the child exists, so nothing else can create, replace or delete the report.
-    using (FileStream report = new FileStream(p.reportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-      return Run(p, report);
+    using (FileStream report = new FileStream(p.reportPath, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+      if (p.container == null) return Run(p, report);
+      // Runs sharing a fixed container take turns, in every logon session, or one run's cleanup would revoke another's grants.
+      using (Mutex turn = new Mutex(false, @"Global\" + p.container)) {
+        try {
+          // Busy is a trusted result, not a crash: no report would make the host sweep the live holder.
+          if (!turn.WaitOne(30000)) { WriteReport(report, "error", null, "fixed container busy", ""); return 3; }
+        } catch (AbandonedMutexException) { } // the previous holder died
+        try {
+          // A holder that died left its grants on this fixed SID; undo them before this run gets the same SID.
+          if (Sweep(Path.GetDirectoryName(p.journalPath)) != 0) { WriteReport(report, "error", null, "leftover grants could not be removed", ""); return 3; }
+          return Run(p, report);
+        } finally { turn.ReleaseMutex(); }
+      }
+    }
   }
 
   static int Run(Policy p, FileStream report) {
-    string name = "forgemind." + RandomHex(16);
+    string name = p.container ?? "forgemind." + RandomHex(16);
+    bool keep = p.container != null;
     IntPtr derived;
     int derivation = DeriveAppContainerSidFromAppContainerName(name, out derived);
     if (derivation != 0) throw new Win32Exception(derivation, "AppContainer SID");
@@ -169,12 +192,13 @@ static partial class Launcher {
     // The journal is complete before the profile or any grant exists, so a killed launcher always leaves enough to undo
     // it. Sweep only reads *.journal, and the rename makes the finished file appear at once.
     string pending = p.journalPath + ".tmp";
-    File.WriteAllText(pending, json.Serialize(new Journal { name = name, sid = sid.Value, trees = trees.ToArray(), objects = objects.ToArray() }));
+    File.WriteAllText(pending, json.Serialize(new Journal { name = name, sid = sid.Value, trees = trees.ToArray(), objects = objects.ToArray(), keep = keep }));
     File.Move(pending, p.journalPath);
     // Held read-shared until cleanup, so the journal cannot be rewritten while the child runs.
     FileStream journalHold = new FileStream(p.journalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
     IntPtr sidPointer;
     int created = CreateAppContainerProfile(name, name, "ForgeMind contained run", IntPtr.Zero, 0, out sidPointer);
+    if (keep && created == unchecked((int)0x800700B7)) created = DeriveAppContainerSidFromAppContainerName(name, out sidPointer); // already exists
     if (created != 0) throw new Win32Exception(created, "AppContainer profile");
     if (new SecurityIdentifier(sidPointer) != sid) { FreeSid(sidPointer); DeleteAppContainerProfile(name); throw new InvalidOperationException("AppContainer SID mismatch"); }
     string status = "error", message = "";
@@ -185,16 +209,19 @@ static partial class Launcher {
       foreach (string path in p.writePaths) Grant(path, sid, FileSystemRights.Modify | FileSystemRights.Synchronize);
       // user32 start-up needs the window station and desktop; service sessions (SSH) lack the package ACE there.
       // Enumerate/read/atoms on the station; read, write, windows and menus on the desktop; no hooks or journaling.
-      WindowAccess(GetProcessWindowStation(), sid, 0x20123, true);
-      WindowAccess(GetThreadDesktop(GetCurrentThreadId()), sid, 0x200C7, true);
+      using (WindowTurn()) {
+        WindowAccess(GetProcessWindowStation(), sid, 0x20123, true);
+        WindowAccess(GetThreadDesktop(GetCurrentThreadId()), sid, 0x200C7, true);
+      }
       status = Launch(p, sidPointer, out exitCode, out exited);
     } catch (Exception error) {
       status = "error"; message = error.Message + (error is Win32Exception ? " (" + ((Win32Exception)error).NativeErrorCode + ")" : "");
     } finally {
       FreeSid(sidPointer);
     }
-    bool clean = Revoke(sid, trees, objects) & DeleteAppContainerProfile(name) == 0;
-    clean &= TryWindowAccess(GetProcessWindowStation(), sid) & TryWindowAccess(GetThreadDesktop(GetCurrentThreadId()), sid);
+    bool clean = Revoke(sid, trees, objects) & (keep || DeleteAppContainerProfile(name) == 0);
+    using (WindowTurn())
+      clean &= TryWindowAccess(GetProcessWindowStation(), sid) & TryWindowAccess(GetThreadDesktop(GetCurrentThreadId()), sid);
     journalHold.Dispose();
     if (clean) File.Delete(p.journalPath);
     else if (status == "reaped" || status == "deadline") status = "cleanup-uncertain";
@@ -315,18 +342,23 @@ static partial class Launcher {
   }
 
 
+  // Returns the number of leftover journals it could not undo. A journal a live launcher still holds is skipped: its
+  // grants belong to a running command, and that launcher removes them itself.
   static int Sweep(string directory) {
     int failures = 0;
     foreach (string file in Directory.GetFiles(Canonical(directory), "*.journal")) {
       Journal journal;
-      try { journal = json.Deserialize<Journal>(File.ReadAllText(file)); } catch (Exception) { journal = null; }
+      try {
+        using (FileStream exclusive = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (StreamReader reader = new StreamReader(exclusive)) journal = json.Deserialize<Journal>(reader.ReadToEnd());
+      } catch (IOException) { continue; } // held: in use by a live run
+      catch (Exception) { journal = null; }
       if (journal == null || journal.name == null || journal.sid == null || !journal.name.StartsWith("forgemind.") || journal.trees == null || journal.objects == null) { failures++; continue; }
       bool clean = Revoke(new SecurityIdentifier(journal.sid), journal.trees, journal.objects);
-      int deleted = DeleteAppContainerProfile(journal.name);
+      int deleted = journal.keep ? 0 : DeleteAppContainerProfile(journal.name);
       if (clean && (deleted == 0 || deleted == unchecked((int)0x80070002))) File.Delete(file); else failures++;
     }
-    Console.Out.WriteLine(json.Serialize(new Dictionary<string, object> { { "failures", failures } }));
-    return failures == 0 ? 0 : 3;
+    return failures;
   }
 
   static void WriteReport(FileStream report, string status, object exitCode, string message, string sid) {
