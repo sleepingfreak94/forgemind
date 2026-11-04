@@ -331,10 +331,11 @@ test('push grant invalidated by launcher pinning has zero dispatch and one faile
   const calls = network(t, 'success', command => {
     if (armed && command.args.includes('cat-file') && command.args.at(-1)?.endsWith(':evidence.json')) inspected = true;
   });
-  const originalRead = fs.default.readFileSync;
-  t.mock.method(fs.default, 'readFileSync', (...args: Parameters<typeof originalRead>) => {
-    const result = Reflect.apply(originalRead, fs.default, args);
-    if (inspected && String(args[0]) === realpathSync(process.execPath) && ++runtimeReads === 2) invalid = true;
+  // The runtime pin is cached; its identity (realpath + lstat) is checked twice before each command launches.
+  const originalRealpath = fs.default.realpathSync;
+  t.mock.method(fs.default, 'realpathSync', (...args: Parameters<typeof originalRealpath>) => {
+    const result = Reflect.apply(originalRealpath, fs.default, args);
+    if (inspected && String(args[0]) === process.execPath && ++runtimeReads === 2) invalid = true;
     return result;
   });
   syncBuiltinESMExports();
