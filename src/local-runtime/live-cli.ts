@@ -9,7 +9,7 @@ import { connectChatGPT, chatGPTStatus } from '../live-workflow/chatgpt-auth.js'
 import { openChatGPTPlanSession, forgetChatGPTBillingReview } from '../live-workflow/chatgpt-plan.js';
 import { privateDirectory } from '../live-workflow/authority.js';
 import { runTask } from '../live-workflow/orchestrator.js';
-import { validateCommitAuthor } from '../live-workflow/repository.js';
+import { isHelperExecutablePath, validateCommitAuthor } from '../live-workflow/repository.js';
 import { loadBrowserQaConfiguration } from '../live-workflow/browser-qa-command.js';
 import { pinFile } from '../host-enforcement/manifest.js';
 import { pinClaudeCli, openClaudeSubscriptionSession } from '../live-workflow/claude-session.js';
@@ -149,7 +149,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
   if (provider === 'openai' && realpathSync(args['--codex']!) !== args['--codex']) throw new Error('Canonical Codex executable required');
   const publication = args['--gh'] ? (() => {
     const gh = pinFile(args['--gh']!);
-    if (gh.path !== args['--gh'] || !(lstatSync(gh.path).mode & 0o111) || !/^\/[A-Za-z0-9_./-]+$/.test(gh.path))
+    if (gh.path !== args['--gh'] || !isHelperExecutablePath(gh.path))
       throw new Error('Canonical executable gh helper required');
     return { author: validateCommitAuthor({ name: args['--author-name']!, email: args['--author-email']! }),
       gitCredentialHelper: { ghPath: gh.path, sha256: gh.digest } };

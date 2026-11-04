@@ -1,6 +1,6 @@
 # ADR-0017: Windows AppContainer sandbox for checks
 
-- Status: Proposed. Phases 1a (launcher, wrapper and Windows tests), 1b (setup, Windows ownership checks, contained single-process checks), 2a (the contained Claude CLI route through an allow-list proxy) and 2b (the contained Cursor route) are implemented. Phase 3's first part is too: `project:run --windows-host` completes a full local run on Windows. Draft PRs on Windows are not verified yet.
+- Status: Proposed. Phases 1a (launcher, wrapper and Windows tests), 1b (setup, Windows ownership checks, contained single-process checks), 2a (the contained Claude CLI route through an allow-list proxy) and 2b (the contained Cursor route) are implemented. Phase 3 is too: `project:run --windows-host` completes a full run on Windows, including the draft PR.
 - Date: 2026-10-30
 - Basis: the owner authorized building a Windows sandbox, designed and reviewed with Opus 5.5. The design was checked against a Windows 11 ARM VM (build 26300).
 
@@ -190,7 +190,7 @@ On Windows both call `launcher acl`:
 ## Next
 
 - **Phase 3 (done):** `project:run --windows-host` loads the host. Worktree, git, checks, coding, review and artifacts run on Windows. Git uses `NUL` for hooks and global config. A timed-out git command's tree is ended with `taskkill /T`. Ownership answers and runtime pins are cached per file identity: each check started a process, and each git command re-hashed node.exe.
-- **Phase 3 (next):** `gh` and a draft PR on Windows.
+- **Phase 3b (done):** draft PRs from Windows. `--gh` takes a drive-absolute `gh.exe` (NTFS has no execute bit), pinned like the other executables. Git runs a credential helper through its shell and treats it as a path only when it starts with one, so the helper path is not quoted; its spaces and parentheses are backslash-escaped (`C:/Program\ Files/GitHub\ CLI/gh.exe auth git-credential`). Verified in the VM: a run pushed its task branch and opened a draft PR in a private test repository.
 - **Phase 3 limit:** git keeps `core.filemode=true`. Git for Windows sees no execute bit, so a tracked `100755` file would show a mode change and fail the scope check. Neither test repository has one.
 - **Later:** job-only whole-tree kill for `evidence.ts` and browser QA, then LPAC.
 
