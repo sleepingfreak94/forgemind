@@ -8,7 +8,8 @@ import { runTask } from '../../src/live-workflow/orchestrator.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
 import type { LiveTask } from '../../src/live-workflow/contracts.js';
 
-const darwin = { skip: process.platform !== 'darwin', timeout: 90000 };
+// Generous budgets: under the full parallel suite a 60 s run budget ran out (each run is about 30 s alone).
+const darwin = { skip: process.platform !== 'darwin', timeout: 300000 };
 const author = { name: 'Branch Owner', email: '123+owner@users.noreply.github.com' };
 
 /** A project on the owner's own branch feature/abc-123, and a fixture model that plans, edits value.txt and passes review. */
@@ -30,7 +31,7 @@ function fixture(t: test.TestContext) {
   const task: LiveTask = { schemaVersion: 1, taskId: 'fix-value', objective: 'Change value to after', readPaths: ['value.txt'],
     writePaths: ['value.txt'], checks: [{ id: 'value', executable: realpathSync(process.execPath),
       args: ['-e', "process.exit(require('fs').readFileSync('value.txt','utf8')==='after'?0:1)"], timeoutMs: 5000 }],
-    model: 'fixture-model', effort: 'low', maxModelRequests: 3, maxPromptBytes: 65536, maxOutputBytes: 65536, maxRuntimeMs: 60000, draftPr: false };
+    model: 'fixture-model', effort: 'low', maxModelRequests: 3, maxPromptBytes: 65536, maxOutputBytes: 65536, maxRuntimeMs: 240000, draftPr: false };
   let calls = 0;
   const outputs = [
     { objective: task.objective, paths: ['value.txt'], steps: ['Fix value'], acceptanceCriteria: ['Value is after'], risks: [] },
