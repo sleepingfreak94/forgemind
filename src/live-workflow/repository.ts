@@ -243,7 +243,7 @@ export function landOnOwnerBranch(info: RepositoryInfo, branch: string, head: st
 export function removeTaskWorktree(info: RepositoryInfo, checkout: TaskCheckout, authorize: BeforeRepositoryAction): void {
   const source = binding(info.root), check = () => { if (binding(info.root).identity !== source.identity) throw new Error('Project folder changed'); };
   act('git', ['worktree', 'remove', '--', checkout.root], source, authorize, check);
-  act('git', ['branch', '-D', '--', checkout.branch], source, authorize, check);
+  act('git', ['branch', '-d', '--', checkout.branch], source, authorize, check);
 }
 export function captureTicketDiff(workspace: string, baseHead: string, allowedPaths: readonly string[]): TicketDiff {
   const root = rootOf(workspace); oid(baseHead);
@@ -352,10 +352,12 @@ function existingPr(prepared: PreparedDraftPullRequest, response: Buffer): strin
   const rows: unknown = JSON.parse(response.toString('utf8'));
   if (!Array.isArray(rows)) throw new Error('Invalid GitHub PR discovery response');
   if (prepared.runBase !== undefined) {
-    // Owner branch: one open PR for it (draft or not) is updated by the push; closed ones are history.
-    const open = rows.filter(row => (row as Record<string, unknown>).state === 'OPEN');
+    // Owner branch: one open PR from this repository (not a fork with the same branch name) is updated by the push;
+    // closed ones are history. A PR with auto-merge on is refused: the push could merge without a human.
+    const open = (rows as Record<string, unknown>[]).filter(row => row.state === 'OPEN' && row.isCrossRepository === false);
     if (open.length > 1) throw new Error('Ambiguous existing PR');
-    return open.length ? prUrl((open[0] as Record<string, unknown>).url, repo) : undefined;
+    if (open[0]?.autoMergeRequest) throw new Error(`The open PR for ${prepared.branch} has auto-merge on; turn it off before ForgeMind pushes to it`);
+    return open.length ? prUrl(open[0]!.url, repo) : undefined;
   }
   if (rows.length === 0) return undefined;
   if (rows.length !== 1) throw new Error('Ambiguous existing PR');
@@ -386,13 +388,17 @@ export function publishDraftPullRequest(prepared: PreparedDraftPullRequest, body
   };
   // Discovery is read-only but still authorized because it accesses the remote service.
   const discovery = act('gh', ['pr', 'list', '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`, '--head', fresh.branch,
-    '--base', fresh.repository.defaultBranch, '--state', 'all', '--json', 'url,isDraft,headRefOid,baseRefOid,state'], fresh.source,
+    '--base', fresh.repository.defaultBranch, '--state', 'all', '--json', 'url,isDraft,headRefOid,baseRefOid,state,isCrossRepository,autoMergeRequest'], fresh.source,
     authorize, check, ghPath);
   const existing = existingPr(fresh, discovery);
   if (existing && fresh.runBase === undefined) return { url: existing, existing: true };
   // Never a force push: if the remote branch has commits this one lacks, the push is refused.
   act('git', [...helperArgs, 'push', '--no-verify', 'origin', `${fresh.expectedHead}:refs/heads/${fresh.branch}`], fresh.source, authorize, check);
-  if (existing) return { url: existing, existing: true };
+  if (existing) {
+    // The open PR keeps its description; this run's Before/After/Validation/Review evidence is added as a comment.
+    act('gh', ['pr', 'comment', existing, '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`, '--body-file', file], fresh.source, authorize, check, ghPath);
+    return { url: existing, existing: true };
+  }
   const created = act('gh', ['pr', 'create', '--draft', '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`,
     '--base', fresh.repository.defaultBranch, '--head', fresh.branch, '--title', fresh.title, '--body-file', file], fresh.source, authorize, check, ghPath);
   return { url: prUrl(created.toString('utf8').trim(), fresh.repository), existing: false };

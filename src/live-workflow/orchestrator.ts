@@ -418,18 +418,23 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const head = committed.head;
     currentSource();
     authority.phase('committed', current, { head });
-    let publishRoot = activeRoot, worktree: string | undefined = activeRoot;
+    let worktree: string | undefined = activeRoot;
+    // Last step on the owner branch: browser QA re-checks the separate checkout on every git action until it is removed.
+    const removeCheckout = (done: NonNullable<typeof checkout>) => {
+      browserQaReady = false;
+      try { removeTaskWorktree(repo, done, authorizeGit); finishGit('completed'); worktree = undefined; } catch (error) {
+        finishGit('indeterminate');
+        progress(`Could not remove the run checkout; it is kept at ${done.root}`);
+        authority.phase('worktree-kept', current, { root: done.root, message: error instanceof Error ? error.message : 'cleanup failed' });
+      }
+    };
     if (own) {
       landOnOwnerBranch(repo, own, head, task.writePaths, authorizeGit);
       finishGit('completed');
       authority.phase('landed', current, { branch: own, head, folder: repo.root });
       progress(`Landed on your branch ${own} in ${repo.root}`);
-      try { removeTaskWorktree(repo, checkout, authorizeGit); finishGit('completed'); worktree = undefined; } catch (error) {
-        finishGit('indeterminate');
-        authority.phase('worktree-kept', current, { root: checkout.root, message: error instanceof Error ? error.message : 'cleanup failed' });
-      }
-      publishRoot = repo.root;
       if (!task.draftPr) {
+        removeCheckout(checkout);
         authority.finish('completed');
         return { status: 'completed-local', artifacts, branch: own, ...(worktree ? { worktree } : {}) };
       }
@@ -437,7 +442,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const prBase = own ? defaultBranchHead(repo) : checkout.baseHead;
     if (!prBase) throw new Error('Default branch head unknown; fetch origin first');
     const prepared = prepareDraftPullRequest({
-      root: publishRoot,
+      root: own ? repo.root : activeRoot,
       branch: own ?? checkout.branch,
       expectedBase: prBase,
       ...(own ? { runBase: checkout.baseHead } : {}),
@@ -450,6 +455,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit, options.publication);
     finishGit('completed');
     authority.phase('published', current, { base: prBase, head, ...published });
+    if (own) removeCheckout(checkout);
     authority.finish('completed');
     return { status: 'completed', artifacts, ...(worktree ? { worktree } : {}), ...(own ? { branch: own } : {}), prUrl: published.url };
   } catch (error) {

@@ -5,6 +5,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTask } from '../../src/live-workflow/orchestrator.js';
+import { discoverRepository, landOnOwnerBranch } from '../../src/live-workflow/repository.js';
+import { report } from './browser-qa-fixture.js';
 import { sha256 } from '../../src/live-workflow/validation.js';
 import type { LiveTask } from '../../src/live-workflow/contracts.js';
 
@@ -110,9 +112,65 @@ test('a draft PR on the owner branch pushes that branch from the project folder 
 test('an open PR for the owner branch is updated by the push instead of opening another', darwin, async t => {
   const f = fixture(t);
   const network = interceptNetwork(t, [{ url: 'https://github.com/fixture/project/pull/7', state: 'OPEN', isDraft: false,
-    headRefOid: '0'.repeat(40), baseRefOid: '1'.repeat(40) }]);
+    headRefOid: '0'.repeat(40), baseRefOid: '1'.repeat(40), isCrossRepository: false, autoMergeRequest: null }]);
   f.task.draftPr = true;
   const result = await runTask({ ...f.options, publication: helper(f) });
   assert.equal(result.prUrl, 'https://github.com/fixture/project/pull/7');
-  assert.deepEqual(network.map(c => c.executable === 'gh' ? `gh ${c.args[1]}` : 'push'), ['gh list', 'push']);
+  assert.deepEqual(network.map(c => c.executable === 'gh' ? `gh ${c.args[1]}` : 'push'), ['gh list', 'push', 'gh comment']);
+  const comment = network[2]!.args;
+  assert.equal(comment[2], 'https://github.com/fixture/project/pull/7'); assert.ok(comment.includes('--body-file'), 'the run evidence is posted');
+});
+
+test('a fork PR with the same branch name is ignored and a new draft PR is opened', darwin, async t => {
+  const f = fixture(t);
+  const network = interceptNetwork(t, [{ url: 'https://github.com/fixture/project/pull/9', state: 'OPEN', isDraft: true,
+    headRefOid: '0'.repeat(40), baseRefOid: '1'.repeat(40), isCrossRepository: true, autoMergeRequest: null }]);
+  f.task.draftPr = true;
+  const result = await runTask({ ...f.options, publication: helper(f) });
+  assert.equal(result.prUrl, 'https://github.com/fixture/project/pull/23');
+  assert.deepEqual(network.map(c => c.executable === 'gh' ? `gh ${c.args[1]}` : 'push'), ['gh list', 'push', 'gh create']);
+});
+
+test('an open PR with auto-merge on is refused before any push', darwin, async t => {
+  const f = fixture(t);
+  const network = interceptNetwork(t, [{ url: 'https://github.com/fixture/project/pull/7', state: 'OPEN', isDraft: false,
+    headRefOid: '0'.repeat(40), baseRefOid: '1'.repeat(40), isCrossRepository: false, autoMergeRequest: { enabledAt: 'now' } }]);
+  f.task.draftPr = true;
+  await assert.rejects(runTask({ ...f.options, publication: helper(f) }), /auto-merge on/);
+  assert.deepEqual(network.map(c => c.executable === 'gh' ? `gh ${c.args[1]}` : 'push'), ['gh list']);
+});
+
+/** A run head one commit past the owner branch, made on a scratch branch, touching the given file. */
+function runHead(f: ReturnType<typeof fixture>, file: string) {
+  f.git('switch', '-q', '-c', 'scratch-run'); writeFileSync(join(f.repo, file), 'run edit'); f.git('commit', '-qam', 'run');
+  const head = f.git('rev-parse', 'HEAD'); f.git('switch', '-q', 'feature/abc-123');
+  return head;
+}
+const allow = () => {};
+
+test('landing refuses when the owner branch moved, HEAD left it, or the run touched other paths', t => {
+  const f = fixture(t), info = discoverRepository(f.repo), head = runHead(f, 'value.txt');
+  writeFileSync(join(f.repo, 'value.txt'), 'owner'); f.git('commit', '-qam', 'owner moved on');
+  const moved = f.git('rev-parse', 'HEAD');
+  assert.throws(() => landOnOwnerBranch(info, 'feature/abc-123', head, ['value.txt'], allow), /binding mismatch/);
+  assert.equal(f.git('rev-parse', 'HEAD'), moved);
+  f.git('reset', '-q', '--hard', 'HEAD~1'); f.git('switch', '-q', 'main');
+  assert.throws(() => landOnOwnerBranch(info, 'feature/abc-123', head, ['value.txt'], allow), /binding mismatch|no longer on the owner branch/);
+  f.git('switch', '-q', 'feature/abc-123');
+  const outside = runHead({ ...f, git: (...a: string[]) => f.git(...a.map(x => x === 'scratch-run' ? 'scratch-out' : x)) }, 'notes.txt');
+  assert.throws(() => landOnOwnerBranch(info, 'feature/abc-123', outside, ['value.txt'], allow), /outside the task write paths/);
+  assert.equal(f.git('rev-parse', 'HEAD'), f.start, 'nothing landed');
+  landOnOwnerBranch(info, 'feature/abc-123', head, ['value.txt'], allow);
+  assert.equal(f.git('rev-parse', 'HEAD'), head);
+});
+
+test('with browser QA the owner branch lands, the draft PR opens and the checkout is removed last', darwin, async t => {
+  const f = fixture(t), network = interceptNetwork(t, []);
+  f.task.draftPr = true;
+  const result = await runTask({ ...f.options, publication: helper(f), browserQa: { scenarioId: 'value-fixture', adapter: async r => report(r) } });
+  assert.equal(result.status, 'completed'); assert.equal(result.worktree, undefined);
+  assert.equal(result.prUrl, 'https://github.com/fixture/project/pull/23');
+  assert.deepEqual(network.map(c => c.executable === 'gh' ? `gh ${c.args[1]}` : 'push'), ['gh list', 'push', 'gh create']);
+  assert.equal(readFileSync(join(f.repo, 'value.txt'), 'utf8'), 'after');
+  assert.equal(f.git('branch', '--list', 'task/*'), ''); assert.equal(existsSync(join(f.root, 'worktrees', 'fix-value')), false);
 });
