@@ -19,6 +19,9 @@ export interface TicketDiff extends SourceBinding { baseHead: string; paths: str
 export interface DraftPullRequestInput {
   root: string; branch: string; expectedBase: string; expectedHead: string;
   expectedRemoteUrl: string; allowedPaths: readonly string[]; title: string; body: string;
+  /** Owner-branch mode: the commit this run started from. Only this run's changes are scope-checked, the branch may be
+   * any non-default owner branch, and an open PR for it is updated by the push. */
+  runBase?: string;
 }
 export interface PreparedDraftPullRequest extends DraftPullRequestInput {
   repository: RepositoryInfo; source: SourceBinding; diff: TicketDiff;
@@ -201,6 +204,47 @@ export function createTaskWorktree(info: RepositoryInfo, taskId: string, parentD
   act('git', ['worktree', 'add', '-b', branch, '--', root, info.head], source, authorize, check);
   return { root: realpathSync(root), branch, baseHead: info.head, repository: discoverRepository(root) };
 }
+/** The commit a PR into the default branch is based on: origin's copy when fetched, else the local branch. */
+export function defaultBranchHead(info: RepositoryInfo): string | undefined {
+  return optional(info.root, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${info.defaultBranch}^{commit}`) ??
+    optional(info.root, 'rev-parse', '--verify', '--quiet', `refs/heads/${info.defaultBranch}^{commit}`);
+}
+/** A branch the owner created and checked out: a plain, valid ref name that is not the default branch. */
+export function isOwnerBranchName(branch: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(branch) && !/\.\.|\/\/|\.lock$|\/$|@\{/.test(branch);
+}
+/** The owner's checked-out branch in the project folder, when it is a valid non-default branch. */
+export function ownerBranch(info: RepositoryInfo): string | undefined {
+  const branch = optional(info.root, 'symbolic-ref', '--quiet', '--short', 'HEAD');
+  if (!branch || branch === info.defaultBranch || !isOwnerBranchName(branch)) return undefined;
+  git(info.root, 'check-ref-format', `refs/heads/${branch}`);
+  return branch;
+}
+/** Owner-branch mode: fast-forward the owner's branch in the project folder to the reviewed commit. Refused, leaving the
+ * folder untouched, when the folder changed, the branch moved, or the run's commits touch paths outside allowedPaths. */
+export function landOnOwnerBranch(info: RepositoryInfo, branch: string, head: string, allowedPaths: readonly string[],
+  authorize: BeforeRepositoryAction): SourceBinding {
+  oid(head);
+  const check = () => {
+    safeCheckoutSource(info);
+    if (text(info.root, 'symbolic-ref', '--quiet', '--short', 'HEAD') !== branch) throw new Error('Project folder is no longer on the owner branch');
+    git(info.root, 'merge-base', '--is-ancestor', info.head, head);
+    const allowed = new Set(allowedPaths.map(safeSourcePath));
+    const changed = names(git(info.root, 'diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', info.head, head, '--'));
+    if (!changed.length || changed.some(path => !allowed.has(path))) throw new Error('Run commits change paths outside the task write paths');
+  };
+  check();
+  act('git', ['merge', '--ff-only', '--no-edit', head], binding(info.root), authorize, check);
+  const landed = binding(info.root);
+  if (landed.head !== head || dirtyPaths(info.root).length) throw new Error('Owner branch did not land on the reviewed commit');
+  return landed;
+}
+/** Removes a finished run's separate checkout and its temporary task branch, after its commit has landed. */
+export function removeTaskWorktree(info: RepositoryInfo, checkout: TaskCheckout, authorize: BeforeRepositoryAction): void {
+  const source = binding(info.root), check = () => { if (binding(info.root).identity !== source.identity) throw new Error('Project folder changed'); };
+  act('git', ['worktree', 'remove', '--', checkout.root], source, authorize, check);
+  act('git', ['branch', '-D', '--', checkout.branch], source, authorize, check);
+}
 export function captureTicketDiff(workspace: string, baseHead: string, allowedPaths: readonly string[]): TicketDiff {
   const root = rootOf(workspace); oid(baseHead);
   const allowed = new Set(allowedPaths.map(safeSourcePath)), source = binding(root);
@@ -286,18 +330,20 @@ function verifyCandidate(input: DraftPullRequestInput): RepositoryInfo {
   if (info.remoteUrl !== input.expectedRemoteUrl) throw new Error('Expected origin mismatch');
   if (info.head !== input.expectedHead) throw new Error('Expected head mismatch');
   if (info.dirtyPaths.length) throw new Error('Candidate must be clean and committed');
-  if (!/^task\/[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(input.branch) || input.branch === info.defaultBranch ||
+  const named = input.runBase === undefined ? /^task\/[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(input.branch) : isOwnerBranchName(input.branch);
+  if (!named || input.branch === info.defaultBranch ||
       text(info.root, 'symbolic-ref', '--quiet', '--short', 'HEAD') !== input.branch) throw new Error('Candidate must be on its non-default task branch');
-  const baseRef = optional(info.root, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${info.defaultBranch}^{commit}`) ??
-    optional(info.root, 'rev-parse', '--verify', '--quiet', `refs/heads/${info.defaultBranch}^{commit}`);
-  if (baseRef !== input.expectedBase) throw new Error('Expected base mismatch');
-  git(info.root, 'merge-base', '--is-ancestor', input.expectedBase, input.expectedHead);
-  if (input.expectedBase === input.expectedHead) throw new Error('Candidate has no committed changes');
+  if (defaultBranchHead(info) !== input.expectedBase) throw new Error('Expected base mismatch');
+  // An owner branch may be behind the default branch; only the run's own start must be an ancestor.
+  const start = input.runBase ?? input.expectedBase;
+  oid(start);
+  git(info.root, 'merge-base', '--is-ancestor', start, input.expectedHead);
+  if (start === input.expectedHead) throw new Error('Candidate has no committed changes');
   return info;
 }
 export function prepareDraftPullRequest(input: DraftPullRequestInput): PreparedDraftPullRequest {
   if (!input.title.trim() || /[\x00-\x1f]/.test(input.title) || !input.body.trim() || input.body.includes('\0')) throw new Error('Invalid PR title or body');
-  const repository = verifyCandidate(input), diff = captureTicketDiff(repository.root, input.expectedBase, input.allowedPaths);
+  const repository = verifyCandidate(input), diff = captureTicketDiff(repository.root, input.runBase ?? input.expectedBase, input.allowedPaths);
   return { ...input, root: repository.root, allowedPaths: [...input.allowedPaths], repository, diff,
     source: { root: repository.root, head: diff.head, identity: diff.identity } };
 }
@@ -305,6 +351,12 @@ function existingPr(prepared: PreparedDraftPullRequest, response: Buffer): strin
   const { repository: repo } = prepared;
   const rows: unknown = JSON.parse(response.toString('utf8'));
   if (!Array.isArray(rows)) throw new Error('Invalid GitHub PR discovery response');
+  if (prepared.runBase !== undefined) {
+    // Owner branch: one open PR for it (draft or not) is updated by the push; closed ones are history.
+    const open = rows.filter(row => (row as Record<string, unknown>).state === 'OPEN');
+    if (open.length > 1) throw new Error('Ambiguous existing PR');
+    return open.length ? prUrl((open[0] as Record<string, unknown>).url, repo) : undefined;
+  }
   if (rows.length === 0) return undefined;
   if (rows.length !== 1) throw new Error('Ambiguous existing PR');
   const row = rows[0] as Record<string, unknown>;
@@ -337,8 +389,10 @@ export function publishDraftPullRequest(prepared: PreparedDraftPullRequest, body
     '--base', fresh.repository.defaultBranch, '--state', 'all', '--json', 'url,isDraft,headRefOid,baseRefOid,state'], fresh.source,
     authorize, check, ghPath);
   const existing = existingPr(fresh, discovery);
-  if (existing) return { url: existing, existing: true };
+  if (existing && fresh.runBase === undefined) return { url: existing, existing: true };
+  // Never a force push: if the remote branch has commits this one lacks, the push is refused.
   act('git', [...helperArgs, 'push', '--no-verify', 'origin', `${fresh.expectedHead}:refs/heads/${fresh.branch}`], fresh.source, authorize, check);
+  if (existing) return { url: existing, existing: true };
   const created = act('gh', ['pr', 'create', '--draft', '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`,
     '--base', fresh.repository.defaultBranch, '--head', fresh.branch, '--title', fresh.title, '--body-file', file], fresh.source, authorize, check, ghPath);
   return { url: prUrl(created.toString('utf8').trim(), fresh.repository), existing: false };

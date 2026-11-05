@@ -50,6 +50,8 @@ ForgeMind never reads that login. Planning uses Opus 5.5; coding and review use 
 Connection prints a browser sign-in link; complete OpenAI authentication and consent yourself.
 Run remembers the owner's credits-off acknowledgement for the same account; billing-reset forgets it.
 Draft PR tasks require all three explicit publication options before account review.
+On your own (non-default) branch, the reviewed commit lands on that branch in the project folder; pass
+--author-name and --author-email for it. On the default branch, work goes to a new task/<task-id> branch.
 Browser QA host config requires the connection tuple; both phase reports gate review and publication.
 No credentials are read and no worktree is created when run connection options are absent.
 No --yes, paid API fallback, endpoint override, or automatic task replay exists.
@@ -93,10 +95,10 @@ export function parseLiveArguments(argv: readonly string[]) {
   }
   if (values['--browser-qa-config'] && !live.every(key => values[key]))
     throw new Error('Browser QA config requires the complete connection tuple');
-  const publication = ['--gh', '--author-name', '--author-email'];
-  if (mode === 'run' && publication.some(key => values[key]) && !publication.every(key => values[key]))
+  // The author pair also signs commits on the owner's own branch, so it may come without --gh; --gh needs it.
+  if (mode === 'run' && (!values['--author-name'] !== !values['--author-email'] || values['--gh'] && !values['--author-name']))
     throw new Error('Publication gh, author-name and author-email must be supplied together');
-  if (values['--gh']) validateCommitAuthor({ name: values['--author-name']!, email: values['--author-email']! });
+  if (values['--author-name']) validateCommitAuthor({ name: values['--author-name']!, email: values['--author-email']! });
   return { mode: mode!, values };
 }
 const outside = (root: string, path: string) => { const rel = relative(root, path); return rel === '..' || rel.startsWith('..' + sep); };
@@ -154,6 +156,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
     return { author: validateCommitAuthor({ name: args['--author-name']!, email: args['--author-email']! }),
       gitCredentialHelper: { ghPath: gh.path, sha256: gh.digest } };
   })() : undefined;
+  const commitAuthor = args['--author-name'] ? validateCommitAuthor({ name: args['--author-name']!, email: args['--author-email']! }) : undefined;
   const inspected = inspectProject(root);
   if (inspected.repository.dirtyPaths.length) throw new Error('Source must be clean before task execution');
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
@@ -212,6 +215,7 @@ export async function liveMain(argv = process.argv.slice(2)): Promise<void> {
       result = await runTask({ workspace: root, task: manifest, ...route, ...(checkRuntime ? { checkRuntime } : {}),
       stateDirectory: runDirectory, worktreeDirectory: worktrees, signal: controller.signal,
       ...(publication ? { publication } : {}),
+      ...(commitAuthor ? { commitAuthor } : {}),
       ...(browserQa ? { browserQa } : {}),
       ...(history ? { history } : {}),
       ...(brainContext !== undefined ? { brainContext } : {}),
