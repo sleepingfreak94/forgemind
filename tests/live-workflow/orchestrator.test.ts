@@ -148,7 +148,7 @@ test("all native inference entry points block without a fixture transport", asyn
 test('draft publication forwards trusted author and pinned helper without network access', {
   skip: process.platform !== 'darwin', timeout: 90000,
 }, async t => {
-  const f = fixture(), ghPath = join(f.root, 'gh-helper');
+  const f = fixture(), ghPath = join(f.root, 'gh');
   writeFileSync(ghPath, 'fixture helper; never executed'); chmodSync(ghPath, 0o755);
   const helper = { ghPath, sha256: sha256(readFileSync(ghPath)) };
   const configFile = join(f.repo, '.git/config'), config = readFileSync(configFile);

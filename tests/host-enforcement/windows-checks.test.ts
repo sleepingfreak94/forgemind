@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isPrivate, isTrusted } from '../../src/host-enforcement/owner-acl.js';
@@ -108,4 +108,14 @@ test('a git.exe or gh.exe planted in the worktree never runs in place of the rea
   assert.match(repositoryProcess('gh', ['--version'], repo, env).toString(), /^gh version/);
   // The planted copies are node: run in place of git, they would evaluate this and print PLANTED.
   assert.throws(() => repositoryProcess('git', ['-p', '"PLANTED"'], repo, env), (error: Error) => !/PLANTED/.test(String((error as { stdout?: Buffer }).stdout ?? '')));
+});
+
+test('a PATH folder that is a junction into the worktree is never used for git', windows, async t => {
+  await loadWindowsHost(hostFolder!);
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'fm-win-junction-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
+  const repo = join(base, 'repo'), link = join(base, 'tools');
+  mkdirSync(repo); copyFileSync(process.execPath, join(repo, 'git.exe')); symlinkSync(repo, link, 'junction');
+  // By spelling, base\tools is outside base\repo; by its real path it is the worktree.
+  const env = { ...process.env, PATH: `${link};${process.env.PATH}`, GIT_TERMINAL_PROMPT: '0' };
+  assert.match(repositoryProcess('git', ['--version'], repo, env).toString(), /^git version/);
 });

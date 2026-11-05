@@ -291,7 +291,7 @@ test('invalid explicit authors fail before repository access, staging or authori
 });
 
 test('publishing permits only explicitly hash-pinned fixed gh credential helper arguments', t => {
-  const f = candidate(t), calls = interceptNetwork(t), ghPath = join(f.base, 'gh-helper');
+  const f = candidate(t), calls = interceptNetwork(t), ghPath = join(f.base, 'gh');
   writeFileSync(ghPath, 'fixture executable not actually run'); chmodSync(ghPath, 0o755);
   const sha256 = createHash('sha256').update(readFileSync(ghPath)).digest('hex');
   assert.throws(() => publishDraftPullRequest(f.prepared, f.bodyFile, f.authorize,
@@ -303,6 +303,8 @@ test('publishing permits only explicitly hash-pinned fixed gh credential helper 
   publishDraftPullRequest(f.prepared, f.bodyFile, f.authorize, { gitCredentialHelper: { ghPath, sha256 } });
   assert.ok(calls[1]!.args.includes(`credential.https://github.com.helper=${ghPath} auth git-credential`));
   assert.ok(calls[1]!.args.includes('credential.helper='));
+  const ghCalls = calls.filter(call => call.executable === 'gh');
+  assert.ok(ghCalls.length >= 2 && ghCalls.every(call => (call as { path?: string }).path === ghPath), 'gh pr commands run the pinned --gh');
   assert.throws(() => publishDraftPullRequest(f.prepared, f.bodyFile, () => {
     writeFileSync(ghPath, 'changed after authorization');
   }, { gitCredentialHelper: { ghPath, sha256 } }), /Unverified/);
@@ -338,7 +340,7 @@ test('a Windows gh helper is a drive-absolute .exe and its helper command is esc
   const gh = 'C:\\Program Files\\GitHub CLI\\gh.exe';
   assert.equal(isHelperExecutablePath(gh, 'win32'), true);
   assert.equal(isHelperExecutablePath('C:\\Program Files (x86)\\gh\\gh.exe', 'win32'), true);
-  for (const bad of ['C:\\gh\\gh', 'gh.exe', '\\\\server\\share\\gh.exe', 'C:/gh/gh.exe', 'C:\\gh\\gh.exe auth git-credential;evil.exe',
+  for (const bad of ['C:\\gh\\gh', 'gh.exe', 'C:\\tools\\other.exe', '\\\\server\\share\\gh.exe', 'C:/gh/gh.exe', 'C:\\gh\\gh.exe auth git-credential;evil.exe',
     'C:\\a"b\\gh.exe', 'C:\\$x\\gh.exe', 'C:\\gh\\gh.exe\n'])
     assert.equal(isHelperExecutablePath(bad, 'win32'), false, bad);
   assert.equal(credentialHelperCommand(gh, 'win32'), 'C:/Program\\ Files/GitHub\\ CLI/gh.exe auth git-credential');
