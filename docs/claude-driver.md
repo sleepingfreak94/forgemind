@@ -7,8 +7,8 @@ Spike evidence: [route plan](claude-route-plan.md). macOS only.
 ## Owner setup
 
 1. Install Claude Code. The route accepts only the reviewed build: version
-   `2.1.309`, SHA-256 `5eadc000…0619c`. Pass its canonical versioned path, for
-   example `~/.local/share/claude/versions/2.1.309`. A different build is refused
+   `2.1.318`, SHA-256 `677a2ea7…b5e7d`. Pass its canonical versioned path, for
+   example `~/.local/share/claude/versions/2.1.318`. A different build is refused
    until it has been reviewed.
 2. Create an owner-only profile outside every checkout and sign in yourself, using
    Anthropic's own flow:

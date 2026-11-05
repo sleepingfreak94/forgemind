@@ -9,9 +9,9 @@ import type { ProcessRequest } from './process.js';
 
 /** Reviewed Claude Code build (ADR-0014). A different binary needs a new Phase 0 review. */
 export const REVIEWED_CLAUDE_CLI = Object.freeze({
-  version: '2.1.309',
-  versionOutput: '2.1.309 (Claude Code)',
-  sha256: '5eadc0009cdcdbc0d06e58110d7b2baf88ced6088b1c33a60a21217fe410619c',
+  version: '2.1.318',
+  versionOutput: '2.1.318 (Claude Code)',
+  sha256: '677a2ea7bf576cedd20e191d973914ed8a41796f53a63b1923381ddc4d5b5e7d',
 });
 /** Windows build, pinned 2026-10-30 from the owner's Windows 11 ARM VM. Contained conformance only (ADR-0017 phase 2a):
  * the ADR-0014 Phase 0 review (terms, flags, stream shape) is pending, so its receipts record reviewedBuild: false. */

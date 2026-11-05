@@ -22,8 +22,9 @@ export interface ClaudeStreamResult {
 
 const MAX_LINES = 4096;
 const MAX_USAGE_BYTES = 4096;
-/** Built-ins the reviewed 2.1.309 reports under `--safe-mode`; none is callable without tools. */
-const REVIEWED_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring'];
+/** Built-ins the reviewed 2.1.318 reports under `--safe-mode` (2.1.318 added cc-plugin-privacy); none is callable without
+ * tools, and the exact tool, skill, slash-command and MCP checks below still apply. */
+const REVIEWED_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring', 'cc-plugin-privacy'];
 // Without --safe-mode (MCP routes) the CLI also lists statusline-setup. No agent is callable: the tool inventory is exact.
 const REVIEWED_AGENTS = new Set(['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup']);
 const allowedTypes = new Set(['system', 'assistant', 'user', 'rate_limit_event', 'result']);
