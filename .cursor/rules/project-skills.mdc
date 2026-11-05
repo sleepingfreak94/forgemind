@@ -1,0 +1,14 @@
+---
+description: ForgeMind project workflows (ship a ticket, full suite, Windows VM run, babysit a PR, check a merged stack, status, cleanup).
+alwaysApply: false
+---
+
+ForgeMind's workflow skills live in `.claude/skills/<name>/SKILL.md`. Claude Code and Cursor use the same files (owner rule: brain and task workflows work the same on both). When a request matches one of them, read that file and follow it. AGENTS.md and `office-model-routing.mdc` still apply on top.
+
+- `ship-ticket`: take an implementation ticket to a reviewed draft PR and stop before merge.
+- `full-suite`: run the full Mac suite on an exact commit and triage failures.
+- `windows-e2e`: run a real task on the Windows VM and collect evidence.
+- `babysit-pr`: watch a PR, or main, through CI and never merge.
+- `stack-merge-check`: check a PR stack before or after the owner merges it.
+- `whats-left`: give one status from live repository state.
+- `cleanup`: list leftovers and delete only what the owner confirms.
