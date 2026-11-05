@@ -13,7 +13,11 @@ This skill only reads. It never merges, retargets, closes PRs or deletes branche
    - its head equals the commit its independent review passed (in the PR body's Review section);
    - its checks are green;
    - it is still a draft (the owner marks it ready).
-3. Tell the owner the merge order: merge the bottom PR into `main` first. GitHub then retargets the next PR to `main` by itself; if it doesn't, use **Edit** next to the PR title. Each PR then needs a green `portable` run before it merges. The owner merges; this skill does not.
+3. Tell the owner the merge order: merge the bottom PR into `main` first.
+   - GitHub retargets the next PR to `main` automatically only when the merged PR's head branch is deleted. This repo has `delete_branch_on_merge` off (`gh api repos/<owner>/<repo> --jq .delete_branch_on_merge`).
+   - So tell the owner to retarget the next PR to `main` (**Edit** next to the PR title) before merging it. Otherwise it merges into the old branch.
+   - Each PR then needs both Portable verification jobs green before it merges.
+   - The owner merges; this skill does not.
 
 ## After merging
 1. Confirm every PR shows `MERGED` with `baseRefName` = `main`, and the merge order: `gh pr view <n> --json state,baseRefName,mergedAt,mergeCommit`.

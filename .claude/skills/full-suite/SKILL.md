@@ -1,6 +1,6 @@
 ---
 name: full-suite
-description: Run ForgeMind's full Mac test suite on an exact commit and triage any failures into regressions or load flakes with evidence. Use before filing or updating a PR, or when the owner asks to run the full tests or test:local.
+description: Run ForgeMind's full Mac test suite on an exact commit and triage any failures into regressions or load flakes with evidence. Use before filing a PR (not for every small PR update), or when the owner asks to run the full tests or test:local.
 ---
 
 # Full Mac suite with failure triage
@@ -14,7 +14,8 @@ description: Run ForgeMind's full Mac test suite on an exact commit and triage a
 ```sh
 cd <worktree>
 git rev-parse HEAD; git status --short        # must be clean; note the commit
-pgrep -fl "run-tests.mjs"                     # must be empty
+pgrep -fl "run-tests.mjs"                     # must be empty: no other suite
+pgrep -fl "ssh -tt forgevm"                  # must be empty: no VM run (vm-run.sh)
 caffeinate -i npm run test:local > <scratchpad>/test-local-<slug>.log 2>&1; echo EXIT=$?
 grep -E "^ℹ (tests|pass|fail|skipped|duration_ms)" <log>; tail -1 <log>
 awk '/^✖ failing tests:/{f=1} f' <log> | grep -E "^(✖|  [A-Za-z]*Error)"

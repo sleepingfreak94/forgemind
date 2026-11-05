@@ -8,19 +8,19 @@ description: Watch a ForgeMind PR, or main after merges, through its GitHub chec
 Adapted from tstack's `babysit-pr`. This repo's checks are the "Portable verification" workflow (`.github/workflows/portable.yml`). It runs two jobs, `Portable / ubuntu-latest` and `Portable / windows-latest`. There are no review bots.
 
 ## Never
-- Merge, mark ready for review, enable auto-merge, or force-push.
+- Merge, mark ready for review, enable auto-merge, force-push, or push to the default branch. When babysitting `main`, a fix goes on a new `task/*` branch with its own draft PR (`ship-ticket`).
 - Write your own polling or sleep loop, or run two watchers on one PR.
 - Post "still waiting" messages.
 
 ## Watch
-- **A PR:** run `gh pr checks <n> --watch --interval 60` as a single background command and wait for its notification. Exit 0 means every check passed; non-zero means one failed or was cancelled.
-- **The default branch after merges:** run `gh run list --branch main --limit 3 --json name,status,conclusion,headSha`, then `gh run watch <run-id> --exit-status` on the run for the final commit. A run that was **cancelled** because a newer push replaced it is normal: check the newest commit's run.
+- **A PR:** run `gh pr checks <n> --watch --interval 60` as a single background command and wait for its notification. Exit 0 means every check passed; non-zero means one failed or was cancelled. Right after a push it can exit with "no checks reported" before the workflow registers: that means not started yet, so run it once more after about a minute, not as a failure.
+- **The default branch after merges:** run `gh run list --branch main --limit 3 --json databaseId,name,status,conclusion,headSha`, then `gh run watch <databaseId> --exit-status` on the run for the final commit. A run that was **cancelled** because a newer push replaced it is normal: check the newest commit's run.
 - If GraphQL is rate-limited (`gh api rate_limit --jq .resources.graphql`), use REST: `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`. Don't retry in a tight loop.
 
 ## On failure
 1. Read the log: `gh run view <run-id> --log-failed`.
 2. Tell a real failure from an infrastructure flake: a runner error, a network outage, or a cancellation. For a flake, re-run it once with `gh run rerun <run-id> --failed` and say so.
-3. Reproduce a real failure locally on the PR's head commit, for example with `npm run test:portable`. Then fix it on the PR's task branch with a test, push normally, and watch again.
+3. Reproduce a real failure locally on the PR's head commit, for example with `npm run test:portable`, following the `full-suite` rules: one suite at a time, never during a VM run. Then fix it on the PR's task branch with a test, push normally, and watch again.
 4. A fix that changes `src` invalidates earlier review and runtime evidence: get a new independent verdict for the new head (see `ship-ticket`).
 
 ## Finish

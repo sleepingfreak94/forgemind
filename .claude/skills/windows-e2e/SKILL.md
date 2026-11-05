@@ -20,7 +20,7 @@ description: Run a real ForgeMind task on the Windows VM (ssh host forgevm) at a
 - Approve brain lessons that a test run proposes.
 
 ## 1. Sync the VM to the exact commit
-`scripts/vm-sync.sh <local worktree> <base commit already on the VM> <branch>` bundles `<base>..<branch>`. On the VM it then fetches the bundle into a local ref, hard-resets the ForgeMind checkout to it (that checkout is disposable), checks the tree is clean, builds, and prints the commit. Quote that commit in the evidence.
+`.claude/skills/windows-e2e/scripts/vm-sync.sh <local worktree> <base commit already on the VM> <branch>` bundles `<base>..<branch>`. On the VM it then fetches the bundle into a local ref, checks it out detached (the VM checkout is disposable), **fails if the tree isn't clean**, builds, and prints the commit. Run the scripts from the repo root, using these full paths: the repo's own `scripts/` folder is a different folder. Quote that commit in the evidence.
 
 ## 2. Prepare the test project
 - It must be clean as ForgeMind sees it. ForgeMind ignores the system git config, so a CRLF file written by `echo` looks dirty even when `git status` is clean. Edit files from the Mac and copy them over with scp, or rewrite them with `git -c core.autocrlf=false checkout -- <file>`.
@@ -29,7 +29,7 @@ description: Run a real ForgeMind task on the Windows VM (ssh host forgevm) at a
 
 ## 3. Run it
 - **No `gh` publication (local runs, Claude or Cursor):** use SSH with a real terminal. ForgeMind requires stdout to be a TTY, so output must not be redirected on the VM.
-  `scripts/vm-run.sh 'C:\Users\forgemind\<script>.cmd' <capture file>`
+  `.claude/skills/windows-e2e/scripts/vm-run.sh 'C:\Users\forgemind\<script>.cmd' <capture file>`
   Run it in the background and wait for the notification. It keeps SSH stdin open, because Windows closes the terminal at stdin EOF. It stops at `EXIT=` and prints the cleaned output.
 - **Draft PR runs:** use the owner's desktop session. `gh` keeps its token in Windows Credential Manager, and an SSH logon cannot read it (it gets a 401). Use a one-time interactive scheduled task:
   ```
@@ -40,7 +40,7 @@ description: Run a real ForgeMind task on the Windows VM (ssh host forgevm) at a
   - This only works while the owner is logged in to the VM desktop.
 
 ## 4. Collect evidence
-- Read the receipt and failure files:
+- Read the receipt and failure files. Put the PowerShell in a `.ps1` file, or quote it so the Mac shell doesn't expand `$r`:
   ```
   powershell -NoProfile -Command "$r = Get-Content <dir>\artifacts\receipt.json -Raw | ConvertFrom-Json; 'status=' + $r.run.status; $r.phases | % { $_.name + ': ' + $_.data }"
   ```
@@ -49,6 +49,6 @@ description: Run a real ForgeMind task on the Windows VM (ssh host forgevm) at a
 - Report every run, including failed and retried ones, with its state directory. A model mistake that the checks rejected is evidence that the harness works. It is not a pass of the feature. If you change the task to avoid a model mistake, say why.
 
 ## Known pitfalls
-- A `Cursor CLI failed` with `read ECONNRESET` in the plan phase was transient once. Run `windows-cursor.test.js` with `FORGEMIND_WINDOWS_CURSOR_REQUEST=1`, then retry once.
+- A `Cursor CLI failed` with `read ECONNRESET` in the plan phase was transient once. Run `windows-cursor.test.js` with `FORGEMIND_WINDOWS_CURSOR_REQUEST=1`, then retry once. That variable makes one real Cursor request on the owner's plan, so follow the Cursor route rules (test-auto on the personal Free plan).
 - `Expected base mismatch` means origin's default branch on GitHub lags the local base. The owner must push it from the desktop session.
 - A fine-grained PAT needs the test repo listed, with Contents and Pull requests set to read and write.
