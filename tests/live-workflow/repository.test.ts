@@ -348,6 +348,18 @@ test('a Windows gh helper is a drive-absolute .exe and its helper command is esc
   assert.equal(credentialHelperCommand('/opt/homebrew/bin/gh', 'darwin'), '/opt/homebrew/bin/gh auth git-credential');
 });
 
+test('a ticket commit stages a bracket path literally and leaves its look-alike alone', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.root, 'app', '[id]'), { recursive: true }); mkdirSync(join(f.root, 'app', 'i'), { recursive: true });
+  writeFileSync(join(f.root, 'app', '[id]', 'route.ts'), 'a\n'); writeFileSync(join(f.root, 'app', 'i', 'route.ts'), 'b\n');
+  git(f.root, 'add', '--', 'app'); git(f.root, 'commit', '-m', 'dynamic route');
+  const base = createTaskWorktree(discoverRepository(f.root), 'bracket', f.base, f.authorize);
+  writeFileSync(join(base.root, 'app', '[id]', 'route.ts'), 'changed\n');
+  const result = commitTicketChanges(base.root, sourceIdentity(base.root), ['app/[id]/route.ts'], 'feat(fixture): bracket change', f.authorize);
+  assert.deepEqual(git(base.root, 'diff', '--name-only', `${base.baseHead}..${result.head}`).trim().split('\n'), ['app/[id]/route.ts']);
+  assert.deepEqual(discoverRepository(base.root).dirtyPaths, []);
+});
+
 test('Next.js bracket paths are literal: tracked and diffed, and never widen the allowed files', t => {
   const f = fixture(t);
   mkdirSync(join(f.root, 'app', '[id]'), { recursive: true }); mkdirSync(join(f.root, 'app', 'i'), { recursive: true });

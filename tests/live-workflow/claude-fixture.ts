@@ -15,7 +15,7 @@ export function claudeStream(model: string, output: unknown, patch: {
     { type: 'system', subtype: 'init', model, claude_code_version: '2.1.308', apiKeySource: 'none', analytics_disabled: true,
       tools: ['StructuredOutput'], mcp_servers: [], permissionMode: 'default', slash_commands: [], skills: [],
       agents: ['claude', 'Explore', 'general-purpose', 'Plan'],
-      plugins: [{ name: 'cc-plugin-agents-md', path: 'builtin' }, { name: 'cc-plugin-plugin-authoring', path: 'builtin' }, { name: 'cc-plugin-privacy', path: 'builtin' }],
+      plugins: [{ name: 'cc-plugin-agents-md', path: 'builtin' }, { name: 'cc-plugin-plugin-authoring', path: 'builtin' }],
       session_id: 'fixture', ...patch.init },
     { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_fixture', name: patch.toolName ?? 'StructuredOutput', input: output }] } },
     { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_fixture', content: 'Structured output provided successfully' }] } },

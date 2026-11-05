@@ -43,7 +43,7 @@ macOS only. Run every command from an owner terminal in the ForgeMind checkout. 
 
 ### 1. Sign in once, into a private profile
 
-Claude. The pinned build is `2.1.309`, for example `~/.local/share/claude/versions/2.1.309`.
+Claude. The pinned build is `2.1.318`, for example `~/.local/share/claude/versions/2.1.318`.
 
 ```sh
 mkdir -p -m 700 ~/.forgemind/claude-profile
