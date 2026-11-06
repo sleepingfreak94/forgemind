@@ -60,8 +60,10 @@ function oid(value: string): string {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error('Expected exact commit identity');
   return value;
 }
+// Square brackets are allowed (Next.js dynamic routes such as app/[id]/route.ts): every git command that takes a path
+// uses a :(literal) pathspec or --no-index, so a bracket never acts as a pattern. * ? : stay refused.
 function pathName(path: string): string {
-  if (!path || isAbsolute(path) || /[\\\x00-\x1f\x7f:*?\[\]]/.test(path) ||
+  if (!path || isAbsolute(path) || /[\\\x00-\x1f\x7f:*?]/.test(path) ||
       path.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) {
     throw new Error(`Unsafe Git path: ${JSON.stringify(path)}`);
   }

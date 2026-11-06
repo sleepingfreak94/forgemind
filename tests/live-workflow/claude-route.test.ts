@@ -55,6 +55,21 @@ const rejections: [string, string, RegExp][] = [
 ];
 for (const [name, stream, error] of rejections)
   test(`stream parser fails closed on ${name}`, () => assert.throws(() => parseClaudeStream(stream, expected), error));
+test('the reviewed built-in plugins depend on the build: 2.1.318 adds cc-plugin-privacy, every other build must not report it', () => {
+  const two = [{ name: 'cc-plugin-agents-md', path: 'builtin' }, { name: 'cc-plugin-plugin-authoring', path: 'builtin' }];
+  const three = [...two, { name: 'cc-plugin-privacy', path: 'builtin' }];
+  const parse = (version: string, plugins: unknown[]) =>
+    parseClaudeStream(claudeStream(sonnet, answer, { init: { claude_code_version: version, plugins } }), { ...expected, version });
+  // 2.1.314 is the Windows pin and reports two plugins with ForgeMind's environment (checked in the Windows VM).
+  for (const version of ['2.1.308', '2.1.309', '2.1.314']) {
+    assert.doesNotThrow(() => parse(version, two));
+    assert.throws(() => parse(version, three), /configuration differs from the reviewed profile \(plugins\)/);
+  }
+  assert.doesNotThrow(() => parse('2.1.318', three));
+  assert.throws(() => parse('2.1.318', two), /configuration differs from the reviewed profile \(plugins\)/);
+  assert.throws(() => parse('2.1.318', [...three, { name: 'cc-plugin-telemetry', path: 'builtin' }]), /\(plugins\)/);
+  assert.throws(() => parse('2.1.318', [...three.slice(0, 2), { name: 'cc-plugin-privacy', path: '/elsewhere' }]), /\(plugins\)/);
+});
 test('thinking progress estimates are allowed only as numeric system events after init', () => {
   const progress = { type: 'system', subtype: 'thinking_tokens', estimated_tokens: 40, estimated_tokens_delta: 40 };
   const lines = claudeStream(sonnet, answer).trimEnd().split('\n');

@@ -347,3 +347,32 @@ test('a Windows gh helper is a drive-absolute .exe and its helper command is esc
   assert.equal(credentialHelperCommand('C:\\Program Files (x86)\\gh\\gh.exe', 'win32'), 'C:/Program\\ Files\\ \\(x86\\)/gh/gh.exe auth git-credential');
   assert.equal(credentialHelperCommand('/opt/homebrew/bin/gh', 'darwin'), '/opt/homebrew/bin/gh auth git-credential');
 });
+
+test('a ticket commit stages a bracket path literally and leaves its look-alike alone', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.root, 'app', '[id]'), { recursive: true }); mkdirSync(join(f.root, 'app', 'i'), { recursive: true });
+  writeFileSync(join(f.root, 'app', '[id]', 'route.ts'), 'a\n'); writeFileSync(join(f.root, 'app', 'i', 'route.ts'), 'b\n');
+  git(f.root, 'add', '--', 'app'); git(f.root, 'commit', '-m', 'dynamic route');
+  const base = createTaskWorktree(discoverRepository(f.root), 'bracket', f.base, f.authorize);
+  writeFileSync(join(base.root, 'app', '[id]', 'route.ts'), 'changed\n');
+  const result = commitTicketChanges(base.root, sourceIdentity(base.root), ['app/[id]/route.ts'], 'feat(fixture): bracket change', f.authorize);
+  assert.deepEqual(git(base.root, 'diff', '--name-only', `${base.baseHead}..${result.head}`).trim().split('\n'), ['app/[id]/route.ts']);
+  assert.deepEqual(discoverRepository(base.root).dirtyPaths, []);
+});
+
+test('Next.js bracket paths are literal: tracked and diffed, and never widen the allowed files', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.root, 'app', '[id]'), { recursive: true }); mkdirSync(join(f.root, 'app', 'i'), { recursive: true });
+  writeFileSync(join(f.root, 'app', '[id]', 'route.ts'), 'export {};\n'); writeFileSync(join(f.root, 'app', 'i', 'route.ts'), 'export {};\n');
+  git(f.root, 'add', '--', 'app'); git(f.root, 'commit', '-m', 'dynamic route');
+  assert.match(sourceIdentity(f.root), /^[a-f0-9]{64}$/);
+  const base = git(f.root, 'rev-parse', 'HEAD');
+  writeFileSync(join(f.root, 'app', '[id]', 'route.ts'), 'export const changed = true;\n');
+  const diff = captureTicketDiff(f.root, base, ['app/[id]/route.ts']);
+  assert.deepEqual(diff.paths, ['app/[id]/route.ts']);
+  // As a pattern, app/[id]/route.ts would also match app/i/route.ts; as a literal it must not.
+  writeFileSync(join(f.root, 'app', 'i', 'route.ts'), 'export const other = true;\n');
+  assert.throws(() => captureTicketDiff(f.root, base, ['app/[id]/route.ts']), /Changes outside allowed exact files: app\/i\/route\.ts/);
+  for (const bad of ['app/*/route.ts', 'app/?d/route.ts', 'app/a:b.ts'])
+    assert.throws(() => captureTicketDiff(f.root, base, [bad]), /Unsafe Git path/);
+});

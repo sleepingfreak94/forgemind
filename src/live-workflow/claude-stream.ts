@@ -22,8 +22,11 @@ export interface ClaudeStreamResult {
 
 const MAX_LINES = 4096;
 const MAX_USAGE_BYTES = 4096;
-/** Built-ins the reviewed 2.1.309 reports under `--safe-mode`; none is callable without tools. */
+/** Built-ins a reviewed build reports under `--safe-mode`; none is callable without tools, and the exact tool, skill,
+ * slash-command and MCP checks below still apply. Every build must report exactly these, plus the extra built-ins listed
+ * for that build (2.1.314, the Windows pin, reports only these two; 2.1.318 also reports cc-plugin-privacy). */
 const REVIEWED_PLUGINS = ['cc-plugin-agents-md', 'cc-plugin-plugin-authoring'];
+const PLUGINS_ADDED_BY_BUILD: Readonly<Record<string, readonly string[]>> = { '2.1.318': ['cc-plugin-privacy'] };
 // Without --safe-mode (MCP routes) the CLI also lists statusline-setup. No agent is callable: the tool inventory is exact.
 const REVIEWED_AGENTS = new Set(['claude', 'Explore', 'general-purpose', 'Plan', 'statusline-setup']);
 const allowedTypes = new Set(['system', 'assistant', 'user', 'rate_limit_event', 'result']);
@@ -72,7 +75,7 @@ export function parseClaudeStream(stdout: string, expected: ClaudeStreamExpectat
     skills: !isDeepStrictEqual(session.skills, []),
     slash_commands: !isDeepStrictEqual(session.slash_commands, []),
     permissionMode: session.permissionMode !== 'default',
-    plugins: !isDeepStrictEqual(plugins && [...plugins].sort(), REVIEWED_PLUGINS),
+    plugins: !isDeepStrictEqual(plugins && [...plugins].sort(), [...REVIEWED_PLUGINS, ...(PLUGINS_ADDED_BY_BUILD[expected.version] ?? [])].sort()),
     agents: !Array.isArray(session.agents) || !session.agents.every(agent => REVIEWED_AGENTS.has(String(agent))),
   }).filter(([, bad]) => bad).map(([field]) => field);
   if (differing.length) throw new Error(`Claude session configuration differs from the reviewed profile (${differing.join(', ')})`);
