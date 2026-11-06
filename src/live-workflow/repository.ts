@@ -29,12 +29,12 @@ export interface PublishOptions { gitCredentialHelper?: { ghPath: string; sha256
 
 const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
 const gitOptions = ['-c', `core.hooksPath=${nullDevice}`, '-c', 'core.fsmonitor=false', '-c', 'core.filemode=true'];
-function run(executable: 'git' | 'gh', args: readonly string[], cwd: string): Buffer {
+function run(executable: 'git' | 'gh', args: readonly string[], cwd: string, path?: string): Buffer {
   // Prevent ambient GIT_DIR / worktree / injected config from redirecting operations.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
   Object.assign(env, { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullDevice, GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GH_HOST: 'github.com' });
-  return repositoryProcess(executable, args, cwd, env);
+  return repositoryProcess(executable, args, cwd, env, path);
 }
 function git(root: string, ...args: string[]): Buffer { return run('git', [...gitOptions, ...args], root); }
 function text(root: string, ...args: string[]): string { return git(root, ...args).toString('utf8').trim(); }
@@ -168,14 +168,15 @@ function unchanged(expected: SourceBinding): void {
   const actual = binding(expected.root);
   if (actual.head !== expected.head || actual.identity !== expected.identity) throw new Error('Source binding changed before action');
 }
-function act(executable: 'git' | 'gh', args: string[], source: SourceBinding, authorize: BeforeRepositoryAction, recheck: () => void): Buffer {
+function act(executable: 'git' | 'gh', args: string[], source: SourceBinding, authorize: BeforeRepositoryAction, recheck: () => void,
+  path?: string): Buffer {
   if (typeof authorize !== 'function') throw new Error('Host before-action authorizer required');
   const exactArgs = executable === 'git' ? [...gitOptions, ...args] : [...args];
   const decision: unknown = authorize(Object.freeze({ executable, args: Object.freeze(exactArgs), cwd: source.root,
     source: Object.freeze({ ...source }) }));
   if (decision !== undefined && decision !== true) throw new Error('Authorizer must decide synchronously; action denied');
   unchanged(source); recheck();
-  return run(executable, exactArgs, source.root);
+  return run(executable, exactArgs, source.root, path);
 }
 function safeCheckoutSource(info: RepositoryInfo): void {
   const now = discoverRepository(info.root);
@@ -258,10 +259,11 @@ export function commitTicketChanges(root: string, expectedSourceIdentity: string
   if (committed.identity !== expectedSourceIdentity || dirtyPaths(info.root).length) throw new Error('Committed source does not match reviewed content');
   return committed;
 }
-/** POSIX: a plain absolute path with an execute bit. Windows: a drive-absolute .exe (NTFS has no execute bit). */
+/** POSIX: a plain absolute path to a file named gh, with an execute bit. Windows: a drive-absolute gh.exe (NTFS has no
+ * execute bit). The name is fixed because gh pr commands also run from this path. */
 export function isHelperExecutablePath(path: string, platform = process.platform): boolean {
-  if (platform === 'win32') return /^[A-Za-z]:\\(?:[A-Za-z0-9_.() -]+\\)*[A-Za-z0-9_.() -]+\.exe$/i.test(path);
-  return /^\/[A-Za-z0-9_./-]+$/.test(path) && (lstatSync(path).mode & 0o111) !== 0;
+  if (platform === 'win32') return /^[A-Za-z]:\\(?:[A-Za-z0-9_.() -]+\\)*gh\.exe$/i.test(path);
+  return /^\/[A-Za-z0-9_./-]+$/.test(path) && path.endsWith('/gh') && (lstatSync(path).mode & 0o111) !== 0;
 }
 /** Git runs a credential helper through its shell, and only treats it as a path when it starts with one: so a Windows path
  * ("Program Files") is not quoted, its spaces and parentheses are escaped. isHelperExecutablePath allows no other specials. */
@@ -323,6 +325,8 @@ export function publishDraftPullRequest(prepared: PreparedDraftPullRequest, body
   const file = resolve(bodyFile);
   if (!isAbsolute(bodyFile) || lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile() || realpathSync(file) !== file || readFileSync(file, 'utf8') !== prepared.body) throw new Error('PR body file mismatch or unsafe path');
   const helperArgs = credentialArgs(options);
+  // gh runs from the pinned --gh path; credentialArgs re-hashes it before every action (check).
+  const ghPath = options.gitCredentialHelper?.ghPath;
   const check = () => {
     verifyCandidate(fresh);
     if (JSON.stringify(credentialArgs(options)) !== JSON.stringify(helperArgs)) throw new Error('Credential helper changed');
@@ -331,11 +335,11 @@ export function publishDraftPullRequest(prepared: PreparedDraftPullRequest, body
   // Discovery is read-only but still authorized because it accesses the remote service.
   const discovery = act('gh', ['pr', 'list', '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`, '--head', fresh.branch,
     '--base', fresh.repository.defaultBranch, '--state', 'all', '--json', 'url,isDraft,headRefOid,baseRefOid,state'], fresh.source,
-    authorize, check);
+    authorize, check, ghPath);
   const existing = existingPr(fresh, discovery);
   if (existing) return { url: existing, existing: true };
   act('git', [...helperArgs, 'push', '--no-verify', 'origin', `${fresh.expectedHead}:refs/heads/${fresh.branch}`], fresh.source, authorize, check);
   const created = act('gh', ['pr', 'create', '--draft', '--repo', `${fresh.repository.owner}/${fresh.repository.repo}`,
-    '--base', fresh.repository.defaultBranch, '--head', fresh.branch, '--title', fresh.title, '--body-file', file], fresh.source, authorize, check);
+    '--base', fresh.repository.defaultBranch, '--head', fresh.branch, '--title', fresh.title, '--body-file', file], fresh.source, authorize, check, ghPath);
   return { url: prUrl(created.toString('utf8').trim(), fresh.repository), existing: false };
 }

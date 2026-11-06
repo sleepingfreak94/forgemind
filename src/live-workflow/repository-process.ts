@@ -30,6 +30,7 @@ function prepareRepositoryProcess(
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv,
+  path?: string,
 ) {
   const commandArgs = [...args];
   const scope = budget.getStore();
@@ -47,7 +48,7 @@ function prepareRepositoryProcess(
     scope?.signal?.throwIfAborted();
     const remaining = commandDeadline - Date.now();
     if (remaining <= 0) throw new Error('Repository deadline exhausted during executable validation');
-    const config = { executable, args: commandArgs, cwd, timeoutMs: remaining, deadline: commandDeadline };
+    const config = { executable, path, args: commandArgs, cwd, timeoutMs: remaining, deadline: commandDeadline };
     // Supervisor owns the process group; outer bound is only a cleanup watchdog.
     const argv = [runner.path, Buffer.from(JSON.stringify(config)).toString('base64url')];
     onDispatch?.();
@@ -75,8 +76,8 @@ function prepareRepositoryProcess(
 
 /** Read-only or separately authorized legacy commands retain a synchronous runner. */
 export function repositoryProcess(executable: 'git' | 'gh', args: readonly string[], cwd: string,
-  env: NodeJS.ProcessEnv): Buffer {
-  return prepareRepositoryProcess(executable, args, cwd, env)();
+  env: NodeJS.ProcessEnv, path?: string): Buffer {
+  return prepareRepositoryProcess(executable, args, cwd, env, path)();
 }
 /** Protected publication checks authority after runtime pinning. Async decisions are
  * awaited; the absolute command budget is checked again after the decision. */

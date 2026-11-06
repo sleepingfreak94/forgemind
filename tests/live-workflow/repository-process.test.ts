@@ -135,6 +135,16 @@ test('a pinned runner whose identity changes is pinned afresh instead of refusin
   assert.equal(hashes, 1, 'the changed runner is hashed again once');
 });
 
+test('a pinned command path runs instead of a PATH lookup, and only for a file named like the command', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fm-repository-path-')));
+  try {
+    const git = realpathSync(childProcess.execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim());
+    assert.match(repositoryProcess('git', ['--version'], root, { PATH: '/nonexistent' }, git).toString(), /^git version/);
+    assert.throws(() => repositoryProcess('git', ['--version'], root, { PATH: '/usr/bin:/bin' }, '/bin/ls'), /Invalid repository command/);
+    assert.throws(() => repositoryProcess('git', ['--version'], root, { PATH: '/usr/bin:/bin' }, 'git'), /Invalid repository command/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('protected repository launch rechecks budget after awaited authority decision', async t => {
   let now = 1000, launches = 0, dispatches = 0;
   t.mock.method(Date, 'now', () => now);
