@@ -114,4 +114,4 @@ Correction summaries use the model route allowed for the project's space:
 - **company space:** the company Cursor seat;
 - **personal space:** the owner's Claude subscription or personal Cursor plan.
 
-Company code never goes through a personal account.
+The owner dropped the rule that company code never goes through a personal account (2026-11-05, ADR-0016); the per-space routing above is unchanged.

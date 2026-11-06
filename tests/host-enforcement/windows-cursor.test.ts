@@ -19,7 +19,7 @@ async function open(t: test.TestContext) {
   const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'fm-win-cursor-'))); t.after(() => rmSync(base, { recursive: true, force: true }));
   const cli = pinCursorCli(host.cursorDirectory);
   const session = await openCursorSubscriptionSession({ profileDirectory: profile!, cli, scratchRoot: base, workspace: base,
-    personalWorkspaces: [base], separateFrom: [base] });
+    separateFrom: [base] });
   t.after(() => session.close());
   return { cli, session, base };
 }

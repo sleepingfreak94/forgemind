@@ -10,8 +10,8 @@ Status: **Phase 0 complete; Phase 1 implemented ([ADR-0016](adr/ADR-0016-cursor-
 | Scope | Phase 0 checks, then Phase 1: plan, coding and review as single calls in `project:run`. A tools coding mode (as Claude Phase 2) is later work. |
 | Models | `grok-4.7-high` for plan, coding and review. No `auto`, no fallback, no substitution. |
 | Opus planning | Deferred (owner, 2026-10-23). Later option: at the start of each run ForgeMind asks whether to plan with `claude-opus-5-5-high` through Cursor (Other Models), used only on an explicit yes for that run. Phase 0 and Phase 1 use Grok 4.7 only. |
-| Code allowed | While signed in to the personal plan: only ForgeMind and test repositories. Company repositories are refused until the company seat is configured. |
-| Data boundary | Company code never goes through the personal Claude subscription or the personal Cursor account. Routes are not mixed within a run. |
+| Code allowed | Superseded 2026-11-05 (owner): any repository may run on either plan. Originally: on the personal plan only ForgeMind and test repositories, with company repositories refused until the company seat was configured. |
+| Data boundary | Routes are not mixed within a run. The rule that company code never goes through personal accounts was superseded on 2026-11-05 (owner). |
 
 ## Starting point (observed 2026-10-23, no inference)
 
@@ -91,11 +91,11 @@ One Auto print-mode call with the prompt on **stdin** succeeded. Its stream was:
 | Task `provider: "cursor"`; routing: plan/coding/review `grok-4.7-high` | `contracts.ts`, `validation.ts`, `routing-profile.ts` |
 | Owner session: dedicated profile, sandboxed status check, account tier | new `cursor-session.ts` |
 | `NativeCursorModel`: one pinned print-mode process per call (`-p --mode ask --trust` in scratch, `stream-json`), fixed model checked against the init event, JSON answer validated by the existing plan/coding/review validators, explicit plan-limit and other errors fail closed | new `cursor-cli-model.ts`, `cursor-stream.ts` |
-| Personal-plan guard: refuse workspaces outside an owner allowlist (ForgeMind and test repositories) | `cursor-session.ts`, `live-cli.ts` |
+| Personal-plan guard: refuse workspaces outside an owner allowlist. Removed 2026-11-05 (owner decision). | `cursor-session.ts`, `live-cli.ts` |
 | CLI: `project:run --provider cursor --cursor <pinned entry> --cursor-profile <dir>` and `probe:cursor` | `live-cli.ts`, new `cursor-probe.ts` |
 | Docs: ADR-0016 and a guide | `docs/` |
 
-Tests: replayed print-mode streams (recorded in Phase 0) for success, refusal, model mismatch, plan-limit errors, malformed JSON, timeout, cancellation and process-tree cleanup; the session and allowlist rules; an end-to-end `runTask` on the Cursor branch. Then one owner-authorized live task on a scratch repository, independent review and a draft PR, as for Claude.
+Tests: replayed print-mode streams (recorded in Phase 0) for success, refusal, model mismatch, plan-limit errors, malformed JSON, timeout, cancellation and process-tree cleanup; the session rules; an end-to-end `runTask` on the Cursor branch. Then one owner-authorized live task on a scratch repository, independent review and a draft PR, as for Claude.
 
 ## Known limits (expected)
 

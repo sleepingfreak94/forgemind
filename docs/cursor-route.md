@@ -13,14 +13,7 @@ Supervised `project:run` coding (plan, code, review, checks, receipts, draft PR)
    ```
 
    The file credential store keeps the login in the profile and out of the Keychain. ForgeMind passes only paths. It never reads, copies, stores, injects or logs the credential, never passes `--api-key`, and refuses to start when `CURSOR_API_KEY` or `CURSOR_API_ENDPOINT` is set.
-3. On a personal plan, list the workspaces allowed to run in `~/.forgemind/cursor-route.json` (mode 600), using canonical paths:
-
-   ```json
-   {"schemaVersion":1,"personalWorkspaces":["/canonical/path"]}
-   ```
-
-   Company seats on Business, Teams or Enterprise do not need it. Company code needs a company seat and never goes through a personal account; routes are not mixed within a run.
-4. Check readiness. This makes no model request:
+3. Check readiness. This makes no model request:
 
    ```sh
    npm run probe:cursor -- <version dir> <profile> <workspace>
@@ -96,7 +89,7 @@ There is no Grok 4.7 tools-mode run yet.
 ## Limits
 
 - **Credential lockdown and residual risk:** a live canary probe on 2026-10-23 showed that, without the lockdown, ask mode's read tool read a canary file planted in the profile, where the login lives. With the deny-all lockdown, the same probe run through the real route code from an unlocked profile config got "Permission denied" from the read tool, and the canary appeared in no output. This is not a guarantee: it relies on Cursor's own permission layer honouring deny rules, the profile stays readable and writable by the CLI process itself with open `*:443` egress, and tool use is rejected by the stream parser only after a call. Keep this profile dedicated to ForgeMind, and sign out and back in if you suspect misuse.
-- Each session is bound to the workspace it was opened for. A personal-plan allowlist check can't be reused for another repository.
+- Each session is bound to the workspace it was opened for and can't be reused for another repository.
 - The CLI keeps chats, projects and ACP sessions in the profile, with no ephemeral mode, so prompts that include source excerpts persist there.
 - Cursor reports token usage but not cost or overage. No spend bound is claimed.
 - Print mode has no JSON-schema option; the answer must parse and validate.

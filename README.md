@@ -58,12 +58,6 @@ mkdir -p -m 700 ~/.forgemind/cursor-profile
 HOME=$HOME/.forgemind/cursor-profile AGENT_CLI_CREDENTIAL_STORE=file <version dir>/cursor-agent login
 ```
 
-On a personal Cursor plan, also list your project in `~/.forgemind/cursor-route.json` (mode 600, canonical path):
-
-```json
-{"schemaVersion":1,"personalWorkspaces":["/canonical/path/to/project"]}
-```
-
 Check readiness (no model request): `npm run probe:cursor -- <version dir> $HOME/.forgemind/cursor-profile /canonical/path/to/project`
 
 A 401 means: log out and log in again in that profile. ForgeMind never reads these logins.
