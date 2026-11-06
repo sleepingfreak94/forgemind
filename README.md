@@ -139,9 +139,16 @@ Checks run in a sandbox that cannot fork.
 ### 6. Where the results are
 
 - Run directory: `<state-root>/<taskId>-<uuid>/`, with receipts and `artifacts/`.
-- Worktree with the edits: under `--worktree-root`. Your project is not touched.
-- Status `completed-local`: checks and review passed. Take the worktree changes yourself. Nothing was pushed.
-- Draft PR: set `"draftPr": true` and add `--gh /canonical/gh --author-name "Your Name" --author-email "you@users.noreply.github.com"`. All three are required. Test mode never publishes.
+- The run always edits a separate checkout under `--worktree-root`, so a failed run never touches your project folder.
+- **On your own branch** (for example `git switch -c feature/ABC-123` before the run), a run that passes checks and review commits onto that branch **in your project folder**. It is a fast-forward, so the files simply appear, and the separate checkout is removed.
+  - Add `--author-name "Your Name" --author-email "you@users.noreply.github.com"` for that commit. ForgeMind does not read your global git config.
+  - If you changed the folder or the branch during the run, nothing lands. Your folder is left as it was and the run's checkout is kept for inspection.
+  - Run again on the same branch for the next part of the ticket.
+- **On the default branch**, the work goes to a new `task/<taskId>` branch in the separate checkout, and your project folder is not touched. Status `completed-local` means checks and review passed; take the changes yourself. Nothing was pushed.
+- Draft PR: set `"draftPr": true` and add `--gh /canonical/gh --author-name "Your Name" --author-email "you@users.noreply.github.com"`.
+  - On your own branch, ForgeMind pushes that branch (never a force push) and opens a draft PR from it into the default branch, or updates the PR that is already open for it.
+  - On the default branch, it pushes `task/<taskId>`.
+  - Test mode never publishes.
 - The run ends with `Brain: run recorded in the <space> space.` or `Brain: run not recorded (...)`. The second means the brain was unavailable or its map file is invalid (see below).
 
 ## Central brain (memory across Claude Code, Cursor and the harness)

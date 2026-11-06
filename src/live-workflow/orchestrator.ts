@@ -17,6 +17,10 @@ import { codingInstructions, runSplitCoding } from './split.js';
 import {
   discoverRepository,
   createTaskWorktree,
+  defaultBranchHead,
+  landOnOwnerBranch,
+  ownerBranch,
+  removeTaskWorktree,
   sourceIdentity,
   captureTicketDiff,
   commitTicketChanges,
@@ -42,6 +46,8 @@ export interface RecordingSetup {
 export interface RunOptions extends RouteOptions {
   /** Trusted host publication inputs; never read from task/project/model data. */
   publication?: PublishOptions & { author: CommitAuthor };
+  /** Trusted host commit identity for runs on the owner's own branch, when no publication is configured. */
+  commitAuthor?: CommitAuthor;
   workspace: string;
   task: LiveTask;
   stateDirectory: string;
@@ -63,6 +69,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
   artifacts: string;
   worktree?: string;
   prUrl?: string;
+  branch?: string;
 }> {
   const task = validateTask(options.task);
   assertSingleRoute(options, task);
@@ -136,6 +143,9 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const context = memory?.packet(task.objective.slice(0, 400));
     save('context.json', context ?? { entries: [], note: 'No initialized memory' });
     if (options.brainContext !== undefined) save('brain-context.json', { text: options.brainContext });
+    // On the owner's own branch, the reviewed commit lands on that branch in the project folder (and its PR).
+    const own = ownerBranch(repo), author = options.publication?.author ?? options.commitAuthor;
+    if (own && !author) throw new Error(`Working on your branch ${own} needs --author-name and --author-email for its commit`);
     checkout = createTaskWorktree(repo, task.taskId, options.worktreeDirectory, authorizeGit);
     finishGit('completed');
     authority.finish('completed');
@@ -386,7 +396,7 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
       authority.phase('videos-delivered', current, videoDelivery);
     }
     currentSource(); assertBrowserQa();
-    if (!task.draftPr) {
+    if (!task.draftPr && !own) {
       authority.finish('completed');
       return { status: 'completed-local', artifacts, worktree: activeRoot };
     }
@@ -395,24 +405,47 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     const body = `${changes.summary}\n\n**Before:** Baseline ${checkout.baseHead}; source ${baseline}. ${beforeChecks.filter((c) => !c.passed).length} failing baseline check(s).\n\n**After:** Candidate source ${current}. ${changes.edits.map((e) => e.path).join(', ')}.\n\n**Validation:** ${afterChecks.map((c) => c.id + ': ' + (c.passed ? 'pass' : 'fail')).join('; ')}.\n\n**Review:** Independent fresh invocation: ${verdict.verdict}. Reviewed source ${current}. ${verdict.findings.join('; ')}\n\n**Limitations:** Native account inference uses bounded requests/bytes/time, not a hard credit cap. ${videoDelivery?.status==='delivered'?'Videos independently reviewed and delivered to the project evidence branch.':'No video requested.'}\n`;
     const qaBody = browserQaReports ? `\n**Browser QA:** Scenario ${browserQaReports.candidate.report.scenarioId}; ${browserQaReports.candidate.report.checks.length} paired checks, all candidate checks pass. Baseline report SHA-256 ${browserQaReports.baseline.reportSha256}; candidate report SHA-256 ${browserQaReports.candidate.reportSha256}. Private run artifacts are host evidence; they are not uploaded by this handoff.\n` : '';
     const finalBody=body+qaBody+(videoDelivery?.status==='delivered'?`\n**Videos:** [Before](${videoDelivery.beforeUrl}) · [After](${videoDelivery.afterUrl}) · [Evidence manifest](${videoDelivery.indexUrl}). Immutable evidence commit ${videoDelivery.commit}.\n`:'');
-    save('pr-body.md', finalBody);
-    save('pr-title.txt', title);
+    if (task.draftPr) { save('pr-body.md', finalBody); save('pr-title.txt', title); }
     const committed = commitTicketChanges(
       activeRoot,
       current,
       changes.edits.map((e) => e.path),
       title,
       authorizeGit,
-      options.publication?.author,
+      author,
     );
     finishGit('completed');
     const head = committed.head;
     currentSource();
     authority.phase('committed', current, { head });
+    let worktree: string | undefined = activeRoot;
+    // Last step on the owner branch: browser QA re-checks the separate checkout on every git action until it is removed.
+    const removeCheckout = (done: NonNullable<typeof checkout>) => {
+      browserQaReady = false;
+      try { removeTaskWorktree(repo, done, authorizeGit); finishGit('completed'); worktree = undefined; } catch (error) {
+        finishGit('indeterminate');
+        progress(`Could not remove the run checkout; it is kept at ${done.root}`);
+        authority.phase('worktree-kept', current, { root: done.root, message: error instanceof Error ? error.message : 'cleanup failed' });
+      }
+    };
+    if (own) {
+      landOnOwnerBranch(repo, own, head, task.writePaths, authorizeGit);
+      finishGit('completed');
+      authority.phase('landed', current, { branch: own, head, folder: repo.root });
+      progress(`Landed on your branch ${own} in ${repo.root}`);
+      if (!task.draftPr) {
+        removeCheckout(checkout);
+        authority.finish('completed');
+        return { status: 'completed-local', artifacts, branch: own, ...(worktree ? { worktree } : {}) };
+      }
+    }
+    const prBase = own ? defaultBranchHead(repo) : checkout.baseHead;
+    if (!prBase) throw new Error('Default branch head unknown; fetch origin first');
     const prepared = prepareDraftPullRequest({
-      root: activeRoot,
-      branch: checkout.branch,
-      expectedBase: checkout.baseHead,
+      root: own ? repo.root : activeRoot,
+      branch: own ?? checkout.branch,
+      expectedBase: prBase,
+      ...(own ? { runBase: checkout.baseHead } : {}),
       expectedHead: head,
       expectedRemoteUrl: repo.remoteUrl,
       allowedPaths: task.writePaths,
@@ -421,18 +454,10 @@ async function executeFixtureTask(options: RunOptions, deadline: number): Promis
     });
     const published = publishDraftPullRequest(prepared, join(artifacts, 'pr-body.md'), authorizeGit, options.publication);
     finishGit('completed');
-    authority.phase('published', current, {
-      base: checkout.baseHead,
-      head,
-      ...published,
-    });
+    authority.phase('published', current, { base: prBase, head, ...published });
+    if (own) removeCheckout(checkout);
     authority.finish('completed');
-    return {
-      status: 'completed',
-      artifacts,
-      worktree: activeRoot,
-      prUrl: published.url,
-    };
+    return { status: 'completed', artifacts, ...(worktree ? { worktree } : {}), ...(own ? { branch: own } : {}), prUrl: published.url };
   } catch (error) {
     finishGit('indeterminate');
     authority.phase('failed', current, {

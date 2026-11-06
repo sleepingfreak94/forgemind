@@ -92,12 +92,14 @@ test('billing-reset clears only the local acknowledgement and revokes the next s
 });
 const run = ['run', '--workspace', '/repo', '--task', '/task.json'];
 const publication = ['--gh', '/opt/gh', '--author-name', 'Repository Owner', '--author-email', '123+owner@users.noreply.github.com'];
-test('publication tuple is optional and all-or-none with bounded non-path author strings', () => {
+test('publication tuple is optional, gh needs the author pair, and the pair alone signs owner-branch commits', () => {
   assert.equal(parseLiveArguments([...run, ...publication]).values['--author-name'], 'Repository Owner');
   assert.equal(parseLiveArguments([...run, '--author-name', 'Élodie O’Neil', '--author-email', 'owner@example.invalid', '--gh', '/opt/gh']).values['--gh'], '/opt/gh');
   for (let subset = 1; subset < 7; subset++) {
     const flags = [0, 1, 2].filter(i => subset & (1 << i)).flatMap(i => publication.slice(i * 2, i * 2 + 2));
-    assert.throws(() => parseLiveArguments([...run, ...flags]), /supplied together/);
+    // subset 6 is --author-name plus --author-email without --gh
+    if (subset === 6) assert.equal(parseLiveArguments([...run, ...flags]).values['--gh'], undefined);
+    else assert.throws(() => parseLiveArguments([...run, ...flags]), /supplied together/);
   }
   assert.throws(() => parseLiveArguments([...run, ...publication, '--connection', '/account']), /Connection/);
 });
