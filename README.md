@@ -1,5 +1,11 @@
 # ForgeMind
 
+> **Archived (2026-11-11).** This repository is no longer maintained. The harness
+> (`project:run`, drivers, sandboxing) is retired: Claude Code, Cursor and Codex
+> are used directly instead. Only the central brain lives on, as a separate
+> project, **[forgemind-brain](https://github.com/sleepingfreak94/forgemind-brain)**: a local memory shared by those tools over MCP and
+> session hooks. The code here is kept for reference only.
+
 ForgeMind is a local-first harness for supervised AI coding. It brings project memory, explicit permissions, isolated edits, checks, and review evidence into one workflow around a coding agent.
 
 **Status: early technical preview.** Supervised execution works on macOS through three routes: ChatGPT/Codex, a Claude subscription (pinned Claude Code CLI) and a Cursor subscription (pinned Cursor CLI build `2026.10.22-27dcf5f`). Each has verification gaps, described in the linked docs. Windows and Linux enforcement are unavailable. Linux containment is planned. Start with the offline demo.
